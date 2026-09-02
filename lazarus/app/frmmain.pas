@@ -1,6 +1,17 @@
 unit FrmMain;
 
-{ Main window of the DeepCW Morse station.
+{ DeepCW モールス通信ステーションの主ウィンドウです。
+
+  画面は .lfm リソースではなくすべてコードで組み立てています。そのため Lazarus
+  IDE を一度も開いていない環境でも lazbuild だけでビルドでき、配置も通常の
+  ソースコードとして読めます。
+
+  本ユニット全体で守っているスレッドの方針は次のとおりです。
+    * ONNX デコーダはワーカースレッド上で動き、同時に 1 件だけ実行します。
+    * PortAudio の録音と再生はそれぞれ専用のスレッドを持ちます。
+    * GUI はこれらを待たず、タイマーで状態を確認します。
+
+  Main window of the DeepCW Morse station.
 
   The window is built entirely in code rather than from an .lfm resource, so
   the project compiles with lazbuild on a machine that has never opened the
@@ -22,7 +33,11 @@ uses
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio;
 
 type
-  { Runs one decode off the UI thread and hands the result back through
+  { 復号 1 件を UI スレッドの外で実行し、結果を Synchronize で返します。
+    デコーダはフォームが所有したままですが、生きているスレッドは常に 1 つだけ
+    であるため安全に共有できます。
+
+    Runs one decode off the UI thread and hands the result back through
     Synchronize. The decoder object stays owned by the form; only one thread
     is ever alive at a time, which is what makes that safe. }
   TDecodeThread = class(TThread)
@@ -47,43 +62,50 @@ type
 
   TMainForm = class(TForm)
   private
-    { engine }
+    { エンジン / engine }
     FDecoder: TDeepCWDecoder;
     FDecodeThread: TDecodeThread;
-    { A finished thread cannot be freed from inside its own Synchronize call:
+    { 終了したスレッドを、そのスレッド自身の Synchronize の中で解放することは
+      できません。TThread.Destroy が待つ相手は、主スレッドを待っているそのスレッド
+      自身だからです。ここへ一時的に預け、タイマー側で解放します。
+
+      A finished thread cannot be freed from inside its own Synchronize call:
       TThread.Destroy waits for the thread that is itself waiting for the main
       thread. It is parked here and released from the poll timer instead. }
     FCompletedThread: TDecodeThread;
     FClosing: Boolean;
-    { True while live reception is appending to a running transcript, false for
+    { ライブ受信で記録に追記している間は True、記録を置き換える単発の復号では
+      False になります。
+
+      True while live reception is appending to a running transcript, false for
       one-shot decodes that replace it. }
     FAppendMode: Boolean;
     FEngineError: string;
 
-    { audio }
+    { 音声 / audio }
     FRing: TAudioRing;
     FCapture: TAudioCapture;
     FPlayback: TAudioPlayback;
     FCaptureRate: Integer;
 
-    { transmit state }
+    { 送信の状態 / transmit state }
     FTxPlaying: Boolean;
     FTxSegments: TCWSegments;
     FTxSamples: TSingleArray;
     FTxNormalized: string;
     FTxSampleRate: Integer;
 
-    { receive state }
+    { 受信の状態 / receive state }
     FLiveTranscript: string;
     FLiveLastDecodedTotal: Int64;
     FLastSpectrogram: TSpectrogram;
 
-    { layout }
+    { 画面の骨組み / layout }
     FPages: TPageControl;
     FStatus: TStatusBar;
     FPollTimer: TTimer;
 
-    { transmit tab }
+    { 送信タブ / transmit tab }
     FTxText: TMemo;
     FTxCode: TMemo;
     FTxCharWpm: TSpinEdit;
@@ -100,7 +122,7 @@ type
     FTxCurrentCode: TLabel;
     FTxSummary: TLabel;
 
-    { receive tab }
+    { 受信タブ / receive tab }
     FRxFile: TEdit;
     FRxBrowse: TButton;
     FRxDecodeFile: TButton;
@@ -115,7 +137,7 @@ type
     FRxWaterfall: TPaintBox;
     FRxBusy: TLabel;
 
-    { settings tab }
+    { 設定タブ / settings tab }
     FSetModel: TEdit;
     FSetMetadata: TEdit;
     FSetRuntime: TEdit;
@@ -173,11 +195,17 @@ var
 implementation
 
 const
-  { Live reception decodes the newest slice of the ring buffer. Fifteen
+  { ライブ受信ではリングバッファの最新部分を復号します。15 秒はモデルが扱う
+    5〜20 秒の範囲に余裕をもって収まります。
+
+    Live reception decodes the newest slice of the ring buffer. Fifteen
     seconds sits inside the model's 5-20 second range with room to spare. }
   DEFAULT_LIVE_WINDOW = 15;
   DEFAULT_LIVE_INTERVAL = 3;
-  { The passband the model is trained on tops out at 1200 Hz; filtering a
+  { モデルが学習した通過帯域の上限は 1200 Hz です。そこから少し上で遮断すれば
+    CW の信号音を損ないません。
+
+    The passband the model is trained on tops out at 1200 Hz; filtering a
     little above that keeps the CW note intact. }
   ANTI_ALIAS_CUTOFF_HZ = 1400;
 
@@ -216,12 +244,16 @@ end;
 
 constructor TMainForm.Create(AOwner: TComponent);
 begin
-  { CreateNew skips the .lfm lookup that Create would perform. }
+  { CreateNew は Create が行う .lfm の探索を省きます。
+    CreateNew skips the .lfm lookup that Create would perform. }
   inherited CreateNew(AOwner);
   Caption := 'DeepCW モールス通信 - 送受信';
   Width := 940;
   Height := 700;
-  { The control rows inside the group boxes are laid out at fixed offsets and
+  { グループ枠の中の操作列は固定位置で配置しているため、読みやすさを保つには
+    おおよそこの幅が必要です。
+
+    The control rows inside the group boxes are laid out at fixed offsets and
     need roughly this much width to stay readable. }
   Constraints.MinWidth := 900;
   Constraints.MinHeight := 560;
@@ -234,7 +266,10 @@ begin
 
   BuildUI;
   LoadSettings;
-  { Load the model up front so the status bar and the settings tab say
+  { ステータスバーと設定タブに有用な情報を出すため、モデルは起動時に読み込み
+    ます。ただしランタイムが無くても起動は妨げません。
+
+    Load the model up front so the status bar and the settings tab say
     something useful, but never block startup on a missing runtime. }
   EnsureDecoder(True);
   RefreshInfo;
@@ -252,7 +287,10 @@ begin
     FPlayback.Stop;
   if FDecodeThread <> nil then
   begin
-    { WaitFor on the main thread keeps pumping Synchronize, so the worker can
+    { 主スレッドでの WaitFor は Synchronize を処理し続けるため、ワーカーは
+      最後まで進み、自身を FCompletedThread へ預けられます。
+
+      WaitFor on the main thread keeps pumping Synchronize, so the worker can
       finish and hand itself over to FCompletedThread. }
     FDecodeThread.WaitFor;
     FreeAndNil(FDecodeThread);
@@ -280,7 +318,7 @@ begin
   FPages := TPageControl.Create(Self);
   FPages.Parent := Self;
   FPages.Align := alClient;
-  FPages.AddTabSheet.Free;      { drop the placeholder sheet }
+  FPages.AddTabSheet.Free;      { 仮のシートを取り除きます / drop the placeholder sheet }
   BuildTransmitTab;
   BuildReceiveTab;
   BuildSettingsTab;
@@ -292,26 +330,15 @@ begin
   FPollTimer.Enabled := True;
 end;
 
-{ Finds a bundled data file. The repository layout puts model.onnx three
-  directories above the built binary, but a deployed copy usually sits next to
-  it, so both are tried before giving up on a plain relative path. }
-function LocateDataFile(const FileName: string): string;
-var
-  Base: string;
-  Candidates: array[0..4] of string;
-  I: Integer;
-begin
-  Base := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
-  Candidates[0] := Base + FileName;
-  Candidates[1] := Base + '..' + PathDelim + '..' + PathDelim + '..' + PathDelim + FileName;
-  Candidates[2] := Base + '..' + PathDelim + '..' + PathDelim + FileName;
-  Candidates[3] := Base + '..' + PathDelim + FileName;
-  Candidates[4] := FileName;
-  for I := Low(Candidates) to High(Candidates) do
-    if FileExists(Candidates[I]) then
-      Exit(ExpandFileName(Candidates[I]));
-  Result := Candidates[1];
-end;
+{ 配置についての補足です。幅いっぱいに広がる部品には右アンカーではなく Align
+  を使っています。アンカーの余白はタブシートが設計時の大きさのまま確定するため、
+  ウィンドウを広げると右アンカーの部品が画面外へ出てしまいます。alTop と
+  alClient は実際の親の大きさから計算されるので、この問題が起きません。
+
+  Layout note: full-width controls use Align rather than right anchors. Anchor
+  offsets are captured while a tab sheet is still at its design size, which
+  sends right-anchored controls off screen once the window is resized; alTop
+  and alClient are computed from the live parent size instead. }
 
 function AddLabel(Parent: TWinControl; const Text: string; Left, Top: Integer): TLabel;
 begin
@@ -349,13 +376,11 @@ begin
   Result.OnClick := OnClick;
 end;
 
-{ Layout note: full-width controls use Align rather than right anchors.
-  Anchor offsets are captured while a tab sheet is still at its design size,
-  which sends right-anchored controls off screen once the window is resized;
-  alTop and alClient are computed from the live parent size instead. }
-
 var
-  { alTop controls are ordered by their Top coordinate, not by creation order,
+  { alTop の並び順は生成順ではなく Top 座標で決まるため、整列の前に順に大きな
+    Top を与えます。
+
+    alTop controls are ordered by their Top coordinate, not by creation order,
     so each one is given a larger Top before it is aligned. }
   GLayoutTop: Integer = 0;
 
@@ -491,7 +516,10 @@ begin
   FileBox.Caption := 'WAV ファイルから受信';
   Stretch(FileBox, alTop);
 
-  { alRight fills from the right in creation order, so the decode button is
+  { alRight は生成順に右から詰めるため、デコードボタンを先に作って最も右へ
+    配置します。
+
+    alRight fills from the right in creation order, so the decode button is
     created first and ends up furthest right. }
   FRxDecodeFile := AddButton(FileBox, 'デコード', 0, 0, 120, @RxDecodeFileClick);
   Stretch(FRxDecodeFile, alRight);
@@ -682,7 +710,8 @@ begin
       Ini.Free;
     end;
   except
-    { Settings are a convenience; failing to store them must not block exit. }
+    { 設定は利便のためのものです。保存に失敗しても終了を妨げません。
+      Settings are a convenience; failing to store them must not block exit. }
   end;
 end;
 
@@ -783,7 +812,8 @@ function TMainForm.PrepareForDecoder(const Samples: TSingleArray;
   SampleRate: Integer): TSingleArray;
 begin
   Result := Samples;
-  { Only worth filtering when the source runs well above the model's band. }
+  { 入力がモデルの帯域より十分に高い場合にのみ、フィルタを掛ける意味があります。
+    Only worth filtering when the source runs well above the model's band. }
   if FRxAntiAlias.Checked and (SampleRate > 2 * ANTI_ALIAS_CUTOFF_HZ) then
     Result := LowPassFilter(Result, SampleRate, ANTI_ALIAS_CUTOFF_HZ);
 end;
@@ -801,7 +831,10 @@ var
   Thread: TDecodeThread;
 begin
   Thread := TDecodeThread(Sender);
-  { Any thread parked earlier has long since terminated, so releasing it here
+  { 先に預けられたスレッドはすでに終了しているため、ここで解放しても安全です。
+    タイマーの解放待ちは常に 1 つまでに保たれます。
+
+    Any thread parked earlier has long since terminated, so releasing it here
     is safe and keeps at most one waiting for the timer. }
   FreeAndNil(FCompletedThread);
   FDecodeThread := nil;
@@ -822,7 +855,8 @@ begin
     FRxWaterfall.Invalidate;
     if FAppendMode then
     begin
-      { Live reception appends, folding away the overlap between windows. }
+      { ライブ受信では、窓の重なりをたたみながら追記します。
+      Live reception appends, folding away the overlap between windows. }
       FLiveTranscript := MergeOverlappingText(FLiveTranscript, Thread.Text);
       FRxText.Text := FLiveTranscript;
     end
@@ -844,7 +878,8 @@ end;
 
 procedure TMainForm.TxOptionsChanged(Sender: TObject);
 begin
-  { Farnsworth only makes sense when the effective speed is the slower one. }
+  { ファンズワース間隔は、実効速度が文字速度以下のときにのみ意味を持ちます。
+  Farnsworth only makes sense when the effective speed is the slower one. }
   if FTxTextWpm.Value > FTxCharWpm.Value then
     FTxTextWpm.Value := FTxCharWpm.Value;
   RenderTransmit;
@@ -950,7 +985,10 @@ begin
   if DecoderBusy then
     Exit;
 
-  { Feed the transmission straight back into the decoder. Short messages get
+  { 送信した音声をそのままデコーダへ戻します。短いメッセージは、モデルが求める
+    5 秒の下限を満たすように無音で補います。
+
+    Feed the transmission straight back into the decoder. Short messages get
     padded with silence so they clear the model's five second minimum. }
   Samples := Copy(FTxSamples, 0, Length(FTxSamples));
   Needed := Ceil((DEEPCW_MIN_SECONDS + 0.2) * FTxSampleRate);
@@ -970,7 +1008,10 @@ var
 begin
   if not FPlayback.Running then
   begin
-    { A device that refuses to open ends the thread before the first buffer,
+    { デバイスが開けない場合、スレッドは最初のバッファを書く前に終了します。
+      そのため完了の判定は、進捗ではなくフラグで行います。
+
+      A device that refuses to open ends the thread before the first buffer,
       so completion is tracked by the flag rather than by progress made. }
     if FTxPlaying then
     begin
@@ -989,7 +1030,8 @@ begin
   PlayPosition := FPlayback.Position;
   FTxProgress.Position := Min(FTxProgress.Max, PlayPosition);
 
-  { Map the play head onto the segment list to show the character on the air. }
+  { 再生位置を区間の列に対応付け、送出中の文字を表示します。
+  Map the play head onto the segment list to show the character on the air. }
   Elapsed := PlayPosition / FTxSampleRate - DefaultToneOptions.LeadInSeconds;
   Accumulated := 0;
   TextIndex := 0;
@@ -1066,7 +1108,8 @@ begin
       raise EDeepCW.Create(PortAudioLoadError);
 
     FCaptureRate := StrToIntDef(FSetCaptureRate.Text, 8000);
-    { Hold twice the longest window so a slow decode never starves the next. }
+    { 最長の窓の 2 倍を保持し、復号が遅れても次の窓が不足しないようにします。
+    Hold twice the longest window so a slow decode never starves the next. }
     FreeAndNil(FRing);
     FRing := TAudioRing.Create(FCaptureRate * 2 * Round(DEEPCW_MAX_SECONDS));
     FCapture := TAudioCapture.Create(FRing, FCaptureRate);
@@ -1155,7 +1198,10 @@ begin
     Exit;
   end;
 
-  { Normalise against the extremes of this window so faint signals stay
+  { この窓の最小値と最大値で正規化し、弱い信号も見えるようにします。モデルへは
+    正規化前の値がそのまま渡ります。
+
+    Normalise against the extremes of this window so faint signals stay
     visible; the model sees the raw values regardless. }
   Lowest := FLastSpectrogram.Data[0];
   Highest := Lowest;
@@ -1168,7 +1214,8 @@ begin
   if Highest - Lowest < 1E-6 then
     Highest := Lowest + 1;
 
-  { One image column per screen column keeps long windows cheap to draw. }
+  { 画面 1 列につき画像 1 列とすることで、長い窓でも描画の負担を抑えます。
+    One image column per screen column keeps long windows cheap to draw. }
   Width_ := Max(1, Min(FRxWaterfall.Width, FLastSpectrogram.Frames));
   Height_ := FLastSpectrogram.Bins;
   Step := Max(1, FLastSpectrogram.Frames div Width_);
@@ -1180,12 +1227,14 @@ begin
       Frame := Min(FLastSpectrogram.Frames - 1, X * Step);
       for Y := 0 to Height_ - 1 do
       begin
-        { Row 0 is the top of the box, so flip the frequency axis. }
+        { 行 0 は枠の上端であるため、周波数軸を反転します。
+        Row 0 is the top of the box, so flip the frequency axis. }
         Bin := Height_ - 1 - Y;
         Level := (FLastSpectrogram.Data[Frame * FLastSpectrogram.Bins + Bin] - Lowest) /
           (Highest - Lowest);
         Level := ClampDouble(Level, 0, 1);
-        { Black through blue and orange to white. }
+        { 黒から青、橙を経て白へ変化させます。
+        Black through blue and orange to white. }
         Pixel.Red := Round(65535 * ClampDouble(1.6 * Level - 0.3, 0, 1));
         Pixel.Green := Round(65535 * ClampDouble(1.8 * Level - 0.7, 0, 1));
         Pixel.Blue := Round(65535 * ClampDouble(2.2 * Level - 1.2, 0, 1) +
@@ -1212,7 +1261,8 @@ end;
 
 procedure TMainForm.PollTimer(Sender: TObject);
 begin
-  { Safe here: the thread has left Synchronize by the time the timer runs. }
+  { タイマーが動く時点でスレッドは Synchronize を抜けているため安全です。
+  Safe here: the thread has left Synchronize by the time the timer runs. }
   if FCompletedThread <> nil then
     FreeAndNil(FCompletedThread);
 

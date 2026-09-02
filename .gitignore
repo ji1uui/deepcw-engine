@@ -43,9 +43,9 @@ backup/
 *.or
 *.a
 *.res
-examples/lazarus/app/deepcw_station
-examples/lazarus/cli/decode_morse
-examples/lazarus/cli/cw_loopback
+lazarus/app/deepcw_station
+lazarus/cli/decode_morse
+lazarus/cli/cw_loopback
 
 # Build and runtime output
 build/

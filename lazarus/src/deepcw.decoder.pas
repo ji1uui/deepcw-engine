@@ -1,6 +1,11 @@
 unit DeepCW.Decoder;
 
-{ The DeepCW receive path: audio in, decoded text out.
+{ DeepCW の受信経路です。音声を入力し、復号したテキストを返します。
+
+  デコーダは ONNX セッションとメタデータをそれぞれ 1 つ保持します。スレッド
+  安全ではないため、GUI ではワーカースレッドごとに 1 つのデコーダを持ちます。
+
+  The DeepCW receive path: audio in, decoded text out.
 
   A decoder owns one ONNX session and one metadata object. Instances are not
   thread safe; the GUI keeps one decoder per worker thread. }
@@ -14,24 +19,35 @@ uses
   DeepCW.Onnx, DeepCW.Wave;
 
 const
-  { The model was trained on 5-20 second excerpts and degrades outside that. }
+  { モデルは 5〜20 秒の断片で学習されており、この範囲を外れると精度が落ちます。
+    The model was trained on 5-20 second excerpts and degrades outside that. }
   DEEPCW_MIN_SECONDS = 5.0;
   DEEPCW_MAX_SECONDS = 20.0;
 
-  { Window geometry for recordings longer than the model accepts. The window
+  { モデルが受け付ける長さを超える録音のための窓の設定です。窓は自身の長さより
+    小さい間隔で進むため、隣り合う窓が共通のテキストを持ち、結合時の位置合わせに
+    利用できます。
+
+    Window geometry for recordings longer than the model accepts. The window
     advances by less than its own length so consecutive windows share text for
     the merge to align on. }
   DEEPCW_WINDOW_SECONDS = 15.0;
   DEEPCW_WINDOW_HOP_SECONDS = 11.0;
 
-  { Characters emitted within this much of a window edge are discarded. A
+  { 窓の端からこの時間内に出力された文字は破棄します。文字の途中で始まったり
+    終わったりする窓はその位置に誤った文字を生じますが、内側の端はいずれも
+    隣の窓が補うためです。
+
+    Characters emitted within this much of a window edge are discarded. A
     window that starts or ends part way through a character produces spurious
     letters there, and every interior edge is covered by a neighbouring
     window anyway. }
   DEEPCW_EDGE_GUARD_SECONDS = 0.8;
 
 type
-  { One decoded character together with when the CTC path emitted it. }
+  { 復号した 1 文字と、CTC 経路がそれを出力した時刻の組です。
+
+    One decoded character together with when the CTC path emitted it. }
   TDecodedChar = record
     Text: string;
     Seconds: Double;
@@ -51,34 +67,56 @@ type
     constructor Create(const ModelPath, MetadataPath: string; IntraOpThreads: Integer = 1);
     destructor Destroy; override;
 
-    { Decodes mono samples given at SourceRate. After resampling to the model
+    { SourceRate で与えられたモノラルのサンプル列を復号します。モデルの周波数へ
+      変換したのち、長さが 5〜20 秒に収まっている必要があります。
+
+      Decodes mono samples given at SourceRate. After resampling to the model
       rate the audio must last between 5 and 20 seconds. }
     function DecodeSamples(const Samples: TSingleArray; SourceRate: Integer): string;
 
-    { As DecodeSamples, but also reports when each character was heard. }
+    { DecodeSamples と同じ処理に加え、各文字を受信した時刻も返します。
+
+      As DecodeSamples, but also reports when each character was heard. }
     function DecodeSamplesTimed(const Samples: TSingleArray; SourceRate: Integer): TDecodedChars;
 
-    { Decodes a recording of any length by sliding an overlapping window over
+    { 重なりを持つ窓を滑らせ、窓ごとの結果をつなぎ合わせることで、任意の長さの
+      録音を復号します。
+
+      Decodes a recording of any length by sliding an overlapping window over
       it and stitching the per-window transcripts together. }
     function DecodeLongSamples(const Samples: TSingleArray; SourceRate: Integer): string;
 
-    { Reads a WAV file and decodes it, windowing if it runs past 20 seconds. }
+    { WAV ファイルを読み込んで復号します。20 秒を超える場合は窓に分割します。
+
+      Reads a WAV file and decodes it, windowing if it runs past 20 seconds. }
     function DecodeWavFile(const FileName: string): string;
 
-    { The spectrogram of the most recent window, for the waterfall display. }
+    { 直近の窓のスペクトログラムです。ウォーターフォール表示に用います。
+
+      The spectrogram of the most recent window, for the waterfall display. }
     property LastSpectrogram: TSpectrogram read FLastSpectrogram;
     property LastSeconds: Double read FLastSeconds;
     property Metadata: TDeepCWMetadata read FMetadata;
     property Session: TOnnxSession read FSession;
   end;
 
-{ Joins decoded characters into a plain string. }
+{ 復号した文字を連結して 1 つの文字列にします。
+
+  Joins decoded characters into a plain string. }
 function DecodedText(const Chars: TDecodedChars): string;
 
-{ Keeps only the characters heard in [LowSeconds, HighSeconds). }
+{ [LowSeconds, HighSeconds) の範囲で受信した文字だけを残します。
+
+  Keeps only the characters heard in [LowSeconds, HighSeconds). }
 function TrimDecoded(const Chars: TDecodedChars; LowSeconds, HighSeconds: Double): TDecodedChars;
 
-{ Appends NewText to Accumulated, dropping the longest prefix of NewText that
+{ NewText を Accumulated の末尾に連結します。その際、Accumulated の末尾と
+  一致する NewText の先頭部分のうち最も長いものを取り除きます。
+
+  窓が重なる区間の文字は繰り返し出力されます。最も長い重複をたたむことで、
+  本格的な系列アライメントを用いずに読みやすい受信記録を保てます。
+
+  Appends NewText to Accumulated, dropping the longest prefix of NewText that
   already appears as a suffix of Accumulated.
 
   Overlapping windows repeat the characters that fall in the overlap.
@@ -99,7 +137,9 @@ begin
   FMetadata.LoadFromFile(MetadataPath);
   FSession := TOnnxSession.Create(ModelPath, IntraOpThreads);
 
-  { Catch a metadata/model mismatch here rather than as a confusing Run error. }
+  { メタデータとモデルの不一致は、分かりにくい Run のエラーになる前にここで
+    検出します。
+    Catch a metadata/model mismatch here rather than as a confusing Run error. }
   if FSession.InputCount <> 1 then
     raise EDeepCW.CreateFmt('Expected a single model input, found %d.', [FSession.InputCount]);
   ModelInput := FSession.InputName(0);
@@ -141,7 +181,8 @@ begin
   if Frames <= 0 then
     Exit;
 
-  { The graph strides in time, so map output frames back onto the window. }
+  { グラフは時間方向に間引くため、出力フレームを窓上の時刻へ対応付けます。
+    The graph strides in time, so map output frames back onto the window. }
   SecondsPerFrame := DurationSeconds / Frames;
 
   SetLength(Result, Frames);
@@ -230,7 +271,8 @@ begin
   Start := 0;
   repeat
     Stop := Min(Start + WindowLength, Total);
-    { Pull the final window backwards rather than handing the model a stub. }
+    { 最後の窓は短い断片を渡す代わりに、開始位置を手前へずらします。
+      Pull the final window backwards rather than handing the model a stub. }
     if Stop - Start < Round(DEEPCW_MIN_SECONDS * Rate) then
       Start := Max(0, Stop - WindowLength);
     StartSeconds := Start / Rate;
@@ -239,7 +281,10 @@ begin
     Window := Copy(Audio, Start, Stop - Start);
     Chars := RunWindow(Window);
 
-    { Discard the edge artifacts, except at the true start and end of the
+    { 端に生じる誤りを取り除きます。ただし録音全体の先頭と末尾は、補う窓が
+      存在しないためそのまま残します。
+
+      Discard the edge artifacts, except at the true start and end of the
       recording where there is no neighbouring window to cover them. }
     if Start = 0 then LowGuard := 0 else LowGuard := DEEPCW_EDGE_GUARD_SECONDS;
     if Stop = Total then HighGuard := StopSeconds - StartSeconds

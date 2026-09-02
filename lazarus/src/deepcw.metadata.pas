@@ -1,6 +1,13 @@
 unit DeepCW.Metadata;
 
-{ Reader and validator for model.onnx.json.
+{ model.onnx.json の読み込みと妥当性検証を行います。
+
+  メタデータファイルは、書き出された ONNX グラフとフロントエンドとの間の取り決め
+  です。サンプリング周波数、STFT の形状、CTC デコーダが用いる文字表を定めます。
+  本ユニットの値はすべてこのファイルに由来するため、モデルを書き出し直した際も
+  新しい JSON を配布するだけで済みます。
+
+  Reader and validator for model.onnx.json.
 
   The metadata file is the contract between the exported ONNX graph and the
   front end: it fixes the sample rate, the STFT geometry and the character
@@ -37,7 +44,9 @@ type
     procedure LoadFromFile(const FileName: string);
     procedure LoadFromText(const Text: string);
 
-    { First and last+1 FFT bin covered by [MinFreqHz, MaxFreqHz]. }
+    { [MinFreqHz, MaxFreqHz] が占める最初の FFT ビンと、最後のビンの次の番号です。
+
+      First and last+1 FFT bin covered by [MinFreqHz, MaxFreqHz]. }
     function StartBin: Integer;
     function StopBin: Integer;
 

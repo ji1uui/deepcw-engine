@@ -1,6 +1,12 @@
 program cw_loopback;
 
-{ Transmit-then-receive self test.
+{ 送信から受信までを通して確かめる自己診断です。
+
+  DeepCW.Morse の送信機でメッセージを送出し、得られた音声をそのまま DeepCW の
+  デコーダへ入力して、両者を比較します。サウンドカードを使わずに全体の経路を
+  検証できるため、ビルドと ONNX Runtime の健全性を最も手軽に確認できます。
+
+  Transmit-then-receive self test.
 
   Keys a message with the DeepCW.Morse transmitter, feeds the resulting audio
   straight into the DeepCW decoder and compares the two. It exercises the whole
@@ -23,8 +29,8 @@ const
     'WX SUNNY 25C RIG 100W ANT DIPOLE');
 
 var
-  ModelPath: string = '../../model.onnx';
-  MetadataPath: string = '../../model.onnx.json';
+  ModelPath: string = '';
+  MetadataPath: string = '';
   RuntimePath: string = '';
   Decoder: TDeepCWDecoder;
   Timing: TCWTiming;
@@ -38,7 +44,10 @@ function PadToMinimum(const Input: TSingleArray; SampleRate: Integer): TSingleAr
 var
   Needed: Integer;
 begin
-  { The model rejects anything under five seconds, so short messages get
+  { モデルは 5 秒未満の音声を受け付けないため、短いメッセージにはエラーを
+    返す代わりに末尾へ無音を加えます。
+
+    The model rejects anything under five seconds, so short messages get
     trailing silence rather than an error. }
   Needed := Ceil((DEEPCW_MIN_SECONDS + 0.2) * SampleRate);
   if Length(Input) >= Needed then
@@ -66,6 +75,11 @@ begin
     Inc(Index, 2);
   end;
 
+  if ModelPath = '' then
+    ModelPath := LocateDataFile('model.onnx');
+  if MetadataPath = '' then
+    MetadataPath := LocateDataFile('model.onnx.json');
+
   try
     LoadOnnxRuntime(RuntimePath);
     WriteLn('ONNX Runtime ', OnnxRuntimeVersion);
@@ -77,7 +91,8 @@ begin
       begin
         Expected := NormalizeText(MESSAGES[Index]);
 
-        { Vary speed, pitch and noise so the test covers more than one setting. }
+        { 速度、音程、雑音を変え、単一の設定に偏らないようにします。
+        Vary speed, pitch and noise so the test covers more than one setting. }
         Wpm := 16 + 4 * (Index mod 4);
         ToneHz := 500 + 150 * (Index mod 5);
         Noise := 0.02 * (Index mod 3);

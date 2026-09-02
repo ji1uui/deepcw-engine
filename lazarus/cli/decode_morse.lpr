@@ -1,6 +1,9 @@
 program decode_morse;
 
-{ Console counterpart of the Python and Node.js examples: decode one WAV file
+{ Python 版および Node.js 版サンプルに対応するコンソール版です。DeepCW モデル
+  で WAV ファイルを 1 つ復号し、結果を出力します。
+
+  Console counterpart of the Python and Node.js examples: decode one WAV file
   with the DeepCW model and print the result. }
 
 {$mode objfpc}{$H+}
@@ -10,13 +13,15 @@ uses
 
 procedure WriteUsage;
 begin
-  WriteLn('Usage: decode_morse --wav <file> [--model model.onnx] ' +
-    '[--metadata model.onnx.json] [--onnxruntime <library>] [--verbose]');
+  WriteLn('Usage: decode_morse --wav <file> [--model <path>] ' +
+    '[--metadata <path>] [--onnxruntime <library>] [--verbose]');
+  WriteLn('The model and metadata default to the copies shipped with this ' +
+    'repository, found relative to the executable.');
 end;
 
 var
-  ModelPath: string = '../../model.onnx';
-  MetadataPath: string = '../../model.onnx.json';
+  ModelPath: string = '';
+  MetadataPath: string = '';
   WavPath: string = '';
   RuntimePath: string = '';
   Verbose: Boolean = False;
@@ -72,6 +77,11 @@ begin
     WriteUsage;
     Halt(2);
   end;
+
+  if ModelPath = '' then
+    ModelPath := LocateDataFile('model.onnx');
+  if MetadataPath = '' then
+    MetadataPath := LocateDataFile('model.onnx.json');
 
   try
     LoadOnnxRuntime(RuntimePath);

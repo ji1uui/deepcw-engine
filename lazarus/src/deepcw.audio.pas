@@ -1,6 +1,16 @@
 unit DeepCW.Audio;
 
-{ Live sound card input and output through PortAudio.
+{ PortAudio を用いたサウンドカードの入出力です。
+
+  PortAudio は実行時に読み込み、存在しない場合はいずれの関数も分かりやすい
+  エラーとして報告します。そのため、WAV の読み書きだけを行うアプリケーション
+  であれば PortAudio が無い環境でも動作します。
+
+  コールバックではなく、待機を伴う読み書き API を用いています。PortAudio 自身
+  の高優先度スレッド上で動く Pascal のコールバックは誤りを招きやすく、モールス
+  通信程度の音声量では方式の違いが問題にならないためです。
+
+  Live sound card input and output through PortAudio.
 
   PortAudio is loaded at run time and every entry point here reports its
   absence as a plain error, so an application that only reads and writes WAV
@@ -18,7 +28,10 @@ uses
   SysUtils, Classes, Math, DynLibs, DeepCW.Types;
 
 type
-  { Fixed-size mono ring holding the most recent samples. Safe to fill from the
+  { 直近のサンプルを保持する固定長のモノラルリングバッファです。GUI が内容を
+    取り出している間も、録音スレッドから安全に書き込めます。
+
+    Fixed-size mono ring holding the most recent samples. Safe to fill from the
     capture thread while the GUI takes snapshots. }
   TAudioRing = class
   private
@@ -33,11 +46,18 @@ type
     destructor Destroy; override;
     procedure Push(const Source: TSingleArray; Count: Integer);
     procedure Clear;
-    { Oldest to newest copy of everything currently held. }
+    { 現在保持している内容を、古い順に並べた複製として返します。
+
+    Oldest to newest copy of everything currently held. }
     function Snapshot: TSingleArray;
-    { Peak magnitude of the newest Seconds worth of audio, for a level meter. }
+    { 直近 Seconds 秒の振幅の最大値です。レベルメータに用います。
+
+    Peak magnitude of the newest Seconds worth of audio, for a level meter. }
     function PeakLevel(SampleRate: Integer; Seconds: Double): Single;
-    { Total samples ever pushed; the GUI uses it to notice new audio. }
+    { これまでに書き込まれたサンプルの総数です。GUI が新しい音声の到着を知る
+    ために参照します。
+
+    Total samples ever pushed; the GUI uses it to notice new audio. }
     function TotalWritten: Int64;
     property Capacity: Integer read FCapacity;
   end;
@@ -45,7 +65,9 @@ type
   TAudioCapture = class;
   TAudioPlayback = class;
 
-  { Records from the default input device into a ring buffer. }
+  { 既定の入力デバイスから録音し、リングバッファへ書き込みます。
+
+    Records from the default input device into a ring buffer. }
   TAudioCapture = class
   private
     FThread: TThread;
@@ -67,7 +89,9 @@ type
 
   TPlaybackProgress = procedure(Sender: TObject; SamplesPlayed: Integer) of object;
 
-  { Plays a buffer through the default output device. }
+  { 既定の出力デバイスからバッファを再生します。
+
+    Plays a buffer through the default output device. }
   TAudioPlayback = class
   private
     FThread: TThread;
@@ -78,25 +102,35 @@ type
     function GetRunning: Boolean;
   public
     destructor Destroy; override;
-    { Starts playing a copy of Samples and returns immediately. }
+    { Samples の複製の再生を開始し、直ちに戻ります。
+
+    Starts playing a copy of Samples and returns immediately. }
     procedure Play(const Samples: TSingleArray; ASampleRate: Integer);
     procedure Stop;
     property Running: Boolean read GetRunning;
     property Position: Integer read FPosition;
     property LastError: string read FLastError;
-    { Both events fire on the playback thread; marshal before touching the UI. }
+    { いずれのイベントも再生スレッド上で発生します。UI に触れる前に主スレッドへ
+    処理を移してください。
+
+    Both events fire on the playback thread; marshal before touching the UI. }
     property OnProgress: TPlaybackProgress read FOnProgress write FOnProgress;
     property OnFinished: TNotifyEvent read FOnFinished write FOnFinished;
   end;
 
-{ Loads libportaudio. Leave the path empty to try DEEPCW_PORTAUDIO, the
+{ libportaudio を読み込みます。パスを空にすると DEEPCW_PORTAUDIO、実行ファイル
+  のディレクトリ、システムの検索パスの順に探索します。
+
+  Loads libportaudio. Leave the path empty to try DEEPCW_PORTAUDIO, the
   executable directory and then the system search path. }
 function LoadPortAudio(const LibraryPath: string = ''): Boolean;
 function PortAudioAvailable: Boolean;
 function PortAudioVersion: string;
 function PortAudioLibraryPath: string;
 
-{ Human-readable reason the last LoadPortAudio call failed. }
+{ 直前の LoadPortAudio が失敗した理由を、読みやすい文章で返します。
+
+  Human-readable reason the last LoadPortAudio call failed. }
 function PortAudioLoadError: string;
 
 implementation
@@ -247,7 +281,10 @@ begin
     Result := Format('PortAudio error %d', [Code]);
 end;
 
-{ PortAudio must be initialised once per process; streams from different parts
+{ PortAudio の初期化はプロセスにつき一度だけ行う必要があります。アプリケー
+  ションの各所が開くストリームは、参照数を通じてこの初期化を共有します。
+
+  PortAudio must be initialised once per process; streams from different parts
   of the application share that initialisation through a reference count. }
 procedure AcquirePortAudio;
 var
@@ -308,7 +345,8 @@ begin
     Exit;
   EnterCriticalSection(FLock);
   try
-    { A burst larger than the ring can only leave its newest tail. }
+    { リングより大きなまとまりを受け取った場合、残せるのは末尾の新しい部分だけです。
+    A burst larger than the ring can only leave its newest tail. }
     Start := Max(0, Count - FCapacity);
     for I := Start to Count - 1 do
     begin
@@ -447,7 +485,8 @@ begin
       while not Terminated do
       begin
         Code := Pa_ReadStream(Stream, @Buffer[0], LongWord(FFramesPerBuffer));
-        { An overflow means samples were dropped, not that recording failed. }
+        { オーバーフローは取りこぼしを意味し、録音の失敗ではありません。
+        An overflow means samples were dropped, not that recording failed. }
         if (Code <> PA_NO_ERROR) and (Code <> PA_INPUT_OVERFLOWED) then
           raise EDeepCW.CreateFmt('Reading the input stream failed: %s', [ErrorText(Code)]);
         FRing.Push(Buffer, FFramesPerBuffer);
@@ -548,7 +587,8 @@ begin
         Count := Min(ChunkFrames, Length(FSamples) - Position);
         for I := 0 to Count - 1 do
           Chunk[I] := FSamples[Position + I];
-        { The device always wants a full buffer; pad the last one with silence. }
+        { デバイスは常に満たされたバッファを求めるため、最後は無音で埋めます。
+        The device always wants a full buffer; pad the last one with silence. }
         for I := Count to ChunkFrames - 1 do
           Chunk[I] := 0;
 

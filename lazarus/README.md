@@ -5,7 +5,7 @@ decodes it with the DeepCW ONNX model on receive, plus two console tools that
 share the same units.
 
 ```
-examples/lazarus/
+lazarus/
 ├── src/    reusable units: metadata, WAV, DSP, ONNX Runtime, decoder, Morse, audio
 ├── app/    deepcw_station  - the GUI station (LCL)
 └── cli/    decode_morse    - decode one WAV file, like the Python and Node.js examples
@@ -62,7 +62,7 @@ export DEEPCW_PORTAUDIO=/path/to/libportaudio.so.2
 ## Building
 
 ```bash
-cd examples/lazarus
+cd lazarus
 lazbuild app/deepcw_station.lpi
 lazbuild cli/decode_morse.lpi
 lazbuild cli/cw_loopback.lpi
@@ -75,16 +75,19 @@ Then run the station:
 ```
 
 It looks for `model.onnx` and `model.onnx.json` next to the executable first
-and then three directories up, which is where they live in this repository, so
-a build from a clean checkout starts up ready to use.
+and then up to two directories above it, which is where they live in this
+repository, so a build from a clean checkout starts up ready to use.
 
 ## Console tools
 
 Decode a file, exactly like `examples/python` and `examples/nodejs`:
 
 ```bash
-./cli/decode_morse --model ../../model.onnx --metadata ../../model.onnx.json --wav test.wav
+./cli/decode_morse --wav test.wav
 ```
+
+The model and metadata are found relative to the executable, so both tools work
+from any working directory. Pass `--model` and `--metadata` to override them.
 
 Unlike the other two examples this one accepts recordings of any length: past
 20 seconds it slides a 15 second window across the audio and merges the
@@ -93,7 +96,7 @@ transcripts.
 Check that a build and its ONNX Runtime are healthy without a sound card:
 
 ```bash
-./cli/cw_loopback --model ../../model.onnx --metadata ../../model.onnx.json
+./cli/cw_loopback
 ```
 
 It keys six messages at different speeds, pitches and noise levels, decodes
@@ -141,6 +144,11 @@ entries must never be reordered or removed, only appended.
   the limit instead of guessing.
 * Live reception decodes a whole window at a time, so text appears in bursts
   rather than character by character.
+
+## A note on the source comments
+
+Every comment in `src/`, `app/` and `cli/` is written in Japanese first and
+English second, so the code reads the same way for either audience.
 
 ## License
 

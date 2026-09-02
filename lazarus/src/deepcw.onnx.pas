@@ -1,6 +1,17 @@
 unit DeepCW.Onnx;
 
-{ Minimal ONNX Runtime C API binding.
+{ ONNX Runtime C API への最小限のバインディングです。
+
+  onnxruntime が公開する記号は OrtGetApiBase ただ一つで、そこから関数ポインタの
+  構造体が得られます。この構造体は版を重ねても末尾への追加のみが行われるため、
+  先頭側の要素を位置で結び付ける方式が安定します。本ユニットは解放用の関数まで
+  すべての要素を宣言し、実際に呼び出すものだけに型を与え、残りは不透明な
+  ポインタのままにしています。
+
+  ライブラリは実行時に読み込むため、onnxruntime が無い環境でもアプリケーション
+  は起動し、どこに配置すればよいかを利用者に伝えられます。
+
+  Minimal ONNX Runtime C API binding.
 
   onnxruntime exports a single symbol, OrtGetApiBase, which hands back a struct
   of function pointers. That struct is append-only across releases, so binding
@@ -23,7 +34,8 @@ uses
 {$IFDEF WINDOWS}
   {$DEFINE ORTCALL := stdcall}
 type
-  { CreateSession takes ORTCHAR_T*, which is wchar_t on Windows. }
+  { CreateSession は ORTCHAR_T* を受け取ります。Windows では wchar_t です。
+    CreateSession takes ORTCHAR_T*, which is wchar_t on Windows. }
   POrtPathChar = PWideChar;
 {$ELSE}
   {$DEFINE ORTCALL := cdecl}
@@ -32,7 +44,10 @@ type
 {$ENDIF}
 
 const
-  { ORT_API_VERSION of onnxruntime 1.10. Newer runtimes still serve this
+  { onnxruntime 1.10 の ORT_API_VERSION です。より新しいランタイムもこの版を
+    提供し続けており、本ユニットが使う機能はいずれもそれ以前のものです。
+
+    ORT_API_VERSION of onnxruntime 1.10. Newer runtimes still serve this
     version, and everything this unit uses predates it. }
   ORT_API_VERSION_REQUESTED = 11;
 
@@ -59,7 +74,10 @@ type
 
   POrtApi = ^TOrtApi;
 
-  { Field order follows onnxruntime_c_api.h. Do not reorder or remove entries:
+  { フィールドの並びは onnxruntime_c_api.h に従います。各要素はランタイム側の
+    構造体における位置そのものであるため、並べ替えや削除をしないでください。
+
+    Field order follows onnxruntime_c_api.h. Do not reorder or remove entries:
     each slot is an offset into the runtime's own struct. }
   TOrtApi = record
     CreateStatus: Pointer;                                                            {   1 }
@@ -189,7 +207,8 @@ type
     ReleaseTensorTypeAndShapeInfo: procedure(Value: POrtTensorTypeAndShapeInfo); ORTCALL; { 100 }
     ReleaseSessionOptions: procedure(Value: POrtSessionOptions); ORTCALL;             { 101 }
     ReleaseCustomOpDomain: procedure(Value: Pointer); ORTCALL;                        { 102 }
-    { Later releases append more entries here. This binding never reads them. }
+    { 新しい版ではここに要素が追加されます。本バインディングは参照しません。
+      Later releases append more entries here. This binding never reads them. }
   end;
 
   POrtApiBase = ^TOrtApiBase;
@@ -198,13 +217,18 @@ type
     GetVersionString: function: PAnsiChar; ORTCALL;
   end;
 
-  { A float32 tensor read back from the runtime. }
+  { ランタイムから読み出した float32 のテンソルです。
+
+    A float32 tensor read back from the runtime. }
   TOnnxFloatTensor = record
     Shape: TInt64Array;
     Data: TSingleArray;
   end;
 
-  { One loaded model. Not thread safe: serialise Run calls, or create one
+  { 読み込んだモデル 1 つを表します。スレッド安全ではありませんので、Run の
+    呼び出しを直列化するか、ワーカースレッドごとにセッションを作成してください。
+
+    One loaded model. Not thread safe: serialise Run calls, or create one
     session per worker thread. }
   TOnnxSession = class
   private
@@ -219,7 +243,10 @@ type
     constructor Create(const ModelPath: string; IntraOpThreads: Integer = 1);
     destructor Destroy; override;
 
-    { Runs the graph with a single float32 input and returns a single float32
+    { float32 の入力 1 つでグラフを実行し、float32 の出力 1 つを返します。
+      データはランタイムへ複製されるため、InputData は再利用できます。
+
+      Runs the graph with a single float32 input and returns a single float32
       output. Data is copied into the runtime, so InputData may be reused. }
     function RunFloat(const InputName: string; const InputData: TSingleArray;
       const InputShape: array of Int64; const OutputName: string): TOnnxFloatTensor;
@@ -230,7 +257,11 @@ type
     function OutputCount: Integer;
   end;
 
-{ Loads libonnxruntime. Pass an explicit file name, or leave it empty to try
+{ libonnxruntime を読み込みます。ファイル名を明示するか、空文字を渡すと
+  DEEPCW_ONNXRUNTIME、実行ファイルのディレクトリ、システムの検索パスの順に
+  探索します。すでに読み込み済みの場合は何もせずに戻ります。
+
+  Loads libonnxruntime. Pass an explicit file name, or leave it empty to try
   DEEPCW_ONNXRUNTIME, the executable directory and then the system search path.
   Returns silently if the runtime is already loaded. }
 procedure LoadOnnxRuntime(const LibraryPath: string = '');
@@ -239,7 +270,9 @@ function OnnxRuntimeLoaded: Boolean;
 function OnnxRuntimeVersion: string;
 function OnnxRuntimeLibraryPath: string;
 
-{ File names tried when no explicit path is given, most specific first. }
+{ パスが指定されなかった場合に試すファイル名を、限定的なものから順に返します。
+
+  File names tried when no explicit path is given, most specific first. }
 function DefaultOnnxRuntimeNames: TStringArray;
 
 implementation
@@ -294,7 +327,8 @@ begin
   GApi := GApiBase^.GetApi(ORT_API_VERSION_REQUESTED);
   if GApi = nil then
   begin
-    { The runtime is older than the API version this binding needs. }
+    { ランタイムが、本バインディングの必要とする API 版より古い場合です。
+       The runtime is older than the API version this binding needs. }
     GApiBase := nil;
     UnloadLibrary(GHandle);
     GHandle := NilHandle;

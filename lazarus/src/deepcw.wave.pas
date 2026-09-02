@@ -1,6 +1,12 @@
 unit DeepCW.Wave;
 
-{ Minimal RIFF/WAVE reader and writer plus a linear resampler.
+{ 最小限の RIFF/WAVE 読み書きと、線形補間によるリサンプラです。
+
+  一般的な録音ツールが出力する PCM および IEEE 浮動小数点形式を読み取り、常に
+  [-1, 1] の範囲のモノラル Single 値として返します。これは DeepCW の他のユニット
+  が共通で扱う表現です。
+
+  Minimal RIFF/WAVE reader and writer plus a linear resampler.
 
   The reader accepts the PCM and IEEE-float encodings that ordinary recording
   tools produce and always returns mono Single samples in [-1, 1], which is the
@@ -18,17 +24,25 @@ const
   WAVE_FORMAT_IEEE_FLOAT = 3;
   WAVE_FORMAT_EXTENSIBLE = $FFFE;
 
-{ Reads a WAV file and returns mono samples together with its sample rate. }
+{ WAV ファイルを読み込み、モノラルのサンプル列とサンプリング周波数を返します。
+
+  Reads a WAV file and returns mono samples together with its sample rate. }
 procedure LoadWavMono(const FileName: string; out Samples: TSingleArray;
   out SampleRate: Integer);
 procedure LoadWavMonoFromStream(Stream: TStream; out Samples: TSingleArray;
   out SampleRate: Integer);
 
-{ Writes mono samples as a 16-bit PCM WAV file. Values are clipped to [-1, 1]. }
+{ モノラルのサンプル列を 16 bit PCM の WAV として書き出します。値は [-1, 1] に
+  丸められます。
+
+  Writes mono samples as a 16-bit PCM WAV file. Values are clipped to [-1, 1]. }
 procedure SaveWavMono(const FileName: string; const Samples: TSingleArray;
   SampleRate: Integer);
 
-{ Linear-interpolation resampler. Deliberately dependency free and identical to
+{ 線形補間によるリサンプラです。Python 版および Node.js 版のサンプルと同一の
+  処理とし、3 つの実装が同じ入力テンソルを生成するようにしています。
+
+  Linear-interpolation resampler. Deliberately dependency free and identical to
   the Python and Node.js examples so all three produce the same input tensor. }
 function ResampleLinear(const Samples: TSingleArray; SourceRate, TargetRate: Integer): TSingleArray;
 
@@ -130,11 +144,12 @@ begin
       if Chunk.ChunkSize < SizeOf(Format) then
         raise EDeepCW.Create('The WAV "fmt " chunk is truncated.');
       Stream.ReadBuffer(Format, SizeOf(Format));
-      { WAVE_FORMAT_EXTENSIBLE stores the real encoding in the extension. }
+      { WAVE_FORMAT_EXTENSIBLE は実際の符号化方式を拡張領域に持ちます。
+        WAVE_FORMAT_EXTENSIBLE stores the real encoding in the extension. }
       if (Format.AudioFormat = WAVE_FORMAT_EXTENSIBLE) and (Chunk.ChunkSize >= SizeOf(Format) + 8) then
       begin
         Stream.ReadBuffer(ExtraSize, SizeOf(ExtraSize));
-        Stream.Seek(6, soCurrent); { valid bits + channel mask high bytes }
+        Stream.Seek(6, soCurrent); { 有効ビット数とチャネルマスク分を読み飛ばします / valid bits + channel mask }
         Stream.ReadBuffer(SubFormat, SizeOf(SubFormat));
         Format.AudioFormat := SubFormat;
       end;

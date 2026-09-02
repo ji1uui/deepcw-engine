@@ -1,6 +1,12 @@
 unit DeepCW.Dsp;
 
-{ Short-time Fourier transform front end for the DeepCW model.
+{ DeepCW モデルへ渡す短時間フーリエ変換のフロントエンドです。
+
+  窓、ホップ長、反射パディング、ビンの選択、log1p 圧縮といった構成は Python 版
+  および Node.js 版のサンプルと完全に一致させています。ネットワークはこの表現で
+  学習されており、わずかな差異にも敏感なためです。
+
+  Short-time Fourier transform front end for the DeepCW model.
 
   The geometry (window, hop, reflect padding, bin selection, log1p compression)
   mirrors the Python and Node.js examples exactly, because the network was
@@ -14,7 +20,10 @@ uses
   SysUtils, Math, DeepCW.Types, DeepCW.Metadata;
 
 type
-  { Iterative radix-2 FFT with precomputed twiddle factors and a bit-reversal
+  { 回転因子とビット反転表をあらかじめ用意した非再帰の基数 2 FFT です。
+    同じ長さのフレームを繰り返し変換する際に初期化の費用がかかりません。
+
+    Iterative radix-2 FFT with precomputed twiddle factors and a bit-reversal
     table, so repeated frames of the same length cost no setup. }
   TRealFFT = class
   private
@@ -27,23 +36,41 @@ type
     FIm: TDoubleArray;
   public
     constructor Create(ASize: Integer);
-    { Transforms Frame (length Size) and writes |X[k]| for k in
+    { 長さ Size の Frame を変換し、[StartBin, StopBin) の範囲の |X[k]| を
+      Magnitudes へ書き出します。
+
+      Transforms Frame (length Size) and writes |X[k]| for k in
       [StartBin, StopBin) into Magnitudes. }
     procedure MagnitudeSpectrum(const Frame: TDoubleArray; StartBin, StopBin: Integer;
       var Magnitudes: TDoubleArray);
     property Size: Integer read FSize;
   end;
 
-{ Builds the [Frames x Bins] log1p magnitude spectrogram the model expects. }
+{ モデルが要求する [フレーム数 x ビン数] の log1p 振幅スペクトログラムを作ります。
+
+  Builds the [Frames x Bins] log1p magnitude spectrogram the model expects. }
 function ComputeSpectrogram(const Samples: TSingleArray; Meta: TDeepCWMetadata): TSpectrogram;
 
-{ Periodic Hann window, matching numpy's np.hanning(N + 1)[:-1]. }
+{ 周期型のハン窓です。numpy の np.hanning(N + 1)[:-1] と一致します。
+
+  Periodic Hann window, matching numpy's np.hanning(N + 1)[:-1]. }
 function HannWindow(Size: Integer): TDoubleArray;
 
-{ numpy's np.pad(..., mode='reflect') for a symmetric pad on both ends. }
+{ 両端に同じ長さの反射パディングを施します。numpy の
+  np.pad(..., mode='reflect') に相当します。
+
+  numpy's np.pad(..., mode='reflect') for a symmetric pad on both ends. }
 function ReflectPad(const Samples: TSingleArray; Pad: Integer): TDoubleArray;
 
-{ Zero-phase windowed-sinc low-pass.
+{ 直線位相の窓関数付き sinc 低域通過フィルタです。
+
+  サウンドカードが 44.1 kHz で録音する一方、モデルは 3.2 kHz で聴くため、線形
+  リサンプラは 1.6 kHz を超える成分をネットワークが読む帯域へ折り返してしまい
+  ます。先にこのフィルタを通すことで、ヒスノイズや話し声を CW の通過帯域から
+  遠ざけられます。これはフロントエンド側の選択であり、モデルとの取り決めには
+  含まれません。デコード経路そのものは Python 版および Node.js 版と同一です。
+
+  Zero-phase windowed-sinc low-pass.
 
   Sound cards record at 44.1 kHz while the model listens at 3.2 kHz, and the
   linear resampler folds everything above 1.6 kHz back down into the band the
@@ -84,7 +111,8 @@ begin
   Shift := 32 - FLevels;
   for I := 0 to FSize - 1 do
   begin
-    { Reverse the low FLevels bits of I. }
+    { I の下位 FLevels ビットを反転します。
+       Reverse the low FLevels bits of I. }
     J := I;
     J := ((J and $55555555) shl 1) or ((J shr 1) and $55555555);
     J := ((J and $33333333) shl 2) or ((J shr 2) and $33333333);
@@ -127,7 +155,8 @@ begin
       K := 0;
       while J < Start + HalfSize do
       begin
-        { Butterfly with the conjugated twiddle, i.e. a forward transform. }
+        { 回転因子の共役を用いたバタフライ演算、すなわち順変換です。
+          Butterfly with the conjugated twiddle, i.e. a forward transform. }
         TempRe := FRe[J + HalfSize] * FCosTable[K] + FIm[J + HalfSize] * FSinTable[K];
         TempIm := FIm[J + HalfSize] * FCosTable[K] - FRe[J + HalfSize] * FSinTable[K];
         FRe[J + HalfSize] := FRe[J] - TempRe;
@@ -189,7 +218,8 @@ begin
   Result := nil;
   if (Length(Samples) = 0) or (SampleRate <= 0) then
     Exit(Samples);
-  { Nothing to remove once the cutoff sits at or above Nyquist. }
+  { 遮断周波数がナイキスト以上であれば取り除くものはありません。
+    Nothing to remove once the cutoff sits at or above Nyquist. }
   if CutoffHz >= SampleRate / 2 then
     Exit(Samples);
   if not Odd(Taps) then
@@ -210,7 +240,8 @@ begin
       Argument := 2 * Pi * Normalized * (I - Half);
       Kernel[I] := Sin(Argument) / (Pi * (I - Half));
     end;
-    { Hamming window keeps the stop band about 50 dB down. }
+    { ハミング窓により阻止域を約 50 dB 下げます。
+       Hamming window keeps the stop band about 50 dB down. }
     Kernel[I] := Kernel[I] * (0.54 - 0.46 * Cos(2 * Pi * I / (Taps - 1)));
     Sum := Sum + Kernel[I];
   end;
@@ -223,7 +254,8 @@ begin
     Accumulator := 0;
     for J := 0 to Taps - 1 do
     begin
-      { Clamp at the edges, which is cheap and inaudible for a CW passband. }
+      { 両端は値を保持します。処理が軽く、CW の帯域では影響が分かりません。
+         Clamp at the edges, which is cheap and inaudible for a CW passband. }
       Source := ClampInt(I + J - Half, 0, High(Samples));
       Accumulator := Accumulator + Kernel[J] * Samples[Source];
     end;
