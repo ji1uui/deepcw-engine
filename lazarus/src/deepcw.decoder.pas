@@ -146,21 +146,6 @@ function MergeOverlappingChars(const Accumulated, NewChars: TDecodedChars;
   Keeps only the characters heard in [LowSeconds, HighSeconds). }
 function TrimDecoded(const Chars: TDecodedChars; LowSeconds, HighSeconds: Double): TDecodedChars;
 
-{ NewText を Accumulated の末尾に連結します。その際、Accumulated の末尾と
-  一致する NewText の先頭部分のうち最も長いものを取り除きます。
-
-  窓が重なる区間の文字は繰り返し出力されます。最も長い重複をたたむことで、
-  本格的な系列アライメントを用いずに読みやすい受信記録を保てます。
-
-  Appends NewText to Accumulated, dropping the longest prefix of NewText that
-  already appears as a suffix of Accumulated.
-
-  Overlapping windows repeat the characters that fall in the overlap.
-  Collapsing the largest such repeat keeps the running transcript readable
-  without a full sequence alignment. }
-function MergeOverlappingText(const Accumulated, NewText: string;
-  MaxOverlap: Integer = 32): string;
-
 implementation
 
 constructor TDeepCWDecoder.Create(const ModelPath, MetadataPath: string;
@@ -485,21 +470,5 @@ begin
   SetLength(Result, Count);
 end;
 
-function MergeOverlappingText(const Accumulated, NewText: string;
-  MaxOverlap: Integer): string;
-var
-  Limit, Overlap: Integer;
-begin
-  if Accumulated = '' then
-    Exit(NewText);
-  if NewText = '' then
-    Exit(Accumulated);
-
-  Limit := Min(MaxOverlap, Min(Length(Accumulated), Length(NewText)));
-  for Overlap := Limit downto 1 do
-    if Copy(Accumulated, Length(Accumulated) - Overlap + 1, Overlap) = Copy(NewText, 1, Overlap) then
-      Exit(Accumulated + Copy(NewText, Overlap + 1, MaxInt));
-  Result := Accumulated + NewText;
-end;
 
 end.

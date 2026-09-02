@@ -25,7 +25,7 @@ unit DeepCW.Stream;
 interface
 
 uses
-  SysUtils, Classes, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Wave;
+  SysUtils, Classes, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Dsp, DeepCW.Wave;
 
 const
   { 解析にかける最大の長さ。これを超えたら語間を待たずに確定させます。
@@ -39,23 +39,59 @@ const
   STREAM_MIN_INTERVAL_SECONDS = 1.0;
   { これだけ溜まるまでは解析しません。/ No analysis until this much is buffered. }
   STREAM_MIN_PENDING_SECONDS = 2.0;
+  { 解析の先頭でこの時間内に現れた文字は捨てます。
+
+    確定点は語間の中央に取るため、次の解析は必ず無音から始まります。その境目を
+    モデルが短点と読むことがあり、細かく投入するほど、訂正される前に確定して
+    しまいます。窓分割の復号が端の誤りを捨てているのと同じ理屈です
+    （DEEPCW_EDGE_GUARD_SECONDS）。40 WPM でも語間の半分は 105 ms あるため、
+    この長さで本物の文字を巻き込むことはありません。
+
+    Characters emitted within this much of the analysis start are discarded.
+    A split falls in the middle of a word gap, so every later analysis begins
+    in silence; the model sometimes reads that boundary as a dit, and with fine
+    chunks it can be confirmed before more context corrects it. This mirrors
+    the edge guard the windowed decode already applies. Even at 40 WPM half a
+    word gap is 105 ms, so this never swallows a real character. }
+  STREAM_LEAD_GUARD_SECONDS = 0.08;
+
+  { 折り返し防止の遮断周波数。モデルの通過帯域 1200 Hz の少し上に置きます。
+    Anti-alias cutoff, a little above the model's 1200 Hz passband. }
+  STREAM_ANTI_ALIAS_CUTOFF_HZ = 1400.0;
 
 type
   TStreamingDecoder = class
   private
     FDecoder: TDeepCWDecoder;
     FLock: TRTLCriticalSection;
-    { 未確定の音声。先頭は直前の確定点です。
-      Audio not yet committed; it starts at the last split point. }
+    { 未確定の音声。先頭は直前の確定点です。**録音されたままの周波数で**保持し、
+      帯域制限と周波数変換は解析の直前にまとめて行います。細切れに掛けると
+      継ぎ目ごとに過渡が出るためです。
+
+      Audio not yet committed, starting at the last split point. It is kept at
+      the **capture rate**; band limiting and rate conversion happen in one go
+      just before analysis, because filtering chunk by chunk leaves a transient
+      at every seam. }
     FPending: TSingleArray;
     FPendingCount: Integer;
+    FSourceRate: Integer;
+    FAntiAlias: Boolean;
     FConfirmed: TDecodedChars;
     FProvisional: TDecodedChars;
     FConfirmedSeconds: Double;
     FDroppedSamples: Int64;
+    FTailGuard: Double;
+    FMinConfirmed: Double;
+    function SourceRate: Integer;
     function TakeSnapshot: TSingleArray;
+    { 解析にかける形へ整えます。帯域制限 → 周波数変換の順で、途切れのない
+      1 本の音声に対して行います。
+      Prepares audio for analysis: band limit, then resample, both applied to
+      one unbroken buffer. }
+    function PrepareForModel(const Source: TSingleArray): TSingleArray;
     procedure AppendConfirmed(const Chars: TDecodedChars);
     function StripSeamSpace(const Chars: TDecodedChars): TDecodedChars;
+    function DropLeadArtifacts(const Chars: TDecodedChars): TDecodedChars;
     procedure SetProvisional(const Chars: TDecodedChars);
     procedure DropLeading(Samples: Integer);
     function FindSplit(const Chars: TDecodedChars; AnalysisSeconds: Double;
@@ -98,6 +134,19 @@ type
       The whole transcript and how much of it is confirmed. }
     function AllChars(out ConfirmedCount: Integer): TDecodedChars;
 
+    { 録音された周波数がモデルより十分高いとき、折り返しを防ぐ帯域制限を
+      掛けるか。既定で有効です。
+      Whether to band limit before resampling when the capture rate runs well
+      above the model's. On by default. }
+    property AntiAlias: Boolean read FAntiAlias write FAntiAlias;
+
+    { 末尾を確定させずに残す時間。長いほど確定は遅れますが確かになります。
+      Seconds left uncommitted at the tail; longer is slower but safer. }
+    property TailGuardSeconds: Double read FTailGuard write FTailGuard;
+    { 先頭からこの時間より短い範囲は確定させません。
+      Nothing shorter than this from the start is committed. }
+    property MinConfirmedSeconds: Double read FMinConfirmed write FMinConfirmed;
+
     property Decoder: TDeepCWDecoder read FDecoder;
   end;
 
@@ -109,6 +158,10 @@ begin
   if ADecoder = nil then
     raise EDeepCW.Create('The streaming decoder needs a decoder.');
   FDecoder := ADecoder;
+  FAntiAlias := True;
+  FTailGuard := STREAM_TAIL_GUARD_SECONDS;
+  FMinConfirmed := STREAM_MIN_CONFIRMED_SECONDS;
+  FSourceRate := ADecoder.Metadata.SampleRate;
   InitCriticalSection(FLock);
 end;
 
@@ -135,20 +188,47 @@ end;
 
 procedure TStreamingDecoder.Append(const Samples: TSingleArray; SampleRate: Integer);
 var
-  Converted: TSingleArray;
   I, Needed: Integer;
 begin
-  if Length(Samples) = 0 then
+  if (Length(Samples) = 0) or (SampleRate <= 0) then
     Exit;
-  Converted := ResampleLinear(Samples, SampleRate, FDecoder.Metadata.SampleRate);
   EnterCriticalSection(FLock);
   try
-    Needed := FPendingCount + Length(Converted);
+    { 途中で録音周波数が変わったら、溜めていた音声は意味を失います。
+      A change of capture rate invalidates what is buffered. }
+    if (FSourceRate <> SampleRate) and (FPendingCount > 0) then
+    begin
+      FPendingCount := 0;
+      FProvisional := nil;
+    end;
+    FSourceRate := SampleRate;
+
+    Needed := FPendingCount + Length(Samples);
     if Needed > Length(FPending) then
       SetLength(FPending, Max(Needed, Max(4096, Length(FPending) * 2)));
-    for I := 0 to High(Converted) do
-      FPending[FPendingCount + I] := Converted[I];
-    Inc(FPendingCount, Length(Converted));
+    for I := 0 to High(Samples) do
+      FPending[FPendingCount + I] := Samples[I];
+    Inc(FPendingCount, Length(Samples));
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TStreamingDecoder.PrepareForModel(const Source: TSingleArray): TSingleArray;
+begin
+  Result := Source;
+  { 変換前に帯域を絞らないと、モデルの帯域へ折り返した雑音が乗ります。
+    Without band limiting first, noise folds into the model's band. }
+  if FAntiAlias and (FSourceRate > 2 * Round(STREAM_ANTI_ALIAS_CUTOFF_HZ)) then
+    Result := LowPassFilter(Result, FSourceRate, STREAM_ANTI_ALIAS_CUTOFF_HZ);
+  Result := ResampleLinear(Result, FSourceRate, FDecoder.Metadata.SampleRate);
+end;
+
+function TStreamingDecoder.SourceRate: Integer;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := Max(1, FSourceRate);
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -158,9 +238,9 @@ function TStreamingDecoder.TakeSnapshot: TSingleArray;
 var
   Rate, Wanted: Integer;
 begin
-  Rate := FDecoder.Metadata.SampleRate;
   EnterCriticalSection(FLock);
   try
+    Rate := FSourceRate;
     { 解析にかけるのは先頭から最大 STREAM_MAX_SECONDS 分だけです。
       Only the first STREAM_MAX_SECONDS of the buffer is analysed. }
     Wanted := Min(FPendingCount, Round(STREAM_MAX_SECONDS * Rate));
@@ -201,7 +281,7 @@ function TStreamingDecoder.PendingSeconds: Double;
 begin
   EnterCriticalSection(FLock);
   try
-    Result := FPendingCount / FDecoder.Metadata.SampleRate;
+    Result := FPendingCount / FSourceRate;
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -242,6 +322,29 @@ begin
   FProvisional := Shifted;
 end;
 
+{ 解析の先頭に現れた偽の文字を落とします。空白はここでは触れず、継ぎ目の処理に
+  任せます。最初の解析には確定点がないので、そのまま通します。
+
+  Drops spurious characters at the head of an analysis. Spaces are left to the
+  seam handling, and the very first analysis has no split before it, so it
+  passes through untouched. }
+function TStreamingDecoder.DropLeadArtifacts(const Chars: TDecodedChars): TDecodedChars;
+var
+  I, Count: Integer;
+begin
+  if FConfirmedSeconds <= 0 then
+    Exit(Chars);
+  SetLength(Result, Length(Chars));
+  Count := 0;
+  for I := 0 to High(Chars) do
+    if (Chars[I].Text = ' ') or (Chars[I].EndSeconds >= STREAM_LEAD_GUARD_SECONDS) then
+    begin
+      Result[Count] := Chars[I];
+      Inc(Count);
+    end;
+  SetLength(Result, Count);
+end;
+
 procedure TStreamingDecoder.AppendConfirmed(const Chars: TDecodedChars);
 var
   Trimmed: TDecodedChars;
@@ -269,14 +372,14 @@ begin
   if Forced then
     Latest := AnalysisSeconds
   else
-    Latest := AnalysisSeconds - STREAM_TAIL_GUARD_SECONDS;
+    Latest := AnalysisSeconds - FTailGuard;
 
   for I := High(Chars) downto 0 do
   begin
     if Chars[I].Text <> ' ' then
       Continue;
     Middle := (Chars[I].Seconds + Chars[I].EndSeconds) / 2;
-    if (Middle >= STREAM_MIN_CONFIRMED_SECONDS) and (Middle <= Latest) then
+    if (Middle >= FMinConfirmed) and (Middle <= Latest) then
     begin
       Result := I;
       SplitSeconds := Middle;
@@ -287,14 +390,17 @@ end;
 
 function TStreamingDecoder.Step: Boolean;
 var
-  Audio: TSingleArray;
+  Audio, Prepared: TSingleArray;
   Chars, Committed: TDecodedChars;
   Rate, SplitIndex, I, Count: Integer;
   AnalysisSeconds, SplitSeconds: Double;
   Forced: Boolean;
 begin
   Result := False;
-  Rate := FDecoder.Metadata.SampleRate;
+  { 時間の計算はすべて録音された周波数で行い、モデルへ渡す直前にだけ変換します。
+    All timing is computed at the capture rate; conversion happens only just
+    before the audio reaches the model. }
+  Rate := SourceRate;
   Audio := TakeSnapshot;
   if Length(Audio) = 0 then
     Exit;
@@ -303,7 +409,11 @@ begin
   if AnalysisSeconds < STREAM_MIN_PENDING_SECONDS then
     Exit;
 
-  Chars := FDecoder.DecodeLongSamplesTimed(Audio, Rate);
+  Prepared := PrepareForModel(Audio);
+  if Length(Prepared) = 0 then
+    Exit;
+  Chars := DropLeadArtifacts(
+    FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate));
 
   { 上限まで溜まったら、末尾のガードを外してでも前へ進めます。
     Once the buffer is full, commit even without the tail guard. }
@@ -316,7 +426,7 @@ begin
     begin
       { 語間がないほど詰まっている場合は、ガードの手前までを確定させます。
         With no word gap at all, commit up to the guard anyway. }
-      SplitSeconds := AnalysisSeconds - STREAM_TAIL_GUARD_SECONDS;
+      SplitSeconds := AnalysisSeconds - FTailGuard;
       SplitIndex := High(Chars);
       while (SplitIndex >= 0) and (Chars[SplitIndex].EndSeconds > SplitSeconds) do
         Dec(SplitIndex);
@@ -372,15 +482,19 @@ end;
 
 procedure TStreamingDecoder.Finish;
 var
-  Audio: TSingleArray;
+  Audio, Prepared: TSingleArray;
   Chars: TDecodedChars;
   Rate, I: Integer;
 begin
-  Rate := FDecoder.Metadata.SampleRate;
+  Rate := SourceRate;
   Audio := TakeSnapshot;
   if Length(Audio) = 0 then
     Exit;
-  Chars := FDecoder.DecodeLongSamplesTimed(Audio, Rate);
+  Prepared := PrepareForModel(Audio);
+  if Length(Prepared) = 0 then
+    Exit;
+  Chars := DropLeadArtifacts(
+    FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate));
   for I := 0 to High(Chars) do
   begin
     Chars[I].Seconds := Chars[I].Seconds + FConfirmedSeconds;

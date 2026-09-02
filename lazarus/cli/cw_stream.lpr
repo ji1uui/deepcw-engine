@@ -22,6 +22,7 @@ var
   WavPath: string = '';
   ChunkSeconds: Double = 0.5;
   Quiet: Boolean = False;
+  NoAntiAlias: Boolean = False;
   Decoder: TDeepCWDecoder;
   Stream: TStreamingDecoder;
   Samples, Chunk: TSingleArray;
@@ -67,6 +68,12 @@ begin
       Inc(Index);
       Continue;
     end;
+    if Key = '--no-antialias' then
+    begin
+      NoAntiAlias := True;
+      Inc(Index);
+      Continue;
+    end;
     Value := '';
     if Index < ParamCount then
       Value := ParamStr(Index + 1);
@@ -87,7 +94,7 @@ begin
 
   if WavPath = '' then
   begin
-    WriteLn(StdErr, 'Usage: cw_stream --wav <file> [--chunk seconds] [--quiet]');
+    WriteLn(StdErr, 'Usage: cw_stream --wav <file> [--chunk seconds] [--quiet] [--no-antialias]');
     Halt(2);
   end;
   if ModelPath = '' then
@@ -101,6 +108,7 @@ begin
     try
       Stream := TStreamingDecoder.Create(Decoder);
       try
+        Stream.AntiAlias := not NoAntiAlias;
         LoadWavMono(WavPath, Samples, SampleRate);
         Count := Max(1, Round(ChunkSeconds * SampleRate));
         Position := 0;

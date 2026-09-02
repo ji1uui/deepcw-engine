@@ -27,7 +27,7 @@ unit FrmMain;
 interface
 
 uses
-  SysUtils, Classes, Math, IniFiles, Clipbrd, FPimage, IntfGraphics, GraphType,
+  SysUtils, Classes, Math, DateUtils, IniFiles, Clipbrd, FPimage, IntfGraphics, GraphType,
   Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls, Spin,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, TranscriptView;
@@ -88,6 +88,11 @@ type
     { 技術的な原文の控え。診断画面にだけ出します（要件 NFR-5.7）。
       Raw technical messages, shown only on the diagnostics panel. }
     FDiagnostics: TStringList;
+    { 設定に変更があったか。終了時だけに頼らず、動作中にも書き出します。
+      Whether settings changed; they are written while running rather than
+      relying on a clean exit. }
+    FSettingsDirty: Boolean;
+    FSettingsSavedAt: TDateTime;
 
     { 音声 / audio }
     FRing: TAudioRing;
@@ -106,7 +111,6 @@ type
     FLiveChars: TDecodedChars;
     FStream: TStreamingDecoder;
     FRingPosition: Int64;
-    FLiveLastDecodedTotal: Int64;
     FLastSpectrogram: TSpectrogram;
 
     { 画面の骨組み / layout }
@@ -138,8 +142,7 @@ type
     FRxStart: TButton;
     FRxStop: TButton;
     FRxClear: TButton;
-    FRxWindow: TSpinEdit;
-    FRxInterval: TSpinEdit;
+    FRxConfirmSpeed: TComboBox;
     FRxAntiAlias: TCheckBox;
     FRxTranscript: TTranscriptView;
     FRxShowDoubt: TCheckBox;
@@ -156,7 +159,7 @@ type
     FSetRuntime: TEdit;
     FSetPortAudio: TEdit;
     FSetCaptureRate: TComboBox;
-    FSetThreads: TSpinEdit;
+    FSetThreads: TComboBox;
     FSetApply: TButton;
     FSetInfo: TMemo;
 
@@ -168,10 +171,13 @@ type
     function ConfigFileName: string;
     procedure LoadSettings;
     procedure SaveSettings;
+    procedure MarkSettingsDirty;
     procedure ApplySettings(Sender: TObject);
     procedure RefreshInfo;
 
     function EnsureDecoder(Silent: Boolean = False): Boolean;
+    function SelectedThreads: Integer;
+    function SelectedCaptureRate: Integer;
     function DecoderBusy: Boolean;
     procedure StartDecode(const Samples: TSingleArray; SampleRate: Integer);
     procedure ShowStreamText;
@@ -193,6 +199,8 @@ type
     procedure RxClearClick(Sender: TObject);
     procedure RxCopyClick(Sender: TObject);
     procedure RxDisplayChanged(Sender: TObject);
+    procedure RxConfirmSpeedChanged(Sender: TObject);
+    procedure ApplyStreamSettings;
     procedure RxWaterfallPaint(Sender: TObject);
 
     procedure PollTimer(Sender: TObject);
@@ -210,21 +218,6 @@ var
   MainForm: TMainForm;
 
 implementation
-
-const
-  { ライブ受信ではリングバッファの最新部分を復号します。15 秒はモデルが扱う
-    5〜20 秒の範囲に余裕をもって収まります。
-
-    Live reception decodes the newest slice of the ring buffer. Fifteen
-    seconds sits inside the model's 5-20 second range with room to spare. }
-  DEFAULT_LIVE_WINDOW = 15;
-  DEFAULT_LIVE_INTERVAL = 3;
-  { モデルが学習した通過帯域の上限は 1200 Hz です。そこから少し上で遮断すれば
-    CW の信号音を損ないません。
-
-    The passband the model is trained on tops out at 1200 Hz; filtering a
-    little above that keeps the CW note intact. }
-  ANTI_ALIAS_CUTOFF_HZ = 1400;
 
 { 実装の後方で定義します。/ Defined further down. }
 function UserMessageFor(const Raw: string): string; forward;
@@ -305,6 +298,9 @@ begin
 
     Load the model up front so the status bar and the settings tab say
     something useful, but never block startup on a missing runtime. }
+  { 読み込んだ表示設定を実際に反映します。設定は代入だけでは効きません。
+    Apply the loaded display settings; assigning the controls is not enough. }
+  RxDisplayChanged(nil);
   EnsureDecoder(True);
   RefreshInfo;
   RenderTransmit;
@@ -592,17 +588,23 @@ begin
   FRxStop := AddButton(LiveControls, '受信停止', 126, 22, 110, @RxStopClick);
   FRxClear := AddButton(LiveControls, '表示をクリア', 244, 22, 130, @RxClearClick);
 
-  AddLabel(LiveControls, '窓 (秒)', 390, 4);
-  FRxWindow := AddSpin(LiveControls, 390, 22, Round(DEEPCW_MIN_SECONDS) + 1,
-    Round(DEEPCW_MAX_SECONDS), DEFAULT_LIVE_WINDOW, nil);
-  AddLabel(LiveControls, '間隔 (秒)', 480, 4);
-  FRxInterval := AddSpin(LiveControls, 480, 22, 1, 15, DEFAULT_LIVE_INTERVAL, nil);
+  AddLabel(LiveControls, '文字が決まるまで', 390, 4);
+  FRxConfirmSpeed := TComboBox.Create(LiveControls);
+  FRxConfirmSpeed.Parent := LiveControls;
+  FRxConfirmSpeed.SetBounds(390, 22, 150, 28);
+  FRxConfirmSpeed.Style := csDropDownList;
+  FRxConfirmSpeed.Items.Add('速さ優先');
+  FRxConfirmSpeed.Items.Add('標準');
+  FRxConfirmSpeed.Items.Add('確実さ優先');
+  FRxConfirmSpeed.ItemIndex := 1;
+  FRxConfirmSpeed.OnChange := @RxConfirmSpeedChanged;
 
   FRxAntiAlias := TCheckBox.Create(LiveControls);
   FRxAntiAlias.Parent := LiveControls;
-  FRxAntiAlias.SetBounds(576, 26, 160, 24);
-  FRxAntiAlias.Caption := 'アンチエイリアス';
+  FRxAntiAlias.SetBounds(556, 26, 190, 24);
+  FRxAntiAlias.Caption := '帯域外の雑音を抑える';
   FRxAntiAlias.Checked := True;
+  FRxAntiAlias.OnChange := @RxConfirmSpeedChanged;
 
   FRxBusy := AddTopLabel(Sheet, '');
 
@@ -660,13 +662,16 @@ end;
 function TMainForm.BuildSettingsTab: TTabSheet;
 var
   Sheet: TTabSheet;
+  Operating, Advanced: TGroupBox;
   Row, Apply: TPanel;
 
-  function AddPathEdit(const Caption, Value: string): TEdit;
+  { 技術的な設定は「詳細・診断」側にだけ置きます（要件 FR-G.1）。
+    Technical settings live only under the advanced group (FR-G.1). }
+  function AddPathEdit(Parent: TWinControl; const Caption, Value: string): TEdit;
   begin
-    AddTopLabel(Sheet, Caption);
-    Result := TEdit.Create(Sheet);
-    Result.Parent := Sheet;
+    AddTopLabel(Parent, Caption);
+    Result := TEdit.Create(Parent);
+    Result.Parent := Parent;
     Result.Text := Value;
     Stretch(Result, alTop);
   end;
@@ -676,28 +681,58 @@ begin
   Sheet.Caption := '設定';
   Result := Sheet;
 
-  FSetModel := AddPathEdit('モデル (model.onnx)', LocateDataFile('model.onnx'));
-  FSetMetadata := AddPathEdit('メタデータ (model.onnx.json)', LocateDataFile('model.onnx.json'));
-  FSetRuntime := AddPathEdit('ONNX Runtime ライブラリ（空欄なら自動検索）', '');
-  FSetPortAudio := AddPathEdit('PortAudio ライブラリ（空欄なら自動検索）', '');
+  { ── 運用設定：普段さわるもの。技術用語を置かない ──
+    Operating settings: what an operator actually changes. No jargon here. }
+  Operating := TGroupBox.Create(Sheet);
+  Operating.Parent := Sheet;
+  Operating.Height := 92;
+  Operating.Caption := '運用設定';
+  Stretch(Operating, alTop);
 
-  Row := AddTopPanel(Sheet, 60);
-  AddLabel(Row, '録音サンプリング周波数 (Hz)', 12, 4);
-  FSetCaptureRate := TComboBox.Create(Row);
-  FSetCaptureRate.Parent := Row;
-  FSetCaptureRate.SetBounds(12, 24, 140, 28);
+  AddLabel(Operating, '録音の細かさ', 14, 8);
+  FSetCaptureRate := TComboBox.Create(Operating);
+  FSetCaptureRate.Parent := Operating;
+  FSetCaptureRate.SetBounds(14, 30, 200, 28);
   FSetCaptureRate.Style := csDropDownList;
-  FSetCaptureRate.Items.CommaText := '8000,11025,16000,22050,44100,48000';
+  FSetCaptureRate.Items.Add('8000 Hz（推奨）');
+  FSetCaptureRate.Items.Add('11025 Hz');
+  FSetCaptureRate.Items.Add('16000 Hz');
+  FSetCaptureRate.Items.Add('22050 Hz');
+  FSetCaptureRate.Items.Add('44100 Hz');
+  FSetCaptureRate.Items.Add('48000 Hz');
   FSetCaptureRate.ItemIndex := 0;
+  AddLabel(Operating, '受信機の音を取り込む細かさです。うまく録音できないときだけ変えてください。',
+    232, 36);
 
-  AddLabel(Row, '推論スレッド数', 260, 4);
-  FSetThreads := AddSpin(Row, 260, 24, 1, 16, 1, nil);
+  { ── 詳細・診断：困ったときだけ見るもの ──
+    Advanced and diagnostics: only looked at when something is wrong. }
+  Advanced := TGroupBox.Create(Sheet);
+  Advanced.Parent := Sheet;
+  Advanced.Caption := '詳細・診断';
+  Stretch(Advanced, alClient);
 
-  Apply := AddTopPanel(Sheet, 44);
-  FSetApply := AddButton(Apply, '適用してエンジンを読み込む', 12, 6, 250, @ApplySettings);
+  Row := AddTopPanel(Advanced, 40);
+  FSetApply := AddButton(Row, '設定を適用してエンジンを読み込み直す', 8, 4, 300, @ApplySettings);
+  AddLabel(Row, '推論スレッド', 328, 12);
+  FSetThreads := TComboBox.Create(Row);
+  FSetThreads.Parent := Row;
+  FSetThreads.SetBounds(408, 8, 110, 28);
+  FSetThreads.Style := csDropDownList;
+  FSetThreads.Items.Add('自動');
+  FSetThreads.Items.Add('1');
+  FSetThreads.Items.Add('2');
+  FSetThreads.Items.Add('4');
+  FSetThreads.ItemIndex := 0;
 
-  FSetInfo := TMemo.Create(Sheet);
-  FSetInfo.Parent := Sheet;
+  FSetModel := AddPathEdit(Advanced, 'モデル (model.onnx)', LocateDataFile('model.onnx'));
+  FSetMetadata := AddPathEdit(Advanced, 'メタデータ (model.onnx.json)',
+    LocateDataFile('model.onnx.json'));
+  FSetRuntime := AddPathEdit(Advanced, 'ONNX Runtime ライブラリ（空欄なら自動検索）', '');
+  FSetPortAudio := AddPathEdit(Advanced, 'PortAudio ライブラリ（空欄なら自動検索）', '');
+
+  AddTopLabel(Advanced, '診断情報');
+  FSetInfo := TMemo.Create(Advanced);
+  FSetInfo.Parent := Advanced;
   FSetInfo.ReadOnly := True;
   FSetInfo.ScrollBars := ssAutoBoth;
   FSetInfo.WordWrap := False;
@@ -726,12 +761,15 @@ begin
     FSetMetadata.Text := Ini.ReadString('engine', 'metadata', FSetMetadata.Text);
     FSetRuntime.Text := Ini.ReadString('engine', 'onnxruntime', '');
     FSetPortAudio.Text := Ini.ReadString('audio', 'portaudio', '');
-    FSetThreads.Value := Ini.ReadInteger('engine', 'threads', 1);
+    FSetThreads.ItemIndex := ClampInt(Ini.ReadInteger('engine', 'threads_choice', 0), 0, 3);
 
     Rate := Ini.ReadString('audio', 'capture_rate', '8000');
-    Index := FSetCaptureRate.Items.IndexOf(Rate);
-    if Index >= 0 then
-      FSetCaptureRate.ItemIndex := Index;
+    for Index := 0 to FSetCaptureRate.Items.Count - 1 do
+      if Pos(Rate, FSetCaptureRate.Items[Index]) = 1 then
+      begin
+        FSetCaptureRate.ItemIndex := Index;
+        Break;
+      end;
 
     FTxCharWpm.Value := Ini.ReadInteger('transmit', 'char_wpm', 20);
     FTxTextWpm.Value := Ini.ReadInteger('transmit', 'text_wpm', 20);
@@ -739,18 +777,33 @@ begin
     FTxVolume.Position := Ini.ReadInteger('transmit', 'volume', 60);
     FTxText.Text := Ini.ReadString('transmit', 'text', FTxText.Text);
 
-    FRxWindow.Value := Ini.ReadInteger('receive', 'window', DEFAULT_LIVE_WINDOW);
-    FRxInterval.Value := Ini.ReadInteger('receive', 'interval', DEFAULT_LIVE_INTERVAL);
+    FRxConfirmSpeed.ItemIndex := ClampInt(
+      Ini.ReadInteger('receive', 'confirm_speed', 1), 0, 2);
     FRxAntiAlias.Checked := Ini.ReadBool('receive', 'anti_alias', True);
+    FRxShowDoubt.Checked := Ini.ReadBool('receive', 'show_doubt', True);
+    FRxDoubtStrength.Position := ClampInt(
+      Ini.ReadInteger('receive', 'doubt_strength', 100), 0, 100);
+    FRxFontSize.Value := ClampInt(Ini.ReadInteger('receive', 'font_size', 14), 9, 32);
   finally
     Ini.Free;
   end;
+end;
+
+{ 設定を書き出す必要があることを覚えておきます。実際の書き出しは間引いて
+  行います（PollTimer）。
+
+  Notes that settings need writing; the write itself is rate limited. }
+procedure TMainForm.MarkSettingsDirty;
+begin
+  FSettingsDirty := True;
 end;
 
 procedure TMainForm.SaveSettings;
 var
   Ini: TIniFile;
 begin
+  FSettingsDirty := False;
+  FSettingsSavedAt := Now;
   try
     ForceDirectories(ExtractFilePath(ConfigFileName));
     Ini := TIniFile.Create(ConfigFileName);
@@ -758,28 +811,35 @@ begin
       Ini.WriteString('engine', 'model', FSetModel.Text);
       Ini.WriteString('engine', 'metadata', FSetMetadata.Text);
       Ini.WriteString('engine', 'onnxruntime', FSetRuntime.Text);
-      Ini.WriteInteger('engine', 'threads', FSetThreads.Value);
+      Ini.WriteInteger('engine', 'threads_choice', FSetThreads.ItemIndex);
       Ini.WriteString('audio', 'portaudio', FSetPortAudio.Text);
-      Ini.WriteString('audio', 'capture_rate', FSetCaptureRate.Text);
+      Ini.WriteString('audio', 'capture_rate', IntToStr(SelectedCaptureRate));
       Ini.WriteInteger('transmit', 'char_wpm', FTxCharWpm.Value);
       Ini.WriteInteger('transmit', 'text_wpm', FTxTextWpm.Value);
       Ini.WriteInteger('transmit', 'tone_hz', FTxToneHz.Value);
       Ini.WriteInteger('transmit', 'volume', FTxVolume.Position);
       Ini.WriteString('transmit', 'text', FTxText.Text);
-      Ini.WriteInteger('receive', 'window', FRxWindow.Value);
-      Ini.WriteInteger('receive', 'interval', FRxInterval.Value);
+      Ini.WriteInteger('receive', 'confirm_speed', FRxConfirmSpeed.ItemIndex);
       Ini.WriteBool('receive', 'anti_alias', FRxAntiAlias.Checked);
+      Ini.WriteBool('receive', 'show_doubt', FRxShowDoubt.Checked);
+      Ini.WriteInteger('receive', 'doubt_strength', FRxDoubtStrength.Position);
+      Ini.WriteInteger('receive', 'font_size', FRxFontSize.Value);
     finally
       Ini.Free;
     end;
   except
-    { 設定は利便のためのものです。保存に失敗しても終了を妨げません。
-      Settings are a convenience; failing to store them must not block exit. }
+    on E: Exception do
+      { 設定は利便のためのものなので終了は妨げませんが、黙って失敗すると
+        原因が分からなくなるため診断情報には残します。
+        Settings are a convenience and must not block exit, but a silent
+        failure leaves no way to find the cause, so it is recorded. }
+      LogDiagnostic('設定の保存', E.Message);
   end;
 end;
 
 procedure TMainForm.ApplySettings(Sender: TObject);
 begin
+  MarkSettingsDirty;
   RxStopClick(nil);
   { 走っている解析が FStream と FDecoder を掴んでいるため、解放の前に待ちます。
     A running analysis holds both objects, so wait for it before freeing. }
@@ -839,6 +899,8 @@ begin
       Lines.Add('PortAudio: 利用不可（送信の再生とマイク受信は使えません）');
       Lines.Add(PortAudioLoadError);
     end;
+    Lines.Add('');
+    Lines.Add('設定ファイル: ' + ConfigFileName);
     if (FDiagnostics <> nil) and (FDiagnostics.Count > 0) then
     begin
       Lines.Add('');
@@ -858,13 +920,44 @@ end;
 
 { ---- engine ---- }
 
+{ 「自動」は 1 スレッドです。実測で実時間の 40〜60 倍が出ており、増やす必要が
+  ありません（要件 FR-G.2）。機器に応じた調整は FR-G.4 で扱います。
+
+  "Automatic" means one thread: measured throughput is 40-60 times real time,
+  so more buys nothing (requirement FR-G.2). Adapting to slower machines is
+  FR-G.4's job. }
+function TMainForm.SelectedThreads: Integer;
+begin
+  case FSetThreads.ItemIndex of
+    1: Result := 1;
+    2: Result := 2;
+    3: Result := 4;
+  else
+    Result := 1;
+  end;
+end;
+
+{ 表示は「8000 Hz（推奨）」のような文言なので、先頭の数値だけを取り出します。
+  The list shows text like "8000 Hz (recommended)"; take the leading number. }
+function TMainForm.SelectedCaptureRate: Integer;
+var
+  Item: string;
+  I: Integer;
+begin
+  Item := FSetCaptureRate.Text;
+  I := 1;
+  while (I <= Length(Item)) and (Item[I] in ['0'..'9']) do
+    Inc(I);
+  Result := StrToIntDef(Copy(Item, 1, I - 1), 8000);
+end;
+
 function TMainForm.EnsureDecoder(Silent: Boolean): Boolean;
 begin
   if FDecoder <> nil then
     Exit(True);
   try
     LoadOnnxRuntime(FSetRuntime.Text);
-    FDecoder := TDeepCWDecoder.Create(FSetModel.Text, FSetMetadata.Text, FSetThreads.Value);
+    FDecoder := TDeepCWDecoder.Create(FSetModel.Text, FSetMetadata.Text, SelectedThreads);
     FEngineError := '';
     Result := True;
   except
@@ -896,8 +989,13 @@ begin
   Result := Samples;
   { 入力がモデルの帯域より十分に高い場合にのみ、フィルタを掛ける意味があります。
     Only worth filtering when the source runs well above the model's band. }
-  if FRxAntiAlias.Checked and (SampleRate > 2 * ANTI_ALIAS_CUTOFF_HZ) then
-    Result := LowPassFilter(Result, SampleRate, ANTI_ALIAS_CUTOFF_HZ);
+  { 遮断周波数は流し込み受信と同じ値を使います。二重に定義すると片方だけ
+    直したときに食い違います。
+    The cutoff is shared with streaming reception; defining it twice invites
+    the two paths to drift apart. }
+  if FRxAntiAlias.Checked and
+     (SampleRate > 2 * Round(STREAM_ANTI_ALIAS_CUTOFF_HZ)) then
+    Result := LowPassFilter(Result, SampleRate, STREAM_ANTI_ALIAS_CUTOFF_HZ);
 end;
 
 procedure TMainForm.StartDecode(const Samples: TSingleArray; SampleRate: Integer);
@@ -960,10 +1058,14 @@ end;
 procedure TMainForm.TxTextChanged(Sender: TObject);
 begin
   RenderTransmit;
+  if Sender <> nil then
+    MarkSettingsDirty;
 end;
 
 procedure TMainForm.TxOptionsChanged(Sender: TObject);
 begin
+  if Sender <> nil then
+    MarkSettingsDirty;
   { ファンズワース間隔は、実効速度が文字速度以下のときにのみ意味を持ちます。
   Farnsworth only makes sense when the effective speed is the slower one. }
   if FTxTextWpm.Value > FTxCharWpm.Value then
@@ -1197,14 +1299,13 @@ begin
     if not LoadPortAudio(FSetPortAudio.Text) then
       raise EDeepCW.Create(PortAudioLoadError);
 
-    FCaptureRate := StrToIntDef(FSetCaptureRate.Text, 8000);
+    FCaptureRate := SelectedCaptureRate;
     { 最長の窓の 2 倍を保持し、復号が遅れても次の窓が不足しないようにします。
     Hold twice the longest window so a slow decode never starves the next. }
     FreeAndNil(FRing);
     FRing := TAudioRing.Create(FCaptureRate * 2 * Round(DEEPCW_MAX_SECONDS));
     FCapture := TAudioCapture.Create(FRing, FCaptureRate);
     FCapture.Start;
-    FLiveLastDecodedTotal := 0;
     SetStatus('', Format('録音中 %d Hz', [FCaptureRate]), '受信を開始しました。');
   except
     on E: Exception do
@@ -1252,11 +1353,38 @@ begin
     [FRxTranscript.CharCount]));
 end;
 
+{ 「確定の速さ」を、実際の確定条件へ写します。末尾を長く残すほど確定は遅れますが、
+  後から見直される危険は小さくなります（要件 FR-B.3）。
+
+  Maps the confirm-speed choice onto the real commit conditions: a longer tail
+  guard delays confirmation but makes it safer (requirement FR-B.3). }
+procedure TMainForm.ApplyStreamSettings;
+begin
+  if FStream = nil then
+    Exit;
+  case FRxConfirmSpeed.ItemIndex of
+    0: begin FStream.TailGuardSeconds := 0.8; FStream.MinConfirmedSeconds := 1.5; end;
+    2: begin FStream.TailGuardSeconds := 2.0; FStream.MinConfirmedSeconds := 2.5; end;
+  else
+    begin FStream.TailGuardSeconds := 1.25; FStream.MinConfirmedSeconds := 2.0; end;
+  end;
+  FStream.AntiAlias := FRxAntiAlias.Checked;
+end;
+
+procedure TMainForm.RxConfirmSpeedChanged(Sender: TObject);
+begin
+  ApplyStreamSettings;
+  if Sender <> nil then
+    MarkSettingsDirty;
+end;
+
 procedure TMainForm.RxDisplayChanged(Sender: TObject);
 begin
   FRxTranscript.ShowDoubt := FRxShowDoubt.Checked;
   FRxTranscript.DoubtStrength := FRxDoubtStrength.Position / 100;
   FRxTranscript.Font.Size := FRxFontSize.Value;
+  if Sender <> nil then
+    MarkSettingsDirty;
 end;
 
 procedure TMainForm.ShowStreamText;
@@ -1297,7 +1425,12 @@ begin
   if not FRing.ReadSince(FRingPosition, Fresh) then
     LogDiagnostic('受信', 'Audio was dropped: the decoder fell behind the ring buffer.');
   if Length(Fresh) > 0 then
-    FStream.Append(PrepareForDecoder(Fresh, FCaptureRate), FCaptureRate);
+    { 帯域制限はここでは掛けません。0.2 秒ごとの細切れに FIR を掛けると継ぎ目
+      ごとに過渡が出るため、解析の直前に 1 本の音声へまとめて掛けます。
+      No filtering here: applying an FIR to 0.2 second pieces leaves a
+      transient at every seam, so the stream applies it to one whole buffer
+      just before analysis. }
+    FStream.Append(Fresh, FCaptureRate);
 
   if DecoderBusy or not FStream.Ready then
     Exit;
@@ -1392,6 +1525,15 @@ begin
   Safe here: the thread has left Synchronize by the time the timer runs. }
   if FCompletedThread <> nil then
     FreeAndNil(FCompletedThread);
+
+  { 変更から数秒おいて書き出します。長時間の運用中に強制終了しても、直前の
+    設定が残るようにするためです（終了処理だけに頼らない）。
+
+    Written a few seconds after a change so that a forced exit during a long
+    session still leaves the latest settings on disk, rather than relying on
+    a clean shutdown. }
+  if FSettingsDirty and (SecondsBetween(Now, FSettingsSavedAt) >= 3) then
+    SaveSettings;
 
   UpdateTransmitProgress;
   UpdateLiveReceive;
