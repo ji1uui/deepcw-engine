@@ -51,6 +51,10 @@ type
   TDecodedChar = record
     Text: string;
     Seconds: Double;
+    { この文字を出力し終えたフレームの時刻。空白の区間を求めるのに使います。
+      Time of the last frame that emitted this character; used to find the
+      extent of a word space. }
+    EndSeconds: Double;
     { この文字を出力したフレーム群での事後確率の最小値。モデルの出力は
       log-softmax なので、exp を取れば確率そのものになる。
 
@@ -249,12 +253,17 @@ begin
       begin
         Result[Count].Text := FMetadata.Chars[BestIndex];
         Result[Count].Seconds := (Frame + 0.5) * SecondsPerFrame;
+        Result[Count].EndSeconds := (Frame + 0.5) * SecondsPerFrame;
         Result[Count].Confidence := Probability;
         Active := Count;
         Inc(Count);
       end
-      else if (Active >= 0) and (Probability < Result[Active].Confidence) then
-        Result[Active].Confidence := Probability;
+      else if Active >= 0 then
+      begin
+        Result[Active].EndSeconds := (Frame + 0.5) * SecondsPerFrame;
+        if Probability < Result[Active].Confidence then
+          Result[Active].Confidence := Probability;
+      end;
       Previous := BestIndex;
     end;
   end;
@@ -365,7 +374,10 @@ begin
     { 窓内の相対時刻を録音全体の時刻へ直す。
       Shift window-relative times onto the whole recording. }
     for I := 0 to High(Chars) do
+    begin
       Chars[I].Seconds := Chars[I].Seconds + StartSeconds;
+      Chars[I].EndSeconds := Chars[I].EndSeconds + StartSeconds;
+    end;
     Result := MergeOverlappingChars(Result, Chars);
     Inc(Start, Hop);
   until Stop >= Total;

@@ -46,6 +46,7 @@ backup/
 lazarus/app/deepcw_station
 lazarus/cli/decode_morse
 lazarus/cli/cw_loopback
+lazarus/cli/cw_stream
 
 # Build and runtime output
 build/

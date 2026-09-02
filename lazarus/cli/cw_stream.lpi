@@ -9,15 +9,10 @@
         <MainUnitHasScaledStatement Value="False"/>
       </Flags>
       <SessionStorage Value="InProjectDir"/>
-      <Title Value="DeepCW Morse Station"/>
+      <Title Value="DeepCW streaming harness"/>
       <UseAppBundle Value="False"/>
       <ResourceType Value="res"/>
     </General>
-    <VersionInfo>
-      <UseVersionInfo Value="True"/>
-      <MajorVersionNr Value="1"/>
-      <StringTable ProductName="DeepCW Morse Station" FileDescription="Morse transmit and receive on the DeepCW model"/>
-    </VersionInfo>
     <BuildModes>
       <Item Name="Default" Default="True"/>
     </BuildModes>
@@ -27,25 +22,10 @@
     <RunParams>
       <FormatVersion Value="2"/>
     </RunParams>
-    <RequiredPackages>
-      <Item>
-        <PackageName Value="LCL"/>
-      </Item>
-    </RequiredPackages>
     <Units>
       <Unit>
-        <Filename Value="deepcw_station.lpr"/>
+        <Filename Value="cw_stream.lpr"/>
         <IsPartOfProject Value="True"/>
-      </Unit>
-      <Unit>
-        <Filename Value="frmmain.pas"/>
-        <IsPartOfProject Value="True"/>
-        <UnitName Value="FrmMain"/>
-      </Unit>
-      <Unit>
-        <Filename Value="transcriptview.pas"/>
-        <IsPartOfProject Value="True"/>
-        <UnitName Value="TranscriptView"/>
       </Unit>
       <Unit>
         <Filename Value="../src/deepcw.types.pas"/>
@@ -97,7 +77,7 @@
   <CompilerOptions>
     <Version Value="11"/>
     <Target>
-      <Filename Value="deepcw_station"/>
+      <Filename Value="cw_stream"/>
     </Target>
     <SearchPaths>
       <IncludeFiles Value="$(ProjOutDir)"/>
@@ -107,7 +87,7 @@
     <Linking>
       <Options>
         <Win32>
-          <GraphicApplication Value="True"/>
+          <GraphicApplication Value="False"/>
         </Win32>
       </Options>
     </Linking>

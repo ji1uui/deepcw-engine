@@ -59,6 +59,15 @@ type
 
     Total samples ever pushed; the GUI uses it to notice new audio. }
     function TotalWritten: Int64;
+
+    { Position 以降に書き込まれた分を取り出し、Position を進めます。読み出しが
+      間に合わずリングを一周した場合は、取り出せる最も古い位置まで切り上げ、
+      False を返して取りこぼしを知らせます。
+
+      Reads whatever was written after Position and advances it. If reading
+      fell behind and the ring wrapped, Position is moved up to the oldest
+      sample still held and False reports the loss. }
+    function ReadSince(var Position: Int64; out Data: TSingleArray): Boolean;
     property Capacity: Integer read FCapacity;
   end;
 
@@ -405,6 +414,38 @@ begin
       if Value > Result then
         Result := Value;
     end;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TAudioRing.ReadSince(var Position: Int64; out Data: TSingleArray): Boolean;
+var
+  Available: Int64;
+  Count, Start, I: Integer;
+begin
+  Data := nil;
+  Result := True;
+  EnterCriticalSection(FLock);
+  try
+    if Position > FTotal then
+      Position := FTotal;
+    Available := FTotal - Position;
+    if Available <= 0 then
+      Exit;
+    if Available > FCount then
+    begin
+      { 追いつけずに古い音声を失いました。/ Fell behind and lost older audio. }
+      Position := FTotal - FCount;
+      Available := FCount;
+      Result := False;
+    end;
+    Count := Integer(Available);
+    SetLength(Data, Count);
+    Start := (FHead - Count + FCapacity) mod FCapacity;
+    for I := 0 to Count - 1 do
+      Data[I] := FData[(Start + I) mod FCapacity];
+    Position := FTotal;
   finally
     LeaveCriticalSection(FLock);
   end;

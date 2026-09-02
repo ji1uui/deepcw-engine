@@ -30,7 +30,7 @@ uses
   SysUtils, Classes, Math, IniFiles, Clipbrd, FPimage, IntfGraphics, GraphType,
   Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls, Spin,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
-  DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, TranscriptView;
+  DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, TranscriptView;
 
 type
   { 復号 1 件を UI スレッドの外で実行し、結果を Synchronize で返します。
@@ -43,6 +43,7 @@ type
   TDecodeThread = class(TThread)
   private
     FDecoder: TDeepCWDecoder;
+    FStream: TStreamingDecoder;
     FSamples: TSingleArray;
     FSampleRate: Integer;
     FChars: TDecodedChars;
@@ -55,6 +56,9 @@ type
   public
     constructor Create(ADecoder: TDeepCWDecoder; const ASamples: TSingleArray;
       ASampleRate: Integer; AOnDone: TNotifyEvent);
+    { 流し込み受信では、溜まった音声を 1 回だけ解析します。
+      For streaming reception, analyse the buffered audio once. }
+    constructor CreateStreaming(AStream: TStreamingDecoder; AOnDone: TNotifyEvent);
     property Chars: TDecodedChars read FChars;
     property Error: string read FError;
     property Spectrogram: TSpectrogram read FSpectrogram;
@@ -100,6 +104,8 @@ type
 
     { 受信の状態 / receive state }
     FLiveChars: TDecodedChars;
+    FStream: TStreamingDecoder;
+    FRingPosition: Int64;
     FLiveLastDecodedTotal: Int64;
     FLastSpectrogram: TSpectrogram;
 
@@ -168,6 +174,7 @@ type
     function EnsureDecoder(Silent: Boolean = False): Boolean;
     function DecoderBusy: Boolean;
     procedure StartDecode(const Samples: TSingleArray; SampleRate: Integer);
+    procedure ShowStreamText;
     procedure DecodeFinished(Sender: TObject);
     function PrepareForDecoder(const Samples: TSingleArray; SampleRate: Integer): TSingleArray;
 
@@ -235,10 +242,23 @@ begin
   inherited Create(False);
 end;
 
+constructor TDecodeThread.CreateStreaming(AStream: TStreamingDecoder;
+  AOnDone: TNotifyEvent);
+begin
+  FStream := AStream;
+  FDecoder := AStream.Decoder;
+  FOnDone := AOnDone;
+  FreeOnTerminate := False;
+  inherited Create(False);
+end;
+
 procedure TDecodeThread.Execute;
 begin
   try
-    FChars := FDecoder.DecodeLongSamplesTimed(FSamples, FSampleRate);
+    if FStream <> nil then
+      FStream.Step
+    else
+      FChars := FDecoder.DecodeLongSamplesTimed(FSamples, FSampleRate);
     FSpectrogram := FDecoder.LastSpectrogram;
   except
     on E: Exception do
@@ -311,6 +331,7 @@ begin
   end;
   FreeAndNil(FCompletedThread);
   SaveSettings;
+  FStream.Free;
   FDiagnostics.Free;
   FCapture.Free;
   FPlayback.Free;
@@ -760,6 +781,15 @@ end;
 procedure TMainForm.ApplySettings(Sender: TObject);
 begin
   RxStopClick(nil);
+  { 走っている解析が FStream と FDecoder を掴んでいるため、解放の前に待ちます。
+    A running analysis holds both objects, so wait for it before freeing. }
+  if FDecodeThread <> nil then
+  begin
+    FDecodeThread.WaitFor;
+    FreeAndNil(FDecodeThread);
+  end;
+  FreeAndNil(FCompletedThread);
+  FreeAndNil(FStream);
   FreeAndNil(FDecoder);
   FEngineError := '';
   UnloadOnnxRuntime;
@@ -910,13 +940,16 @@ begin
     FLastSpectrogram := Thread.Spectrogram;
     FRxWaterfall.Invalidate;
     if FAppendMode then
-      { ライブ受信では、窓の重なりをたたみながら追記します。
-        Live reception appends, folding away the overlap between windows. }
-      FLiveChars := MergeOverlappingChars(FLiveChars, Thread.Chars)
+      { 流し込み受信では、確定と暫定を分けて表示します。
+        Streaming reception shows confirmed and provisional text apart. }
+      ShowStreamText
     else
+    begin
       FLiveChars := Thread.Chars;
-    FRxTranscript.SetChars(FLiveChars);
-    SetStatus('', '', Format('デコード完了: %d 文字', [Length(Thread.Chars)]));
+      FRxTranscript.PendingFrom := MaxInt;
+      FRxTranscript.SetChars(FLiveChars);
+      SetStatus('', '', Format('デコード完了: %d 文字', [Length(Thread.Chars)]));
+    end;
   end;
 
   FCompletedThread := Thread;
@@ -1189,12 +1222,26 @@ begin
   FCapture.Stop;
   FreeAndNil(FCapture);
   FRxLevel.Position := 0;
+  { 残った暫定部分を確定させてから止めます（要件 FR-B.2）。
+    Commit whatever is still provisional before stopping. }
+  if (FStream <> nil) and not DecoderBusy then
+  begin
+    try
+      FStream.Finish;
+      ShowStreamText;
+    except
+      on E: Exception do
+        LogDiagnostic('受信の終了', E.Message);
+    end;
+  end;
   SetStatus('', '待機中', '受信を停止しました。');
 end;
 
 procedure TMainForm.RxClearClick(Sender: TObject);
 begin
   FLiveChars := nil;
+  if FStream <> nil then
+    FStream.Reset;
   FRxTranscript.Clear;
 end;
 
@@ -1212,43 +1259,52 @@ begin
   FRxTranscript.Font.Size := FRxFontSize.Value;
 end;
 
+procedure TMainForm.ShowStreamText;
+var
+  All: TDecodedChars;
+  ConfirmedCount: Integer;
+begin
+  if FStream = nil then
+    Exit;
+  All := FStream.AllChars(ConfirmedCount);
+  FLiveChars := All;
+  FRxTranscript.PendingFrom := ConfirmedCount;
+  FRxTranscript.SetChars(All);
+end;
+
 procedure TMainForm.UpdateLiveReceive;
 var
-  Snapshot, Window: TSingleArray;
-  Total: Int64;
-  Wanted, Available: Integer;
+  Fresh: TSingleArray;
 begin
-  if FCapture = nil then
+  if (FCapture = nil) or (FStream = nil) then
     Exit;
 
   if FCapture.LastError <> '' then
   begin
-    SetStatus('', '待機中', '録音エラー: ' + FCapture.LastError);
+    LogDiagnostic('録音', FCapture.LastError);
+    SetStatus('', '', StringReplace(UserMessageFor(FCapture.LastError),
+      LineEnding, ' ', [rfReplaceAll]));
     RxStopClick(nil);
     Exit;
   end;
 
   FRxLevel.Position := Round(100 * FRing.PeakLevel(FCaptureRate, 0.2));
 
-  Total := FRing.TotalWritten;
-  Wanted := FRxWindow.Value * FCaptureRate;
-  if Total < Wanted then
-    Exit;
-  if (FLiveLastDecodedTotal > 0) and
-     (Total - FLiveLastDecodedTotal < Int64(FRxInterval.Value) * FCaptureRate) then
-    Exit;
-  if DecoderBusy then
+  { 録音された分をそのまま流し込みます。窓を切り出すのではなく、確定点から
+    先を溜め続けるのが流し込み受信です（要件 FR-B.2）。
+    Feed everything captured. Streaming keeps the audio since the last split
+    point rather than cutting fixed windows. }
+  if not FRing.ReadSince(FRingPosition, Fresh) then
+    LogDiagnostic('受信', 'Audio was dropped: the decoder fell behind the ring buffer.');
+  if Length(Fresh) > 0 then
+    FStream.Append(PrepareForDecoder(Fresh, FCaptureRate), FCaptureRate);
+
+  if DecoderBusy or not FStream.Ready then
     Exit;
 
-  Snapshot := FRing.Snapshot;
-  Available := Length(Snapshot);
-  if Available < Wanted then
-    Exit;
-  Window := Copy(Snapshot, Available - Wanted, Wanted);
-
-  FLiveLastDecodedTotal := Total;
   FAppendMode := True;
-  StartDecode(PrepareForDecoder(Window, FCaptureRate), FCaptureRate);
+  FRxBusy.Caption := 'デコード中...';
+  FDecodeThread := TDecodeThread.CreateStreaming(FStream, @DecodeFinished);
 end;
 
 procedure TMainForm.RxWaterfallPaint(Sender: TObject);
