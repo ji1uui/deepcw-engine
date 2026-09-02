@@ -56,6 +56,34 @@ npm run decode -- \
   --wav test.wav
 ```
 
+## Lazarus Example
+
+Directory: `lazarus`
+
+A Free Pascal / Lazarus Morse station that keys CW on transmit and decodes it
+with this model on receive, plus two console tools built from the same units.
+ONNX Runtime and PortAudio are loaded at run time, so nothing extra is linked
+at build time.
+
+```bash
+cd lazarus
+lazbuild app/deepcw_station.lpi
+./app/deepcw_station
+```
+
+Decode a single file from the console:
+
+```bash
+lazbuild cli/decode_morse.lpi
+./cli/decode_morse --wav test.wav
+```
+
+The model and metadata are located relative to the executable, so `--model` and
+`--metadata` are only needed to override them.
+
+See `lazarus/README.md` for the library requirements and a tour of the
+units.
+
 ## License
 
 AGPL-3.0-only. See [LICENSE](LICENSE).
