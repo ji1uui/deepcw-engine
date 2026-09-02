@@ -34,13 +34,8 @@
     </RequiredPackages>
     <Units>
       <Unit>
-        <Filename Value="deepcw_station.lpr"/>
+        <Filename Value="waterfall_probe.lpr"/>
         <IsPartOfProject Value="True"/>
-      </Unit>
-      <Unit>
-        <Filename Value="frmmain.pas"/>
-        <IsPartOfProject Value="True"/>
-        <UnitName Value="FrmMain"/>
       </Unit>
       <Unit>
         <Filename Value="waterfallview.pas"/>
@@ -51,11 +46,6 @@
         <Filename Value="../src/deepcw.tuner.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="DeepCW.Tuner"/>
-      </Unit>
-      <Unit>
-        <Filename Value="transcriptview.pas"/>
-        <IsPartOfProject Value="True"/>
-        <UnitName Value="TranscriptView"/>
       </Unit>
       <Unit>
         <Filename Value="../src/deepcw.types.pas"/>
@@ -107,7 +97,7 @@
   <CompilerOptions>
     <Version Value="11"/>
     <Target>
-      <Filename Value="deepcw_station"/>
+      <Filename Value="waterfall_probe"/>
     </Target>
     <SearchPaths>
       <IncludeFiles Value="$(ProjOutDir)"/>

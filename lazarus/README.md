@@ -8,8 +8,11 @@ share the same units.
 lazarus/
 ├── src/    reusable units: metadata, WAV, DSP, ONNX Runtime, decoder, Morse, audio
 ├── app/    deepcw_station  - the GUI station (LCL)
+│        waterfall_probe - exercise the waterfall control without a display
 └── cli/    decode_morse    - decode one WAV file, like the Python and Node.js examples
          cw_loopback     - key six messages, decode them back, report the score
+         cw_stream       - feed a WAV in chunks, watch confirmed text grow
+         cw_tune         - measure the tuning path: pitch, translation, bandwidth
 ```
 
 ## What it does
@@ -66,6 +69,9 @@ cd lazarus
 lazbuild app/deepcw_station.lpi
 lazbuild cli/decode_morse.lpi
 lazbuild cli/cw_loopback.lpi
+lazbuild cli/cw_stream.lpi
+lazbuild cli/cw_tune.lpi
+lazbuild app/waterfall_probe.lpi
 ```
 
 Then run the station:
@@ -102,6 +108,26 @@ Check that a build and its ONNX Runtime are healthy without a sound card:
 It keys six messages at different speeds, pitches and noise levels, decodes
 each one back and exits non-zero if any of them differs from what was sent.
 
+Check the tuning path — the frequency translation that makes a signal outside
+the model's 400-1200 Hz passband readable:
+
+```bash
+./cli/cw_tune --tests shift,image,bandwidth,stream
+```
+
+Each test prints character error rates, so a change that makes tuning worse
+shows up as a number rather than as a feeling. `--tests sweep` re-derives the
+pitch that translation aims at.
+
+Check the waterfall control itself, including on a machine with no display:
+
+```bash
+xvfb-run -a ./app/waterfall_probe /tmp
+```
+
+It creates the control for real, feeds it two signals, applies clicks, wheel
+events and key presses, and writes the painted result out as PNG files.
+
 ## The units
 
 | Unit | Responsibility |
@@ -110,9 +136,11 @@ each one back and exits non-zero if any of them differs from what was sent.
 | `DeepCW.Metadata` | reads and validates `model.onnx.json` |
 | `DeepCW.Wave` | RIFF/WAVE reading and writing, linear resampling |
 | `DeepCW.Dsp` | radix-2 FFT, the model's STFT, an anti-alias low-pass |
+| `DeepCW.Tuner` | frequency translation onto the pitch the model reads, band-pass, and the one place audio is prepared for the model |
 | `DeepCW.Onnx` | ONNX Runtime C API binding, loaded at run time |
 | `DeepCW.Decoder` | spectrogram to text, greedy CTC, window stitching |
 | `DeepCW.Morse` | the code table, PARIS and Farnsworth timing, tone synthesis |
+| `DeepCW.Stream` | splits a live stream into confirmed and provisional text |
 | `DeepCW.Audio` | PortAudio capture and playback, loaded at run time |
 
 Only `DeepCW.Audio` and the GUI depend on PortAudio, and only `DeepCW.Onnx`

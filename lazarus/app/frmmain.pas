@@ -30,7 +30,8 @@ uses
   SysUtils, Classes, Math, DateUtils, IniFiles, Clipbrd, FPimage, IntfGraphics, GraphType,
   Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls, Spin,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
-  DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, TranscriptView;
+  DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
+  TranscriptView, WaterfallView;
 
 type
   { 復号 1 件を UI スレッドの外で実行し、結果を Synchronize で返します。
@@ -111,7 +112,6 @@ type
     FLiveChars: TDecodedChars;
     FStream: TStreamingDecoder;
     FRingPosition: Int64;
-    FLastSpectrogram: TSpectrogram;
 
     { 画面の骨組み / layout }
     FPages: TPageControl;
@@ -150,7 +150,9 @@ type
     FRxFontSize: TSpinEdit;
     FRxCopy: TButton;
     FRxLevel: TProgressBar;
-    FRxWaterfall: TPaintBox;
+    FRxWaterfall: TWaterfallView;
+    FRxTuneInfo: TLabel;
+    FRxTuneClear: TButton;
     FRxBusy: TLabel;
 
     { 設定タブ / settings tab }
@@ -160,6 +162,7 @@ type
     FSetPortAudio: TEdit;
     FSetCaptureRate: TComboBox;
     FSetThreads: TComboBox;
+    FSetBandwidth: TComboBox;
     FSetApply: TButton;
     FSetInfo: TMemo;
 
@@ -201,8 +204,12 @@ type
     procedure RxDisplayChanged(Sender: TObject);
     procedure RxConfirmSpeedChanged(Sender: TObject);
     procedure ApplyStreamSettings;
-    procedure RxWaterfallPaint(Sender: TObject);
+    function SelectedBandwidth: TTunerBandwidth;
+    procedure RxTuneChanged(Sender: TObject);
+    procedure RxTuneClearClick(Sender: TObject);
+    procedure UpdateTuneInfo;
 
+    procedure PagesChanged(Sender: TObject);
     procedure PollTimer(Sender: TObject);
     procedure UpdateTransmitProgress;
     procedure UpdateLiveReceive;
@@ -221,6 +228,7 @@ implementation
 
 { 実装の後方で定義します。/ Defined further down. }
 function UserMessageFor(const Raw: string): string; forward;
+function StatusLine(const Raw: string): string; forward;
 
 { TDecodeThread }
 
@@ -301,6 +309,11 @@ begin
   { 読み込んだ表示設定を実際に反映します。設定は代入だけでは効きません。
     Apply the loaded display settings; assigning the controls is not enough. }
   RxDisplayChanged(nil);
+  { 同調の表示も同じで、読み込んだ値を画面へ映さないと、実際の状態と食い違い
+    ます。
+    The same holds for the tuning display: without this the panel would
+    disagree with the actual state. }
+  UpdateTuneInfo;
   EnsureDecoder(True);
   RefreshInfo;
   RenderTransmit;
@@ -343,9 +356,15 @@ begin
   FStatus := TStatusBar.Create(Self);
   FStatus.Parent := Self;
   FStatus.SimplePanel := False;
-  FStatus.Panels.Add.Width := 320;
-  FStatus.Panels.Add.Width := 300;
-  FStatus.Panels.Add.Width := 300;
+  FStatus.Panels.Add.Width := 160;
+  FStatus.Panels.Add.Width := 140;
+  { 3 つ目には対処つきの案内が入るため、残りの幅をすべて与えます。切り詰められ
+    ると「次に何をすればよいか」が読めなくなります（要件 FR-A.4）。
+
+    The third panel carries guidance with a remedy in it, so it takes all the
+    remaining width; truncating it would cut off what to do next
+    (requirement FR-A.4). }
+  FStatus.Panels.Add.Width := 4000;
 
   FPages := TPageControl.Create(Self);
   FPages.Parent := Self;
@@ -355,6 +374,7 @@ begin
   BuildReceiveTab;
   BuildSettingsTab;
   FPages.PageIndex := 0;
+  FPages.OnChange := @PagesChanged;
 
   FPollTimer := TTimer.Create(Self);
   FPollTimer.Interval := 200;
@@ -536,7 +556,7 @@ function TMainForm.BuildReceiveTab: TTabSheet;
 var
   Sheet: TTabSheet;
   FileBox, LiveBox: TGroupBox;
-  LiveControls, LevelPanel, WaterfallPanel, TextPanel, TextTools: TPanel;
+  LiveControls, LevelPanel, WaterfallPanel, TuneTools, TextPanel, TextTools: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
   Sheet.Caption := '受信';
@@ -611,12 +631,33 @@ begin
   WaterfallPanel := TPanel.Create(Sheet);
   WaterfallPanel.Parent := Sheet;
   WaterfallPanel.Align := alBottom;
-  WaterfallPanel.Height := 200;
+  WaterfallPanel.Height := 230;
   WaterfallPanel.BevelOuter := bvNone;
-  AddTopLabel(WaterfallPanel, 'スペクトログラム（400-1200 Hz）');
-  FRxWaterfall := TPaintBox.Create(WaterfallPanel);
+
+  { 同調の操作はウォーターフォールのすぐ上に置きます。読みたい信号を選ぶ
+    という一連の動作が 1 か所にまとまるためです（要件 FR-D.1、FR-D.5）。
+
+    The tuning controls sit directly above the waterfall so that choosing a
+    signal to read is one gesture in one place (requirements FR-D.1, FR-D.5). }
+  TuneTools := TPanel.Create(WaterfallPanel);
+  TuneTools.Parent := WaterfallPanel;
+  TuneTools.Height := 30;
+  TuneTools.Align := alTop;
+  TuneTools.BevelOuter := bvNone;
+  AddLabel(TuneTools, '読みたい信号をクリック。ホイールと上下キーで微調整、右クリックで解除。',
+    6, 7);
+  FRxTuneClear := AddButton(TuneTools, '同調を解除', 0, 2, 110, @RxTuneClearClick);
+  Stretch(FRxTuneClear, alRight);
+  FRxTuneInfo := TLabel.Create(TuneTools);
+  FRxTuneInfo.Parent := TuneTools;
+  FRxTuneInfo.Align := alRight;
+  FRxTuneInfo.Layout := tlCenter;
+  FRxTuneInfo.Alignment := taRightJustify;
+  FRxTuneInfo.BorderSpacing.Right := 10;
+
+  FRxWaterfall := TWaterfallView.Create(WaterfallPanel);
   FRxWaterfall.Parent := WaterfallPanel;
-  FRxWaterfall.OnPaint := @RxWaterfallPaint;
+  FRxWaterfall.OnTuneChanged := @RxTuneChanged;
   Stretch(FRxWaterfall, alClient);
 
   TextPanel := TPanel.Create(Sheet);
@@ -664,6 +705,7 @@ var
   Sheet: TTabSheet;
   Operating, Advanced: TGroupBox;
   Row, Apply: TPanel;
+  Choice: TTunerBandwidth;
 
   { 技術的な設定は「詳細・診断」側にだけ置きます（要件 FR-G.1）。
     Technical settings live only under the advanced group (FR-G.1). }
@@ -723,6 +765,20 @@ begin
   FSetThreads.Items.Add('2');
   FSetThreads.Items.Add('4');
   FSetThreads.ItemIndex := 0;
+
+  { 帯域幅は自動のままで実用に足ります。手で選びたい人のためだけに残します
+    （要件 FR-D.3）。
+    Automatic is good enough in practice; the manual choice exists only for
+    those who want it (requirement FR-D.3). }
+  AddLabel(Row, '同調時の帯域幅', 536, 12);
+  FSetBandwidth := TComboBox.Create(Row);
+  FSetBandwidth.Parent := Row;
+  FSetBandwidth.SetBounds(632, 8, 160, 28);
+  FSetBandwidth.Style := csDropDownList;
+  for Choice := Low(TTunerBandwidth) to High(TTunerBandwidth) do
+    FSetBandwidth.Items.Add(BandwidthCaption(Choice));
+  FSetBandwidth.ItemIndex := 0;
+  FSetBandwidth.OnChange := @RxConfirmSpeedChanged;
 
   FSetModel := AddPathEdit(Advanced, 'モデル (model.onnx)', LocateDataFile('model.onnx'));
   FSetMetadata := AddPathEdit(Advanced, 'メタデータ (model.onnx.json)',
@@ -784,6 +840,13 @@ begin
     FRxDoubtStrength.Position := ClampInt(
       Ini.ReadInteger('receive', 'doubt_strength', 100), 0, 100);
     FRxFontSize.Value := ClampInt(Ini.ReadInteger('receive', 'font_size', 14), 9, 32);
+    FSetBandwidth.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'bandwidth', 0),
+      0, FSetBandwidth.Items.Count - 1);
+    { 前回の同調先は覚えておきます。同じ設備なら音程は同じであることが多く、
+      毎回選び直させる理由がありません。
+      The last tuning is remembered: with the same station the pitch is
+      usually the same, and there is no reason to make it be chosen again. }
+    FRxWaterfall.TuneHz := Ini.ReadInteger('receive', 'tune_hz', 0);
   finally
     Ini.Free;
   end;
@@ -824,6 +887,8 @@ begin
       Ini.WriteBool('receive', 'show_doubt', FRxShowDoubt.Checked);
       Ini.WriteInteger('receive', 'doubt_strength', FRxDoubtStrength.Position);
       Ini.WriteInteger('receive', 'font_size', FRxFontSize.Value);
+      Ini.WriteInteger('receive', 'tune_hz', Round(FRxWaterfall.TuneHz));
+      Ini.WriteInteger('receive', 'bandwidth', FSetBandwidth.ItemIndex);
     finally
       Ini.Free;
     end;
@@ -969,7 +1034,7 @@ begin
       begin
         LogDiagnostic('エンジンの読み込み', E.Message);
         SetStatus('エンジン: 未読み込み', '',
-          StringReplace(UserMessageFor(E.Message), LineEnding, ' ', [rfReplaceAll]));
+          StatusLine(E.Message));
       end
       else
         ReportError('エンジンの読み込み', E);
@@ -983,19 +1048,19 @@ begin
   Result := FDecodeThread <> nil;
 end;
 
+{ ファイルからの復号も、流し込み受信とまったく同じ整形を通します。同調して
+  いれば録音済みの音声にも効きます。戻り値はモデルの周波数になっているため、
+  呼び出し側はモデルの周波数を渡します。
+
+  File decoding goes through exactly the same preparation as streaming
+  reception, so a tuning applies to recordings too. The result is already at
+  the model's rate, which is what the caller then passes on. }
 function TMainForm.PrepareForDecoder(const Samples: TSingleArray;
   SampleRate: Integer): TSingleArray;
 begin
-  Result := Samples;
-  { 入力がモデルの帯域より十分に高い場合にのみ、フィルタを掛ける意味があります。
-    Only worth filtering when the source runs well above the model's band. }
-  { 遮断周波数は流し込み受信と同じ値を使います。二重に定義すると片方だけ
-    直したときに食い違います。
-    The cutoff is shared with streaming reception; defining it twice invites
-    the two paths to drift apart. }
-  if FRxAntiAlias.Checked and
-     (SampleRate > 2 * Round(STREAM_ANTI_ALIAS_CUTOFF_HZ)) then
-    Result := LowPassFilter(Result, SampleRate, STREAM_ANTI_ALIAS_CUTOFF_HZ);
+  Result := DeepCW.Tuner.PrepareForModel(Samples, SampleRate,
+    FDecoder.Metadata.SampleRate, FRxWaterfall.TuneHz, SelectedBandwidth,
+    FRxAntiAlias.Checked);
 end;
 
 procedure TMainForm.StartDecode(const Samples: TSingleArray; SampleRate: Integer);
@@ -1030,13 +1095,10 @@ begin
   if Thread.Error <> '' then
   begin
     LogDiagnostic('デコード', Thread.Error);
-    SetStatus('', '', StringReplace(UserMessageFor(Thread.Error),
-      LineEnding, ' ', [rfReplaceAll]));
+    SetStatus('', '', StatusLine(Thread.Error));
   end
   else
   begin
-    FLastSpectrogram := Thread.Spectrogram;
-    FRxWaterfall.Invalidate;
     if FAppendMode then
       { 流し込み受信では、確定と暫定を分けて表示します。
         Streaming reception shows confirmed and provisional text apart. }
@@ -1210,8 +1272,7 @@ begin
       if FPlayback.LastError <> '' then
       begin
         LogDiagnostic('再生', FPlayback.LastError);
-        SetStatus('', '', StringReplace(UserMessageFor(FPlayback.LastError),
-          LineEnding, ' ', [rfReplaceAll]));
+        SetStatus('', '', StatusLine(FPlayback.LastError));
       end
       else
         SetStatus('', '', '送信完了');
@@ -1284,9 +1345,14 @@ begin
   end;
 
   RxStopClick(nil);
+  { 整形にモデルの標本化周波数が要るため、先にエンジンを用意します。
+    The preparation needs the model's sample rate, so the engine comes first. }
+  if not EnsureDecoder then
+    Exit;
   FLiveChars := nil;
   FAppendMode := False;
-  StartDecode(PrepareForDecoder(Samples, SampleRate), SampleRate);
+  StartDecode(PrepareForDecoder(Samples, SampleRate),
+    FDecoder.Metadata.SampleRate);
 end;
 
 procedure TMainForm.RxStartClick(Sender: TObject);
@@ -1304,8 +1370,27 @@ begin
     Hold twice the longest window so a slow decode never starves the next. }
     FreeAndNil(FRing);
     FRing := TAudioRing.Create(FCaptureRate * 2 * Round(DEEPCW_MAX_SECONDS));
+    { 流し込み復号器はここで用意します。エンジンが読めていなければ作れず、
+      作られていなければ、録音は溜まるのに一文字も出ません。
+
+      The streaming decoder is created here. It cannot exist before the engine
+      loads, and without it audio would pile up while not a single character
+      appeared. }
+    if FStream = nil then
+      FStream := TStreamingDecoder.Create(FDecoder);
+    ApplyStreamSettings;
+    { 輪バッファを作り直したので、読み出し位置も先頭へ戻します。
+      The ring was recreated, so the read position goes back to its start. }
+    FRingPosition := 0;
+
     FCapture := TAudioCapture.Create(FRing, FCaptureRate);
     FCapture.Start;
+    { 録音の細かさが変わればウォーターフォールの目盛りも変わります。溜まって
+      いた絵は意味を失うので消します。
+      A change of capture rate changes the waterfall's scale, so whatever is
+      already drawn no longer means anything and is cleared. }
+    FRxWaterfall.Clear;
+    FRxWaterfall.Message_ := '信号を待っています。読みたい信号が見えたらクリックしてください。';
     SetStatus('', Format('録音中 %d Hz', [FCaptureRate]), '受信を開始しました。');
   except
     on E: Exception do
@@ -1344,6 +1429,7 @@ begin
   if FStream <> nil then
     FStream.Reset;
   FRxTranscript.Clear;
+  FRxWaterfall.Clear;
 end;
 
 procedure TMainForm.RxCopyClick(Sender: TObject);
@@ -1369,6 +1455,82 @@ begin
     begin FStream.TailGuardSeconds := 1.25; FStream.MinConfirmedSeconds := 2.0; end;
   end;
   FStream.AntiAlias := FRxAntiAlias.Checked;
+  FStream.Bandwidth := SelectedBandwidth;
+  FStream.TuneHz := FRxWaterfall.TuneHz;
+  UpdateTuneInfo;
+end;
+
+function TMainForm.SelectedBandwidth: TTunerBandwidth;
+begin
+  if (FSetBandwidth = nil) or (FSetBandwidth.ItemIndex < 0) then
+    Exit(tbAuto);
+  Result := TTunerBandwidth(FSetBandwidth.ItemIndex);
+end;
+
+{ いま何に同調しているかを一目で示します（要件 FR-D.5）。
+  Shows at a glance what is currently being tuned (requirement FR-D.5). }
+procedure TMainForm.UpdateTuneInfo;
+var
+  Half: Double;
+begin
+  if FRxWaterfall = nil then
+    Exit;
+  if FRxWaterfall.TuneHz > 0 then
+  begin
+    Half := BandwidthHalfWidth(SelectedBandwidth);
+    if Half > 0 then
+      FRxTuneInfo.Caption := Format('同調: %.0f Hz ／ 帯域 ±%.0f Hz',
+        [FRxWaterfall.TuneHz, Half])
+    else
+      FRxTuneInfo.Caption := Format('同調: %.0f Hz ／ 帯域制限なし',
+        [FRxWaterfall.TuneHz]);
+    FRxWaterfall.HalfWidthHz := Half;
+  end
+  else
+  begin
+    FRxTuneInfo.Caption := '同調: なし（受信機の音程のまま）';
+    FRxWaterfall.HalfWidthHz := 0;
+  end;
+  FRxTuneClear.Enabled := FRxWaterfall.TuneHz > 0;
+end;
+
+procedure TMainForm.RxTuneClearClick(Sender: TObject);
+begin
+  FRxWaterfall.TuneHz := 0;
+end;
+
+{ ウォーターフォールで同調先が変わったときに呼ばれます。範囲の外を選ばれた
+  ときは、断るのではなく、寄せた結果と受信機側でできることを伝えます
+  （要件 FR-D.4）。
+
+  Called when the waterfall's tuning changes. A pitch outside the tunable
+  range is not refused: the operator is told where it landed and what they can
+  do at the receiver instead (requirement FR-D.4). }
+procedure TMainForm.RxTuneChanged(Sender: TObject);
+var
+  Tuned, Requested: Double;
+begin
+  Tuned := FRxWaterfall.TuneHz;
+  Requested := FRxWaterfall.RequestedHz;
+  if FStream <> nil then
+    FStream.TuneHz := Tuned;
+  UpdateTuneInfo;
+  MarkSettingsDirty;
+
+  { 求めた音程と実際の同調先が離れていれば、寄せたことになります。左端側を
+    選ばれると求めた値は 0 に近づくため、0 を除外してはいけません。
+
+    A gap between what was asked for and where the tuning landed means it was
+    moved. A click towards the left edge asks for something close to 0, so 0
+    must not be excluded here. }
+  if (Tuned > 0) and (Abs(Requested - Tuned) > TUNER_STEP_HZ) then
+    SetStatus('', '', Format(
+      '%.0f Hz に寄せました。受信機の音程を %.0f〜%.0f Hz にしてください。',
+      [Tuned, FRxWaterfall.LowestHz, FRxWaterfall.HighestHz]))
+  else if Tuned > 0 then
+    SetStatus('', '', Format('%.0f Hz の信号に同調しました。', [Tuned]))
+  else
+    SetStatus('', '', '同調を解除しました。受信機の音程のまま読みます。');
 end;
 
 procedure TMainForm.RxConfirmSpeedChanged(Sender: TObject);
@@ -1403,16 +1565,27 @@ end;
 procedure TMainForm.UpdateLiveReceive;
 var
   Fresh: TSingleArray;
+  Failure: string;
 begin
   if (FCapture = nil) or (FStream = nil) then
     Exit;
 
   if FCapture.LastError <> '' then
   begin
-    LogDiagnostic('録音', FCapture.LastError);
-    SetStatus('', '', StringReplace(UserMessageFor(FCapture.LastError),
-      LineEnding, ' ', [rfReplaceAll]));
+    { 文言を先に控えます。RxStopClick が FCapture を解放するため、そのあとで
+      LastError を読むことはできません。
+
+      Copy the message first: RxStopClick frees FCapture, so LastError cannot
+      be read after it. }
+    Failure := FCapture.LastError;
+    LogDiagnostic('録音', Failure);
+    { 止めてから案内を出します。RxStopClick は「受信を停止しました」を出すため、
+      順序が逆だと、なぜ止まったのかという肝心の説明が上書きされて消えます。
+
+      Stop first, then explain: RxStopClick posts "reception stopped", so the
+      other order would overwrite the one message that says why it stopped. }
     RxStopClick(nil);
+    SetStatus('', '', StatusLine(Failure));
     Exit;
   end;
 
@@ -1425,12 +1598,19 @@ begin
   if not FRing.ReadSince(FRingPosition, Fresh) then
     LogDiagnostic('受信', 'Audio was dropped: the decoder fell behind the ring buffer.');
   if Length(Fresh) > 0 then
+  begin
     { 帯域制限はここでは掛けません。0.2 秒ごとの細切れに FIR を掛けると継ぎ目
       ごとに過渡が出るため、解析の直前に 1 本の音声へまとめて掛けます。
       No filtering here: applying an FIR to 0.2 second pieces leaves a
       transient at every seam, so the stream applies it to one whole buffer
       just before analysis. }
     FStream.Append(Fresh, FCaptureRate);
+    { ウォーターフォールには、同調も帯域制限も掛ける前の音を見せます。まだ
+      選んでいない信号も見えていなければ、選びようがないためです。
+      The waterfall is fed the audio before any tuning or filtering: a signal
+      that has not been chosen yet still has to be visible to be chosen. }
+    FRxWaterfall.PushSamples(Fresh, FCaptureRate);
+  end;
 
   if DecoderBusy or not FStream.Ready then
     Exit;
@@ -1440,84 +1620,20 @@ begin
   FDecodeThread := TDecodeThread.CreateStreaming(FStream, @DecodeFinished);
 end;
 
-procedure TMainForm.RxWaterfallPaint(Sender: TObject);
-var
-  Image: TLazIntfImage;
-  Bitmap: TBitmap;
-  X, Y, Frame, Bin, Step: Integer;
-  Value, Lowest, Highest, Level: Double;
-  Pixel: TFPColor;
-  Width_, Height_: Integer;
-begin
-  FRxWaterfall.Canvas.Brush.Color := clBlack;
-  FRxWaterfall.Canvas.FillRect(0, 0, FRxWaterfall.Width, FRxWaterfall.Height);
-  if (FLastSpectrogram.Frames <= 0) or (FLastSpectrogram.Bins <= 0) then
-  begin
-    FRxWaterfall.Canvas.Font.Color := clSilver;
-    FRxWaterfall.Canvas.TextOut(8, 8, 'デコードするとスペクトログラムを表示します');
-    Exit;
-  end;
-
-  { この窓の最小値と最大値で正規化し、弱い信号も見えるようにします。モデルへは
-    正規化前の値がそのまま渡ります。
-
-    Normalise against the extremes of this window so faint signals stay
-    visible; the model sees the raw values regardless. }
-  Lowest := FLastSpectrogram.Data[0];
-  Highest := Lowest;
-  for X := 0 to High(FLastSpectrogram.Data) do
-  begin
-    Value := FLastSpectrogram.Data[X];
-    if Value < Lowest then Lowest := Value;
-    if Value > Highest then Highest := Value;
-  end;
-  if Highest - Lowest < 1E-6 then
-    Highest := Lowest + 1;
-
-  { 画面 1 列につき画像 1 列とすることで、長い窓でも描画の負担を抑えます。
-    One image column per screen column keeps long windows cheap to draw. }
-  Width_ := Max(1, Min(FRxWaterfall.Width, FLastSpectrogram.Frames));
-  Height_ := FLastSpectrogram.Bins;
-  Step := Max(1, FLastSpectrogram.Frames div Width_);
-
-  Image := TLazIntfImage.Create(Width_, Height_, [riqfRGB]);
-  try
-    for X := 0 to Width_ - 1 do
-    begin
-      Frame := Min(FLastSpectrogram.Frames - 1, X * Step);
-      for Y := 0 to Height_ - 1 do
-      begin
-        { 行 0 は枠の上端であるため、周波数軸を反転します。
-        Row 0 is the top of the box, so flip the frequency axis. }
-        Bin := Height_ - 1 - Y;
-        Level := (FLastSpectrogram.Data[Frame * FLastSpectrogram.Bins + Bin] - Lowest) /
-          (Highest - Lowest);
-        Level := ClampDouble(Level, 0, 1);
-        { 黒から青、橙を経て白へ変化させます。
-        Black through blue and orange to white. }
-        Pixel.Red := Round(65535 * ClampDouble(1.6 * Level - 0.3, 0, 1));
-        Pixel.Green := Round(65535 * ClampDouble(1.8 * Level - 0.7, 0, 1));
-        Pixel.Blue := Round(65535 * ClampDouble(2.2 * Level - 1.2, 0, 1) +
-          40000 * ClampDouble(1.4 * Level, 0, 1) * (1 - Level));
-        Pixel.Alpha := alphaOpaque;
-        Image.Colors[X, Y] := Pixel;
-      end;
-    end;
-
-    Bitmap := TBitmap.Create;
-    try
-      Bitmap.LoadFromIntfImage(Image);
-      FRxWaterfall.Canvas.StretchDraw(
-        Rect(0, 0, FRxWaterfall.Width, FRxWaterfall.Height), Bitmap);
-    finally
-      Bitmap.Free;
-    end;
-  finally
-    Image.Free;
-  end;
-end;
 
 { ---- shared ---- }
+
+{ 診断情報は起動時に作ったきりでは古くなります。困って設定タブを開いたときに
+  最新でなければ、そこに答えがありません（要件 FR-G.3、NFR-5.7）。
+
+  The diagnostics go stale if they are only built at startup. Opening the
+  settings tab because something went wrong is no use if the answer is not
+  there yet (requirements FR-G.3, NFR-5.7). }
+procedure TMainForm.PagesChanged(Sender: TObject);
+begin
+  if FPages.PageIndex = 2 then
+    RefreshInfo;
+end;
 
 procedure TMainForm.PollTimer(Sender: TObject);
 begin
@@ -1566,6 +1682,31 @@ end;
   Turns a technical message into one an operator can act on (FR-A.4). The
   engine raises developer-facing English; shown as is, it tells the operator
   nothing to do. The raw text is kept for the diagnostics panel instead. }
+{ ステータスバーへ出す 1 行を作ります。
+
+  利用者向けの文言は、何が起きたかを述べる 1 行目と、対処を述べる続きの行から
+  できています。バーの幅に収まらない長さを流し込むと文の途中で切れ、かえって
+  読めません。ここでは 1 行目だけを出し、続きは診断情報に残します
+  （要件 FR-A.4、NFR-5.7）。
+
+  Builds the single line shown on the status bar. A message for the operator
+  is a first line saying what happened followed by lines saying what to do;
+  pouring the whole thing into a bar too narrow for it cuts a sentence in
+  half and reads worse than nothing. Only the first line goes to the bar, and
+  the rest stays in the diagnostics (requirements FR-A.4, NFR-5.7). }
+function StatusLine(const Raw: string): string;
+var
+  Friendly: string;
+  Break_: Integer;
+begin
+  Friendly := UserMessageFor(Raw);
+  Break_ := Pos(LineEnding, Friendly);
+  if Break_ > 0 then
+    Result := Copy(Friendly, 1, Break_ - 1)
+  else
+    Result := Friendly;
+end;
+
 function UserMessageFor(const Raw: string): string;
 
   function Mentions(const Fragment: string): Boolean;
@@ -1624,7 +1765,7 @@ var
 begin
   Friendly := UserMessageFor(E.Message);
   LogDiagnostic(Context, E.Message);
-  SetStatus('', '', Context + ': ' + StringReplace(Friendly, LineEnding, ' ', [rfReplaceAll]));
+  SetStatus('', '', Context + ': ' + StatusLine(E.Message));
   MessageDlg(Context + 'できませんでした', Friendly, mtError, [mbOK], 0);
 end;
 

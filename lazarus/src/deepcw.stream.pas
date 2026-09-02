@@ -25,7 +25,7 @@ unit DeepCW.Stream;
 interface
 
 uses
-  SysUtils, Classes, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Dsp, DeepCW.Wave;
+  SysUtils, Classes, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Tuner;
 
 const
   { 解析にかける最大の長さ。これを超えたら語間を待たずに確定させます。
@@ -55,10 +55,6 @@ const
     word gap is 105 ms, so this never swallows a real character. }
   STREAM_LEAD_GUARD_SECONDS = 0.08;
 
-  { 折り返し防止の遮断周波数。モデルの通過帯域 1200 Hz の少し上に置きます。
-    Anti-alias cutoff, a little above the model's 1200 Hz passband. }
-  STREAM_ANTI_ALIAS_CUTOFF_HZ = 1400.0;
-
 type
   TStreamingDecoder = class
   private
@@ -76,18 +72,29 @@ type
     FPendingCount: Integer;
     FSourceRate: Integer;
     FAntiAlias: Boolean;
+    { 同調している音程（録音された音声の中での Hz）。0 なら同調していません。
+      同調していないあいだは周波数変換も帯域制限も掛けず、これまでと同じ経路を
+      通ります（要件 FR-D.1）。
+
+      The pitch being tuned, in hertz within the captured audio; 0 means no
+      tuning. While it is 0 neither the translation nor the band-pass runs and
+      the path is exactly what it was before (requirement FR-D.1). }
+    FTuneHz: Double;
+    FBandwidth: TTunerBandwidth;
     FConfirmed: TDecodedChars;
     FProvisional: TDecodedChars;
     FConfirmedSeconds: Double;
     FDroppedSamples: Int64;
     FTailGuard: Double;
     FMinConfirmed: Double;
+    procedure SetTuneHz(Value: Double);
+    procedure SetBandwidth(Value: TTunerBandwidth);
     function SourceRate: Integer;
     function TakeSnapshot: TSingleArray;
-    { 解析にかける形へ整えます。帯域制限 → 周波数変換の順で、途切れのない
-      1 本の音声に対して行います。
-      Prepares audio for analysis: band limit, then resample, both applied to
-      one unbroken buffer. }
+    { 解析にかける形へ整えます。同調・帯域制限・標本化周波数の変換を、途切れの
+      ない 1 本の音声に対してまとめて行います。
+      Prepares audio for analysis: tuning, band limiting and rate conversion,
+      all applied to one unbroken buffer. }
     function PrepareForModel(const Source: TSingleArray): TSingleArray;
     procedure AppendConfirmed(const Chars: TDecodedChars);
     function StripSeamSpace(const Chars: TDecodedChars): TDecodedChars;
@@ -140,6 +147,15 @@ type
       above the model's. On by default. }
     property AntiAlias: Boolean read FAntiAlias write FAntiAlias;
 
+    { 同調する音程。0 なら同調しません。設定すると、その音程をモデルが最も
+      よく読む音程へ寄せてから解析します。
+      The pitch to tune, or 0 for none. When set, that pitch is translated to
+      the one the model reads best before analysis. }
+    property TuneHz: Double read FTuneHz write SetTuneHz;
+    { 同調しているときに掛ける帯域幅。既定は自動です。
+      Bandwidth applied while tuned; automatic by default. }
+    property Bandwidth: TTunerBandwidth read FBandwidth write SetBandwidth;
+
     { 末尾を確定させずに残す時間。長いほど確定は遅れますが確かになります。
       Seconds left uncommitted at the tail; longer is slower but safer. }
     property TailGuardSeconds: Double read FTailGuard write FTailGuard;
@@ -159,6 +175,8 @@ begin
     raise EDeepCW.Create('The streaming decoder needs a decoder.');
   FDecoder := ADecoder;
   FAntiAlias := True;
+  FTuneHz := 0;
+  FBandwidth := tbAuto;
   FTailGuard := STREAM_TAIL_GUARD_SECONDS;
   FMinConfirmed := STREAM_MIN_CONFIRMED_SECONDS;
   FSourceRate := ADecoder.Metadata.SampleRate;
@@ -215,13 +233,55 @@ begin
 end;
 
 function TStreamingDecoder.PrepareForModel(const Source: TSingleArray): TSingleArray;
+var
+  Tune: Double;
+  Width: TTunerBandwidth;
+  Limit: Boolean;
+  Rate: Integer;
 begin
-  Result := Source;
-  { 変換前に帯域を絞らないと、モデルの帯域へ折り返した雑音が乗ります。
-    Without band limiting first, noise folds into the model's band. }
-  if FAntiAlias and (FSourceRate > 2 * Round(STREAM_ANTI_ALIAS_CUTOFF_HZ)) then
-    Result := LowPassFilter(Result, FSourceRate, STREAM_ANTI_ALIAS_CUTOFF_HZ);
-  Result := ResampleLinear(Result, FSourceRate, FDecoder.Metadata.SampleRate);
+  { 同調の設定は画面側の操作で変わります。解析の途中で変わっても 1 回の解析が
+    ちぐはぐにならないよう、始めに写し取ります。
+
+    The tuning settings change from the UI. Copy them once at the start so a
+    change part way through cannot leave a single analysis inconsistent. }
+  EnterCriticalSection(FLock);
+  try
+    Tune := FTuneHz;
+    Width := FBandwidth;
+    Limit := FAntiAlias;
+    Rate := FSourceRate;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  { 整形そのものは DeepCW.Tuner が持ちます。ファイルからの復号と同じ 1 か所を
+    通すためです。
+    The preparation itself lives in DeepCW.Tuner, so that file decoding goes
+    through exactly the same place. }
+  Result := DeepCW.Tuner.PrepareForModel(Source, Rate,
+    FDecoder.Metadata.SampleRate, Tune, Width, Limit);
+end;
+
+procedure TStreamingDecoder.SetTuneHz(Value: Double);
+begin
+  EnterCriticalSection(FLock);
+  try
+    if Value > 0 then
+      FTuneHz := QuantizeTone(Value)
+    else
+      FTuneHz := 0;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+procedure TStreamingDecoder.SetBandwidth(Value: TTunerBandwidth);
+begin
+  EnterCriticalSection(FLock);
+  try
+    FBandwidth := Value;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
 end;
 
 function TStreamingDecoder.SourceRate: Integer;

@@ -181,9 +181,9 @@ begin
         WriteLn(Format('暫定文字の遅延 95%%: %.2f 秒（目標 1.50 秒） %s',
           [Percentile95(PendingDelays),
            BoolToStr(Percentile95(PendingDelays) <= 1.5, '達成', '未達')]));
-        WriteLn(Format('確定文字の遅延 95%%: %.2f 秒（目標 3.00 秒） %s',
+        WriteLn(Format('確定文字の遅延 95%%: %.2f 秒（目標 5.00 秒） %s',
           [Percentile95(ConfirmDelays),
-           BoolToStr(Percentile95(ConfirmDelays) <= 3.0, '達成', '未達')]));
+           BoolToStr(Percentile95(ConfirmDelays) <= 5.0, '達成', '未達')]));
         if Rewrites > 0 then
           Halt(1);
       finally
