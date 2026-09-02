@@ -33,6 +33,20 @@ ENV/
 .coverage
 htmlcov/
 
+# Free Pascal / Lazarus
+lib/
+backup/
+*.ppu
+*.compiled
+*.lps
+*.o
+*.or
+*.a
+*.res
+examples/lazarus/app/deepcw_station
+examples/lazarus/cli/decode_morse
+examples/lazarus/cli/cw_loopback
+
 # Build and runtime output
 build/
 dist/
