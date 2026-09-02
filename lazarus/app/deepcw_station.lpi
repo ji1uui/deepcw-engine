@@ -43,6 +43,11 @@
         <UnitName Value="FrmMain"/>
       </Unit>
       <Unit>
+        <Filename Value="transcriptview.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="TranscriptView"/>
+      </Unit>
+      <Unit>
         <Filename Value="../src/deepcw.types.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="DeepCW.Types"/>

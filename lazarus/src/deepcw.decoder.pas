@@ -51,6 +51,12 @@ type
   TDecodedChar = record
     Text: string;
     Seconds: Double;
+    { この文字を出力したフレーム群での事後確率の最小値。モデルの出力は
+      log-softmax なので、exp を取れば確率そのものになる。
+
+      Lowest posterior probability across the frames that emitted this
+      character. The model outputs log-softmax, so exp gives the probability. }
+    Confidence: Single;
   end;
   TDecodedChars = array of TDecodedChar;
 
@@ -86,6 +92,14 @@ type
       it and stitching the per-window transcripts together. }
     function DecodeLongSamples(const Samples: TSingleArray; SourceRate: Integer): string;
 
+    { DecodeLongSamples と同じ処理で、文字ごとの時刻と確信度も返します。時刻は
+      録音全体の先頭からの秒数です。
+
+      As DecodeLongSamples, but also returns each character's time and
+      confidence. Times are seconds from the start of the whole recording. }
+    function DecodeLongSamplesTimed(const Samples: TSingleArray;
+      SourceRate: Integer): TDecodedChars;
+
     { WAV ファイルを読み込んで復号します。20 秒を超える場合は窓に分割します。
 
       Reads a WAV file and decodes it, windowing if it runs past 20 seconds. }
@@ -100,10 +114,28 @@ type
     property Session: TOnnxSession read FSession;
   end;
 
+{ 確信度を、表示に使う「疑わしさ」0..1 に写します。
+
+  確信度は 1 のごく近くに密集するため、そのまま濃淡へ写しても差が見えません。
+  対数軸で 0.9999 以上を 0、0.9 以下を 1 とすると、合成信号での実測では誤った
+  文字の 79% が 0.5 を超え、正しい文字の 86% は 0.5 未満に収まりました。
+
+  Maps a confidence onto the 0..1 doubt value used for display. Confidences
+  cluster just below 1, so a linear mapping shows nothing; on a log axis with
+  0.9999 as certain and 0.9 as doubtful, 79% of wrong characters land above
+  0.5 while 86% of correct ones stay below it. }
+function DoubtLevel(Confidence: Single): Single;
+
 { 復号した文字を連結して 1 つの文字列にします。
 
   Joins decoded characters into a plain string. }
 function DecodedText(const Chars: TDecodedChars): string;
+
+{ [LowSeconds, HighSeconds) の範囲で受信した文字だけを残します。
+
+  Keeps only the characters heard in [LowSeconds, HighSeconds). }
+function MergeOverlappingChars(const Accumulated, NewChars: TDecodedChars;
+  MaxOverlap: Integer = 32): TDecodedChars;
 
 { [LowSeconds, HighSeconds) の範囲で受信した文字だけを残します。
 
@@ -162,8 +194,8 @@ end;
 function TDeepCWDecoder.GreedyCtcDecode(const LogProbs: TOnnxFloatTensor;
   DurationSeconds: Double): TDecodedChars;
 var
-  Frames, Classes, Frame, Klass, BestIndex, Previous, Count: Integer;
-  BestValue, Value: Single;
+  Frames, Classes, Frame, Klass, BestIndex, Previous, Count, Active: Integer;
+  BestValue, Value, Probability: Single;
   SecondsPerFrame: Double;
 begin
   Result := nil;
@@ -188,6 +220,7 @@ begin
   SetLength(Result, Frames);
   Count := 0;
   Previous := -1;
+  Active := -1;
   for Frame := 0 to Frames - 1 do
   begin
     BestIndex := 0;
@@ -203,15 +236,25 @@ begin
     end;
 
     if BestIndex = FMetadata.BlankIndex then
-      Previous := -1
+    begin
+      Previous := -1;
+      Active := -1;
+    end
     else
     begin
+      { 同じ文字が続く区間のうち、最も自信のないフレームを採る。
+        Take the least confident frame across the run that emits this character. }
+      Probability := Exp(BestValue);
       if BestIndex <> Previous then
       begin
         Result[Count].Text := FMetadata.Chars[BestIndex];
         Result[Count].Seconds := (Frame + 0.5) * SecondsPerFrame;
+        Result[Count].Confidence := Probability;
+        Active := Count;
         Inc(Count);
-      end;
+      end
+      else if (Active >= 0) and (Probability < Result[Active].Confidence) then
+        Result[Active].Confidence := Probability;
       Previous := BestIndex;
     end;
   end;
@@ -250,24 +293,52 @@ end;
 
 function TDeepCWDecoder.DecodeLongSamples(const Samples: TSingleArray;
   SourceRate: Integer): string;
+begin
+  Result := DecodedText(DecodeLongSamplesTimed(Samples, SourceRate));
+end;
+
+function TDeepCWDecoder.DecodeLongSamplesTimed(const Samples: TSingleArray;
+  SourceRate: Integer): TDecodedChars;
 var
   Audio, Window: TSingleArray;
   Chars: TDecodedChars;
-  Rate, Total, WindowLength, Hop, Start, Stop: Integer;
+  Rate, Total, WindowLength, Hop, Start, Stop, Minimum, I: Integer;
   StartSeconds, StopSeconds, LowGuard, HighGuard, TotalSeconds: Double;
 begin
+  Result := nil;
   Rate := FMetadata.SampleRate;
   Audio := ResampleLinear(Samples, SourceRate, Rate);
   Total := Length(Audio);
   TotalSeconds := Total / Rate;
+  Minimum := Ceil(DEEPCW_MIN_SECONDS * Rate) + Rate div 5;
+
+  { モデルが受け付ける下限に満たない音声は、無音を足して通す。利用者に
+    「5 秒以上必要です」と言わないための処理（要件 FR-B.1）。
+
+    Audio below the model's minimum is padded with silence rather than
+    refused, so the limit never reaches the operator (requirement FR-B.1). }
+  if (Total > 0) and (Total < Minimum) then
+  begin
+    SetLength(Audio, Minimum);
+    for I := Total to Minimum - 1 do
+      Audio[I] := 0;
+    Total := Minimum;
+  end;
+
+  if Total = 0 then
+    Exit;
 
   if Total <= Round(DEEPCW_MAX_SECONDS * Rate) then
-    Exit(DecodedText(RunWindow(Audio)));
+  begin
+    Result := RunWindow(Audio);
+    FLastSeconds := TotalSeconds;
+    Exit;
+  end;
 
   WindowLength := Round(DEEPCW_WINDOW_SECONDS * Rate);
   Hop := Round(DEEPCW_WINDOW_HOP_SECONDS * Rate);
 
-  Result := '';
+  Result := nil;
   Start := 0;
   repeat
     Stop := Min(Start + WindowLength, Total);
@@ -290,8 +361,12 @@ begin
     if Stop = Total then HighGuard := StopSeconds - StartSeconds
     else HighGuard := (StopSeconds - StartSeconds) - DEEPCW_EDGE_GUARD_SECONDS;
 
-    Result := MergeOverlappingText(Result,
-      DecodedText(TrimDecoded(Chars, LowGuard, HighGuard)));
+    Chars := TrimDecoded(Chars, LowGuard, HighGuard);
+    { 窓内の相対時刻を録音全体の時刻へ直す。
+      Shift window-relative times onto the whole recording. }
+    for I := 0 to High(Chars) do
+      Chars[I].Seconds := Chars[I].Seconds + StartSeconds;
+    Result := MergeOverlappingChars(Result, Chars);
     Inc(Start, Hop);
   until Stop >= Total;
 
@@ -307,6 +382,21 @@ begin
   Result := DecodeLongSamples(Samples, SampleRate);
 end;
 
+function DoubtLevel(Confidence: Single): Single;
+const
+  CertainAt = 0.9999;
+  DoubtfulAt = 0.9;
+var
+  Distance: Double;
+begin
+  Distance := 1 - Confidence;
+  if Distance < 1E-9 then
+    Distance := 1E-9;
+  Result := (Log10(Distance) - Log10(1 - CertainAt)) /
+    (Log10(1 - DoubtfulAt) - Log10(1 - CertainAt));
+  Result := ClampDouble(Result, 0, 1);
+end;
+
 function DecodedText(const Chars: TDecodedChars): string;
 var
   I: Integer;
@@ -320,6 +410,51 @@ begin
   finally
     Builder.Free;
   end;
+end;
+
+function MergeOverlappingChars(const Accumulated, NewChars: TDecodedChars;
+  MaxOverlap: Integer): TDecodedChars;
+var
+  Limit, Overlap, I, J: Integer;
+  Matches: Boolean;
+
+  procedure AppendFrom(Index: Integer);
+  var
+    K, Base: Integer;
+  begin
+    Base := Length(Result);
+    SetLength(Result, Base + Length(NewChars) - Index);
+    for K := Index to High(NewChars) do
+      Result[Base + K - Index] := NewChars[K];
+  end;
+
+begin
+  Result := Copy(Accumulated, 0, Length(Accumulated));
+  if Length(Accumulated) = 0 then
+    Exit(Copy(NewChars, 0, Length(NewChars)));
+  if Length(NewChars) = 0 then
+    Exit;
+
+  Limit := Min(MaxOverlap, Min(Length(Accumulated), Length(NewChars)));
+  for Overlap := Limit downto 1 do
+  begin
+    Matches := True;
+    for I := 0 to Overlap - 1 do
+    begin
+      J := Length(Accumulated) - Overlap + I;
+      if Accumulated[J].Text <> NewChars[I].Text then
+      begin
+        Matches := False;
+        Break;
+      end;
+    end;
+    if Matches then
+    begin
+      AppendFrom(Overlap);
+      Exit;
+    end;
+  end;
+  AppendFrom(0);
 end;
 
 function TrimDecoded(const Chars: TDecodedChars; LowSeconds, HighSeconds: Double): TDecodedChars;

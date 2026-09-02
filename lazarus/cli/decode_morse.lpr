@@ -9,12 +9,12 @@ program decode_morse;
 {$mode objfpc}{$H+}
 
 uses
-  SysUtils, DeepCW.Types, DeepCW.Onnx, DeepCW.Decoder;
+  SysUtils, DeepCW.Types, DeepCW.Onnx, DeepCW.Decoder, DeepCW.Wave;
 
 procedure WriteUsage;
 begin
   WriteLn('Usage: decode_morse --wav <file> [--model <path>] ' +
-    '[--metadata <path>] [--onnxruntime <library>] [--verbose]');
+    '[--metadata <path>] [--onnxruntime <library>] [--verbose] [--confidence]');
   WriteLn('The model and metadata default to the copies shipped with this ' +
     'repository, found relative to the executable.');
 end;
@@ -25,9 +25,13 @@ var
   WavPath: string = '';
   RuntimePath: string = '';
   Verbose: Boolean = False;
+  ShowConfidence: Boolean = False;
   Decoder: TDeepCWDecoder;
   Index: Integer;
   Key, Value: string;
+  Samples: TSingleArray;
+  SampleRate: Integer;
+  Decoded: TDecodedChars;
   Started: TDateTime;
 begin
   Index := 1;
@@ -42,6 +46,12 @@ begin
     if Key = '--verbose' then
     begin
       Verbose := True;
+      Inc(Index);
+      Continue;
+    end;
+    if Key = '--confidence' then
+    begin
+      ShowConfidence := True;
       Inc(Index);
       Continue;
     end;
@@ -91,7 +101,22 @@ begin
     Decoder := TDeepCWDecoder.Create(ModelPath, MetadataPath);
     try
       Started := Now;
-      WriteLn(Decoder.DecodeWavFile(WavPath));
+      if ShowConfidence then
+      begin
+        LoadWavMono(WavPath, Samples, SampleRate);
+        Decoded := Decoder.DecodeLongSamplesTimed(Samples, SampleRate);
+        WriteLn(DecodedText(Decoded));
+        WriteLn(StdErr, '');
+        WriteLn(StdErr, '  時刻      文字   確信度    疑わしさ');
+        for Index := 0 to High(Decoded) do
+          if Decoded[Index].Text <> ' ' then
+            WriteLn(StdErr, Format('  %7.2fs  %-4s %8.4f  %6.2f  %s',
+              [Decoded[Index].Seconds, Decoded[Index].Text,
+               Decoded[Index].Confidence, DoubtLevel(Decoded[Index].Confidence),
+               StringOfChar('#', Round(20 * DoubtLevel(Decoded[Index].Confidence)))]));
+      end
+      else
+        WriteLn(Decoder.DecodeWavFile(WavPath));
       if Verbose then
         WriteLn(StdErr, Format('%.2f s of audio, %d spectrogram frames, %.0f ms',
           [Decoder.LastSeconds, Decoder.LastSpectrogram.Frames,

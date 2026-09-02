@@ -27,10 +27,10 @@ unit FrmMain;
 interface
 
 uses
-  SysUtils, Classes, Math, IniFiles, FPimage, IntfGraphics, GraphType,
+  SysUtils, Classes, Math, IniFiles, Clipbrd, FPimage, IntfGraphics, GraphType,
   Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls, Spin,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
-  DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio;
+  DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, TranscriptView;
 
 type
   { 復号 1 件を UI スレッドの外で実行し、結果を Synchronize で返します。
@@ -45,7 +45,7 @@ type
     FDecoder: TDeepCWDecoder;
     FSamples: TSingleArray;
     FSampleRate: Integer;
-    FText: string;
+    FChars: TDecodedChars;
     FError: string;
     FSpectrogram: TSpectrogram;
     FOnDone: TNotifyEvent;
@@ -55,7 +55,7 @@ type
   public
     constructor Create(ADecoder: TDeepCWDecoder; const ASamples: TSingleArray;
       ASampleRate: Integer; AOnDone: TNotifyEvent);
-    property Text: string read FText;
+    property Chars: TDecodedChars read FChars;
     property Error: string read FError;
     property Spectrogram: TSpectrogram read FSpectrogram;
   end;
@@ -81,6 +81,9 @@ type
       one-shot decodes that replace it. }
     FAppendMode: Boolean;
     FEngineError: string;
+    { 技術的な原文の控え。診断画面にだけ出します（要件 NFR-5.7）。
+      Raw technical messages, shown only on the diagnostics panel. }
+    FDiagnostics: TStringList;
 
     { 音声 / audio }
     FRing: TAudioRing;
@@ -96,7 +99,7 @@ type
     FTxSampleRate: Integer;
 
     { 受信の状態 / receive state }
-    FLiveTranscript: string;
+    FLiveChars: TDecodedChars;
     FLiveLastDecodedTotal: Int64;
     FLastSpectrogram: TSpectrogram;
 
@@ -132,7 +135,11 @@ type
     FRxWindow: TSpinEdit;
     FRxInterval: TSpinEdit;
     FRxAntiAlias: TCheckBox;
-    FRxText: TMemo;
+    FRxTranscript: TTranscriptView;
+    FRxShowDoubt: TCheckBox;
+    FRxDoubtStrength: TTrackBar;
+    FRxFontSize: TSpinEdit;
+    FRxCopy: TButton;
     FRxLevel: TProgressBar;
     FRxWaterfall: TPaintBox;
     FRxBusy: TLabel;
@@ -177,6 +184,8 @@ type
     procedure RxStartClick(Sender: TObject);
     procedure RxStopClick(Sender: TObject);
     procedure RxClearClick(Sender: TObject);
+    procedure RxCopyClick(Sender: TObject);
+    procedure RxDisplayChanged(Sender: TObject);
     procedure RxWaterfallPaint(Sender: TObject);
 
     procedure PollTimer(Sender: TObject);
@@ -184,6 +193,7 @@ type
     procedure UpdateLiveReceive;
     procedure SetStatus(const Engine, Audio, Message_: string);
     procedure ReportError(const Context: string; E: Exception);
+    procedure LogDiagnostic(const Context, Raw: string);
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -209,6 +219,9 @@ const
     little above that keeps the CW note intact. }
   ANTI_ALIAS_CUTOFF_HZ = 1400;
 
+{ 実装の後方で定義します。/ Defined further down. }
+function UserMessageFor(const Raw: string): string; forward;
+
 { TDecodeThread }
 
 constructor TDecodeThread.Create(ADecoder: TDeepCWDecoder; const ASamples: TSingleArray;
@@ -225,7 +238,7 @@ end;
 procedure TDecodeThread.Execute;
 begin
   try
-    FText := FDecoder.DecodeLongSamples(FSamples, FSampleRate);
+    FChars := FDecoder.DecodeLongSamplesTimed(FSamples, FSampleRate);
     FSpectrogram := FDecoder.LastSpectrogram;
   except
     on E: Exception do
@@ -259,6 +272,7 @@ begin
   Constraints.MinHeight := 560;
   Position := poScreenCenter;
 
+  FDiagnostics := TStringList.Create;
   FCaptureRate := 8000;
   FTxSampleRate := 8000;
   FRing := TAudioRing.Create(FCaptureRate * 30);
@@ -297,6 +311,7 @@ begin
   end;
   FreeAndNil(FCompletedThread);
   SaveSettings;
+  FDiagnostics.Free;
   FCapture.Free;
   FPlayback.Free;
   FRing.Free;
@@ -504,7 +519,7 @@ function TMainForm.BuildReceiveTab: TTabSheet;
 var
   Sheet: TTabSheet;
   FileBox, LiveBox: TGroupBox;
-  LiveControls, LevelPanel, WaterfallPanel, TextPanel: TPanel;
+  LiveControls, LevelPanel, WaterfallPanel, TextPanel, TextTools: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
   Sheet.Caption := '受信';
@@ -586,12 +601,39 @@ begin
   TextPanel.Align := alClient;
   TextPanel.BevelOuter := bvNone;
   AddTopLabel(TextPanel, '受信テキスト');
-  FRxText := TMemo.Create(TextPanel);
-  FRxText.Parent := TextPanel;
-  FRxText.ReadOnly := True;
-  FRxText.ScrollBars := ssAutoVertical;
-  FRxText.Font.Size := 12;
-  Stretch(FRxText, alClient);
+
+  TextTools := TPanel.Create(TextPanel);
+  TextTools.Parent := TextPanel;
+  TextTools.Height := 34;
+  StackBelow(TextTools);
+  TextTools.Align := alTop;
+  TextTools.BevelOuter := bvNone;
+
+  FRxShowDoubt := TCheckBox.Create(TextTools);
+  FRxShowDoubt.Parent := TextTools;
+  FRxShowDoubt.SetBounds(6, 7, 240, 22);
+  FRxShowDoubt.Caption := '確からしさを濃淡で示す';
+  FRxShowDoubt.Checked := True;
+  FRxShowDoubt.OnChange := @RxDisplayChanged;
+
+  AddLabel(TextTools, '濃淡', 254, 9);
+  FRxDoubtStrength := TTrackBar.Create(TextTools);
+  FRxDoubtStrength.Parent := TextTools;
+  FRxDoubtStrength.SetBounds(288, 2, 120, 30);
+  FRxDoubtStrength.Min := 0;
+  FRxDoubtStrength.Max := 100;
+  FRxDoubtStrength.Position := 100;
+  FRxDoubtStrength.ShowSelRange := False;
+  FRxDoubtStrength.OnChange := @RxDisplayChanged;
+
+  AddLabel(TextTools, '文字の大きさ', 424, 9);
+  FRxFontSize := AddSpin(TextTools, 512, 5, 9, 32, 14, @RxDisplayChanged);
+  FRxCopy := AddButton(TextTools, 'コピー', 604, 2, 90, @RxCopyClick);
+
+  FRxTranscript := TTranscriptView.Create(TextPanel);
+  FRxTranscript.Parent := TextPanel;
+  FRxTranscript.Font.Size := 14;
+  Stretch(FRxTranscript, alClient);
 end;
 
 function TMainForm.BuildSettingsTab: TTabSheet;
@@ -767,6 +809,12 @@ begin
       Lines.Add('PortAudio: 利用不可（送信の再生とマイク受信は使えません）');
       Lines.Add(PortAudioLoadError);
     end;
+    if (FDiagnostics <> nil) and (FDiagnostics.Count > 0) then
+    begin
+      Lines.Add('');
+      Lines.Add('診断情報（技術的な原文）');
+      Lines.AddStrings(FDiagnostics);
+    end;
     FSetInfo.Lines.Assign(Lines);
   finally
     Lines.Free;
@@ -795,7 +843,11 @@ begin
       FEngineError := E.Message;
       FDecoder := nil;
       if Silent then
-        SetStatus('エンジン: 未読み込み', '', E.Message)
+      begin
+        LogDiagnostic('エンジンの読み込み', E.Message);
+        SetStatus('エンジン: 未読み込み', '',
+          StringReplace(UserMessageFor(E.Message), LineEnding, ' ', [rfReplaceAll]));
+      end
       else
         ReportError('エンジンの読み込み', E);
       Result := False;
@@ -848,22 +900,23 @@ begin
   FRxBusy.Caption := '';
 
   if Thread.Error <> '' then
-    SetStatus('', '', 'デコード失敗: ' + Thread.Error)
+  begin
+    LogDiagnostic('デコード', Thread.Error);
+    SetStatus('', '', StringReplace(UserMessageFor(Thread.Error),
+      LineEnding, ' ', [rfReplaceAll]));
+  end
   else
   begin
     FLastSpectrogram := Thread.Spectrogram;
     FRxWaterfall.Invalidate;
     if FAppendMode then
-    begin
       { ライブ受信では、窓の重なりをたたみながら追記します。
-      Live reception appends, folding away the overlap between windows. }
-      FLiveTranscript := MergeOverlappingText(FLiveTranscript, Thread.Text);
-      FRxText.Text := FLiveTranscript;
-    end
+        Live reception appends, folding away the overlap between windows. }
+      FLiveChars := MergeOverlappingChars(FLiveChars, Thread.Chars)
     else
-      FRxText.Text := Thread.Text;
-    FRxText.SelStart := Length(FRxText.Text);
-    SetStatus('', '', Format('デコード完了: %d 文字', [Length(Thread.Text)]));
+      FLiveChars := Thread.Chars;
+    FRxTranscript.SetChars(FLiveChars);
+    SetStatus('', '', Format('デコード完了: %d 文字', [Length(Thread.Chars)]));
   end;
 
   FCompletedThread := Thread;
@@ -1020,7 +1073,11 @@ begin
       FTxCurrentChar.Caption := '-';
       FTxCurrentCode.Caption := '';
       if FPlayback.LastError <> '' then
-        SetStatus('', '', '送信エラー: ' + FPlayback.LastError)
+      begin
+        LogDiagnostic('再生', FPlayback.LastError);
+        SetStatus('', '', StringReplace(UserMessageFor(FPlayback.LastError),
+          LineEnding, ' ', [rfReplaceAll]));
+      end
       else
         SetStatus('', '', '送信完了');
     end;
@@ -1092,7 +1149,7 @@ begin
   end;
 
   RxStopClick(nil);
-  FLiveTranscript := '';
+  FLiveChars := nil;
   FAppendMode := False;
   StartDecode(PrepareForDecoder(Samples, SampleRate), SampleRate);
 end;
@@ -1137,8 +1194,22 @@ end;
 
 procedure TMainForm.RxClearClick(Sender: TObject);
 begin
-  FLiveTranscript := '';
-  FRxText.Clear;
+  FLiveChars := nil;
+  FRxTranscript.Clear;
+end;
+
+procedure TMainForm.RxCopyClick(Sender: TObject);
+begin
+  Clipboard.AsText := FRxTranscript.AsText;
+  SetStatus('', '', Format('受信テキスト %d 文字をコピーしました。',
+    [FRxTranscript.CharCount]));
+end;
+
+procedure TMainForm.RxDisplayChanged(Sender: TObject);
+begin
+  FRxTranscript.ShowDoubt := FRxShowDoubt.Checked;
+  FRxTranscript.DoubtStrength := FRxDoubtStrength.Position / 100;
+  FRxTranscript.Font.Size := FRxFontSize.Value;
 end;
 
 procedure TMainForm.UpdateLiveReceive;
@@ -1288,10 +1359,75 @@ begin
     FStatus.Panels[2].Text := Message_;
 end;
 
-procedure TMainForm.ReportError(const Context: string; E: Exception);
+{ 技術的な文言を、次の一手が分かる日本語に置き換えます（要件 FR-A.4）。
+
+  エンジン層の例外は開発者向けの英語で書かれています。それをそのまま出すと、
+  利用者は何をすればよいか分かりません。ここで対処のある言葉に翻訳し、原文は
+  診断画面にだけ残します。
+
+  Turns a technical message into one an operator can act on (FR-A.4). The
+  engine raises developer-facing English; shown as is, it tells the operator
+  nothing to do. The raw text is kept for the diagnostics panel instead. }
+function UserMessageFor(const Raw: string): string;
+
+  function Mentions(const Fragment: string): Boolean;
+  begin
+    Result := Pos(LowerCase(Fragment), LowerCase(Raw)) > 0;
+  end;
+
 begin
-  SetStatus('', '', Context + ': ' + E.Message);
-  MessageDlg(Context + 'に失敗しました', E.Message, mtError, [mbOK], 0);
+  if Mentions('PortAudio could not be loaded') or Mentions('Pa_Initialize') then
+    Result := '音声ライブラリ PortAudio を利用できません。' + LineEnding +
+      '同梱されていない場合は、設定タブでライブラリの場所を指定してください。' + LineEnding +
+      'WAV ファイルの読み書きは、この状態でも利用できます。'
+  else if Mentions('input stream') then
+    Result := 'マイク（ライン入力）を開けませんでした。' + LineEnding +
+      '別の入力装置を選ぶか、他のアプリが装置を使用していないか確認してください。'
+  else if Mentions('output stream') then
+    Result := '再生装置を開けませんでした。' + LineEnding +
+      '別の出力装置を選ぶか、他のアプリが装置を使用していないか確認してください。'
+  else if Mentions('Could not load the ONNX Runtime') then
+    Result := '推論ライブラリ ONNX Runtime を読み込めませんでした。' + LineEnding +
+      '設定タブでライブラリの場所を指定してください。' + LineEnding +
+      '送信音の生成と WAV への保存は、この状態でも利用できます。'
+  else if Mentions('Model file not found') then
+    Result := 'モデルファイル model.onnx が見つかりません。' + LineEnding +
+      '設定タブで場所を指定してください。'
+  else if Mentions('Metadata file not found') then
+    Result := '設定ファイル model.onnx.json が見つかりません。' + LineEnding +
+      '設定タブで場所を指定してください。'
+  else if Mentions('Metadata expects') or Mentions('the metadata declares') or
+          Mentions('the metadata names') or Mentions('num_classes') then
+    Result := 'モデルと設定ファイルの組み合わせが正しくありません。' + LineEnding +
+      '同じ配布物に入っている model.onnx と model.onnx.json を指定してください。'
+  else if Mentions('RIFF') or Mentions('WAV') or Mentions('PCM') then
+    Result := 'この音声ファイルを読み取れませんでした。' + LineEnding +
+      'PCM 形式のモノラルまたはステレオの WAV ファイルをお使いください。'
+  else if Mentions('must last between') then
+    Result := '音声が短すぎます。もう少し長い録音でお試しください。'
+  else
+    Result := '問題が起きたため、処理を中止しました。' + LineEnding +
+      '詳しい内容は設定タブの診断情報に記録しています。';
+end;
+
+procedure TMainForm.LogDiagnostic(const Context, Raw: string);
+begin
+  if FDiagnostics = nil then
+    Exit;
+  FDiagnostics.Add(Format('%s  %s: %s',
+    [FormatDateTime('hh:nn:ss', Now), Context, Raw]));
+  while FDiagnostics.Count > 50 do
+    FDiagnostics.Delete(0);
+end;
+
+procedure TMainForm.ReportError(const Context: string; E: Exception);
+var
+  Friendly: string;
+begin
+  Friendly := UserMessageFor(E.Message);
+  LogDiagnostic(Context, E.Message);
+  SetStatus('', '', Context + ': ' + StringReplace(Friendly, LineEnding, ' ', [rfReplaceAll]));
+  MessageDlg(Context + 'できませんでした', Friendly, mtError, [mbOK], 0);
 end;
 
 end.
