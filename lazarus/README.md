@@ -13,6 +13,8 @@ lazarus/
          cw_loopback     - key six messages, decode them back, report the score
          cw_stream       - feed a WAV in chunks, watch confirmed text grow
          cw_tune         - measure the tuning path: pitch, translation, bandwidth
+         cw_devices      - list input devices and check the PortAudio ABI
+    tools/  make_bundle.sh - assemble a distribution that needs no installs
 ```
 
 ## What it does
@@ -71,6 +73,7 @@ lazbuild cli/decode_morse.lpi
 lazbuild cli/cw_loopback.lpi
 lazbuild cli/cw_stream.lpi
 lazbuild cli/cw_tune.lpi
+lazbuild cli/cw_devices.lpi
 lazbuild app/waterfall_probe.lpi
 ```
 
@@ -128,6 +131,34 @@ xvfb-run -a ./app/waterfall_probe /tmp
 It creates the control for real, feeds it two signals, applies clicks, wheel
 events and key presses, and writes the painted result out as PNG files.
 
+Check the sound card, and the PortAudio structure layout that reading it
+depends on:
+
+```bash
+./cli/cw_devices --abi --listen 2
+```
+
+The PortAudio structures are read as the C layout they are, and the padding
+differs between platforms; `--abi` compares every field offset against the
+rule a C compiler follows, which is the first thing to run after porting to a
+new platform. `--listen` records briefly and reports the level that arrived,
+which is how the silence threshold gets chosen from measurement.
+
+## Making a distribution
+
+```bash
+DEEPCW_ONNXRUNTIME=/path/to/libonnxruntime.so \
+DEEPCW_PORTAUDIO=/path/to/libportaudio.so.2 \
+tools/make_bundle.sh
+```
+
+This stages the executables, the model, both shared libraries and the licence
+files into `dist/deepcw-station-<platform>-<arch>/`. Everything is loaded from
+beside the executable first, so the result runs on a machine with neither
+library installed. Read `dist-notes/THIRD-PARTY-NOTICES.md` before publishing
+one: the MIT-style licences require their texts to travel with the files, and
+the script does not fetch them for you.
+
 ## The units
 
 | Unit | Responsibility |
@@ -141,7 +172,7 @@ events and key presses, and writes the painted result out as PNG files.
 | `DeepCW.Decoder` | spectrogram to text, greedy CTC, window stitching |
 | `DeepCW.Morse` | the code table, PARIS and Farnsworth timing, tone synthesis |
 | `DeepCW.Stream` | splits a live stream into confirmed and provisional text |
-| `DeepCW.Audio` | PortAudio capture and playback, loaded at run time |
+| `DeepCW.Audio` | PortAudio capture and playback, device enumeration, loaded at run time |
 
 Only `DeepCW.Audio` and the GUI depend on PortAudio, and only `DeepCW.Onnx`
 depends on the runtime, so the DSP and Morse units can be reused on their own.

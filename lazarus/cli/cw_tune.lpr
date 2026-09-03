@@ -414,6 +414,33 @@ begin
   WriteLn(Format('  周波数変換の費用: %.1f 秒ぶんで %d ms',
     [STREAM_MAX_SECONDS, MilliSecondsBetween(Now, Started)]));
 
+  { 無音を先に流し込んでも文字が湧かないこと。信号が来ていないのに文字が出ると、
+    受信できているのかどうかが分からなくなります（要件 FR-A.3）。
+    Silence fed in first must not produce characters; text appearing with no
+    signal leaves the operator unable to tell whether anything is being copied
+    (requirement FR-A.3). }
+  Reference := NormalizeText(MESSAGES[0]);
+  SetLength(Audio, Round(12 * Rate));
+  for I := 0 to High(Audio) do
+    Audio[I] := 0;
+  Untuned := RunOnce(0);
+  WriteLn(Format('  12 秒の無音から出た文字: %d 個  %s',
+    [Length(Untuned), BoolToStr(Untuned = '', '（湧かない）', '（湧いた）')]));
+
+  { 無音のあとに符号が続く場合、無音で捨てた分だけ時刻がずれていないこと。
+    After silence the code must still decode, with its timing unshifted by
+    what the squelch dropped. }
+  Audio := Synthesise(Reference, Rate, SOURCE_TONE_HZ, Noise, 5000);
+  SetLength(Chunk, Round(8 * Rate) + Length(Audio));
+  for I := 0 to High(Chunk) do
+    Chunk[I] := 0;
+  for I := 0 to High(Audio) do
+    Chunk[Round(8 * Rate) + I] := Audio[I];
+  Audio := Chunk;
+  Tuned := RunOnce(SOURCE_TONE_HZ);
+  WriteLn(Format('  8 秒の無音のあとの符号: %-42s %s',
+    [Tuned, BoolToStr(Tuned = Reference, '一致', '不一致')]));
+
   for I := 0 to High(MESSAGES) do
   begin
     Reference := NormalizeText(MESSAGES[I]);

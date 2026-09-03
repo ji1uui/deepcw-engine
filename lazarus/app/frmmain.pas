@@ -100,6 +100,11 @@ type
     FCapture: TAudioCapture;
     FPlayback: TAudioPlayback;
     FCaptureRate: Integer;
+    { 選べる入力装置。番号は抜き差しで変わるため、覚えておくのは名前です
+      （要件 FR-A.5）。
+      The input devices on offer. Indices shift as hardware is plugged and
+      unplugged, so what is remembered is the name (requirement FR-A.5). }
+    FDevices: TAudioDevices;
 
     { 送信の状態 / transmit state }
     FTxPlaying: Boolean;
@@ -150,6 +155,9 @@ type
     FRxFontSize: TSpinEdit;
     FRxCopy: TButton;
     FRxLevel: TProgressBar;
+    FRxSignal: TLabel;
+    FRxDevice: TComboBox;
+    FRxDeviceRefresh: TButton;
     FRxWaterfall: TWaterfallView;
     FRxTuneInfo: TLabel;
     FRxTuneClear: TButton;
@@ -201,6 +209,10 @@ type
     procedure RxStopClick(Sender: TObject);
     procedure RxClearClick(Sender: TObject);
     procedure RxCopyClick(Sender: TObject);
+    procedure RxDeviceRefreshClick(Sender: TObject);
+    procedure RefreshDeviceList(const Preferred: string);
+    function SelectedDeviceIndex: Integer;
+    function SelectedDeviceName: string;
     procedure RxDisplayChanged(Sender: TObject);
     procedure RxConfirmSpeedChanged(Sender: TObject);
     procedure ApplyStreamSettings;
@@ -309,6 +321,10 @@ begin
   { 読み込んだ表示設定を実際に反映します。設定は代入だけでは効きません。
     Apply the loaded display settings; assigning the controls is not enough. }
   RxDisplayChanged(nil);
+  { 設定に装置名が無かった場合でも一覧は用意します。
+    The list is built even when the settings held no device name. }
+  if FRxDevice.Items.Count = 0 then
+    RefreshDeviceList('');
   { 同調の表示も同じで、読み込んだ値を画面へ映さないと、実際の状態と食い違い
     ます。
     The same holds for the tuning display: without this the panel would
@@ -373,7 +389,11 @@ begin
   BuildTransmitTab;
   BuildReceiveTab;
   BuildSettingsTab;
-  FPages.PageIndex := 0;
+  { 起動直後の画面は受信です。ここから受信開始まで操作 1 回で届きます
+    （要件 FR-A.2）。
+    The window opens on the receive tab, one action away from starting
+    reception (requirement FR-A.2). }
+  FPages.PageIndex := 1;
   FPages.OnChange := @PagesChanged;
 
   FPollTimer := TTimer.Create(Self);
@@ -584,20 +604,26 @@ begin
 
   LiveBox := TGroupBox.Create(Sheet);
   LiveBox.Parent := Sheet;
-  LiveBox.Height := 88;
+  LiveBox.Height := 120;
   LiveBox.Caption := 'マイク / ライン入力から受信';
   Stretch(LiveBox, alTop);
 
   LevelPanel := TPanel.Create(LiveBox);
   LevelPanel.Parent := LiveBox;
   LevelPanel.Align := alRight;
-  LevelPanel.Width := 150;
+  LevelPanel.Width := 190;
   LevelPanel.BevelOuter := bvNone;
   AddLabel(LevelPanel, '入力レベル', 6, 4);
   FRxLevel := TProgressBar.Create(LevelPanel);
   FRxLevel.Parent := LevelPanel;
-  FRxLevel.SetBounds(6, 24, 138, 20);
+  FRxLevel.SetBounds(6, 24, 178, 20);
   FRxLevel.Max := 100;
+  { 音が届いているかどうかを文字でも出します。レベルの棒だけでは、静かな信号と
+    まったく鳴っていない状態を見分けられません（要件 FR-A.3）。
+
+    Whether audio is arriving is stated in words as well. A bar alone does not
+    separate a quiet signal from nothing at all (requirement FR-A.3). }
+  FRxSignal := AddLabel(LevelPanel, '', 6, 48);
 
   LiveControls := TPanel.Create(LiveBox);
   LiveControls.Parent := LiveBox;
@@ -607,6 +633,15 @@ begin
   FRxStart := AddButton(LiveControls, '受信開始', 8, 22, 110, @RxStartClick);
   FRxStop := AddButton(LiveControls, '受信停止', 126, 22, 110, @RxStopClick);
   FRxClear := AddButton(LiveControls, '表示をクリア', 244, 22, 130, @RxClearClick);
+
+  AddLabel(LiveControls, '入力装置', 8, 56);
+  FRxDevice := TComboBox.Create(LiveControls);
+  FRxDevice.Parent := LiveControls;
+  FRxDevice.SetBounds(78, 52, 380, 28);
+  FRxDevice.Style := csDropDownList;
+  FRxDevice.OnChange := @RxConfirmSpeedChanged;
+  FRxDeviceRefresh := AddButton(LiveControls, '再検出', 466, 52, 80,
+    @RxDeviceRefreshClick);
 
   AddLabel(LiveControls, '文字が決まるまで', 390, 4);
   FRxConfirmSpeed := TComboBox.Create(LiveControls);
@@ -847,6 +882,12 @@ begin
       The last tuning is remembered: with the same station the pitch is
       usually the same, and there is no reason to make it be chosen again. }
     FRxWaterfall.TuneHz := Ini.ReadInteger('receive', 'tune_hz', 0);
+    { 装置は名前で覚えています。前回と同じ装置が繋がっていればそれを選び、
+      無ければ黙って既定へ戻します（要件 FR-A.5）。
+      The device is remembered by name: the same one is selected if it is still
+      connected, and otherwise it quietly falls back to the default
+      (requirement FR-A.5). }
+    RefreshDeviceList(Ini.ReadString('audio', 'input_device', ''));
   finally
     Ini.Free;
   end;
@@ -889,6 +930,7 @@ begin
       Ini.WriteInteger('receive', 'font_size', FRxFontSize.Value);
       Ini.WriteInteger('receive', 'tune_hz', Round(FRxWaterfall.TuneHz));
       Ini.WriteInteger('receive', 'bandwidth', FSetBandwidth.ItemIndex);
+      Ini.WriteString('audio', 'input_device', SelectedDeviceName);
     finally
       Ini.Free;
     end;
@@ -925,7 +967,7 @@ end;
 procedure TMainForm.RefreshInfo;
 var
   Lines: TStringList;
-  I: Integer;
+  I, Device: Integer;
   Alphabet: string;
 begin
   Lines := TStringList.Create;
@@ -964,6 +1006,16 @@ begin
       Lines.Add('PortAudio: 利用不可（送信の再生とマイク受信は使えません）');
       Lines.Add(PortAudioLoadError);
     end;
+    Lines.Add('');
+    if Length(FDevices) = 0 then
+      Lines.Add('入力装置: 見つかりません')
+    else
+      for Device := 0 to High(FDevices) do
+        Lines.Add(Format('入力装置 %d: %s [%s] %d ch / %.0f Hz%s',
+          [FDevices[Device].Index, FDevices[Device].Name, FDevices[Device].HostApi,
+           FDevices[Device].MaxInputChannels, FDevices[Device].DefaultSampleRate,
+           BoolToStr(FDevices[Device].IsDefault, '  ← 既定', '')]));
+
     Lines.Add('');
     Lines.Add('設定ファイル: ' + ConfigFileName);
     if (FDiagnostics <> nil) and (FDiagnostics.Count > 0) then
@@ -1383,7 +1435,7 @@ begin
       The ring was recreated, so the read position goes back to its start. }
     FRingPosition := 0;
 
-    FCapture := TAudioCapture.Create(FRing, FCaptureRate);
+    FCapture := TAudioCapture.Create(FRing, FCaptureRate, SelectedDeviceIndex);
     FCapture.Start;
     { 録音の細かさが変わればウォーターフォールの目盛りも変わります。溜まって
       いた絵は意味を失うので消します。
@@ -1408,6 +1460,7 @@ begin
   FCapture.Stop;
   FreeAndNil(FCapture);
   FRxLevel.Position := 0;
+  FRxSignal.Caption := '';
   { 残った暫定部分を確定させてから止めます（要件 FR-B.2）。
     Commit whatever is still provisional before stopping. }
   if (FStream <> nil) and not DecoderBusy then
@@ -1533,6 +1586,88 @@ begin
     SetStatus('', '', '同調を解除しました。受信機の音程のまま読みます。');
 end;
 
+{ 入力装置の一覧を作り直します。Preferred と同じ名前の装置があればそれを、
+  無ければ既定を選びます。番号ではなく名前で覚えるのは、装置を抜き差しすると
+  番号がずれるためです（要件 FR-A.3、FR-A.5）。
+
+  Rebuilds the list of input devices, selecting the one named Preferred if it
+  is still there and the default otherwise. Names rather than indices are
+  remembered because indices shift as hardware comes and goes
+  (requirements FR-A.3, FR-A.5). }
+procedure TMainForm.RefreshDeviceList(const Preferred: string);
+var
+  I, Choice: Integer;
+  Caption_: string;
+begin
+  { 設定で指定された場所があればそれを使わせます。既定の探索で別のものを
+    掴んでしまうと、一覧と実際に開く装置が食い違います。
+
+    Let any path from the settings win, or the default search could pick a
+    different library and the list would not match what actually opens. }
+  LoadPortAudio(FSetPortAudio.Text);
+  FDevices := InputDevices;
+  FRxDevice.Items.BeginUpdate;
+  try
+    FRxDevice.Items.Clear;
+    { 先頭は常に「おまかせ」です。何も選ばずに受信を始められることが立ち上がりの
+      体験の要なので、既定を選ぶという選択肢を消してはいけません（要件 FR-A.2）。
+
+      The first entry is always "let the system choose". Being able to start
+      without picking anything is the point of the opening experience, so the
+      option of the default must never disappear (requirement FR-A.2). }
+    FRxDevice.Items.Add('既定の装置（おまかせ）');
+    Choice := 0;
+    for I := 0 to High(FDevices) do
+    begin
+      Caption_ := FDevices[I].Name;
+      if FDevices[I].HostApi <> '' then
+        Caption_ := Caption_ + '  [' + FDevices[I].HostApi + ']';
+      if FDevices[I].IsDefault then
+        Caption_ := Caption_ + '  ← 既定';
+      FRxDevice.Items.Add(Caption_);
+      if (Preferred <> '') and (FDevices[I].Name = Preferred) then
+        Choice := I + 1;
+    end;
+  finally
+    FRxDevice.Items.EndUpdate;
+  end;
+  FRxDevice.ItemIndex := Choice;
+  FRxDevice.Enabled := Length(FDevices) > 0;
+  if Length(FDevices) = 0 then
+    FRxDevice.Items[0] := '既定の装置（一覧を取得できません）';
+end;
+
+function TMainForm.SelectedDeviceIndex: Integer;
+begin
+  if (FRxDevice = nil) or (FRxDevice.ItemIndex <= 0) then
+    Exit(AUDIO_DEFAULT_DEVICE);
+  if FRxDevice.ItemIndex - 1 > High(FDevices) then
+    Exit(AUDIO_DEFAULT_DEVICE);
+  Result := FDevices[FRxDevice.ItemIndex - 1].Index;
+end;
+
+function TMainForm.SelectedDeviceName: string;
+begin
+  Result := '';
+  if (FRxDevice = nil) or (FRxDevice.ItemIndex <= 0) then
+    Exit;
+  if FRxDevice.ItemIndex - 1 > High(FDevices) then
+    Exit;
+  Result := FDevices[FRxDevice.ItemIndex - 1].Name;
+end;
+
+procedure TMainForm.RxDeviceRefreshClick(Sender: TObject);
+var
+  Wanted: string;
+begin
+  Wanted := SelectedDeviceName;
+  RefreshDeviceList(Wanted);
+  if Length(FDevices) = 0 then
+    SetStatus('', '', '録音に使える装置が見つかりませんでした。接続と OS 側の設定を確認してください。')
+  else
+    SetStatus('', '', Format('入力装置を %d 台見つけました。', [Length(FDevices)]));
+end;
+
 procedure TMainForm.RxConfirmSpeedChanged(Sender: TObject);
 begin
   ApplyStreamSettings;
@@ -1566,6 +1701,7 @@ procedure TMainForm.UpdateLiveReceive;
 var
   Fresh: TSingleArray;
   Failure: string;
+  Peak: Single;
 begin
   if (FCapture = nil) or (FStream = nil) then
     Exit;
@@ -1589,7 +1725,23 @@ begin
     Exit;
   end;
 
-  FRxLevel.Position := Round(100 * FRing.PeakLevel(FCaptureRate, 0.2));
+  Peak := FRing.PeakLevel(FCaptureRate, 0.2);
+  FRxLevel.Position := ClampInt(Round(100 * Peak), 0, 100);
+  { 無音かどうかをはっきり言います。受信できていないとき、それが装置の問題なのか
+    信号が無いだけなのかを、利用者が切り分けられるようにするためです
+    （要件 FR-A.3）。
+
+    Say plainly whether it is silent, so that when nothing is being copied the
+    operator can tell a device problem from simply having no signal
+    (requirement FR-A.3). }
+  { しきい値は復号側のスケルチと同じものを使います。二つ持つと、画面が
+    「無音です」と言いながら文字が出る、あるいはその逆が起きます。
+    The threshold is the decoder's own squelch. Two of them would let the
+    display say "silent" while characters appear, or the other way round. }
+  if Peak >= STREAM_SQUELCH_LEVEL then
+    FRxSignal.Caption := '音が届いています'
+  else
+    FRxSignal.Caption := '無音です';
 
   { 録音された分をそのまま流し込みます。窓を切り出すのではなく、確定点から
     先を溜め続けるのが流し込み受信です（要件 FR-B.2）。

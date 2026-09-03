@@ -55,6 +55,23 @@ const
     word gap is 105 ms, so this never swallows a real character. }
   STREAM_LEAD_GUARD_SECONDS = 0.08;
 
+  { これを下回る振幅しか無い区間は、解析にかけません。
+
+    無音に近い入力でもモデルは何かしらの文字を出します（実測では ',' が続けて
+    出ました）。信号が来ていないときに文字が湧くと、受信できているのかどうかが
+    利用者に分からなくなります。約 -46 dBFS で、静かなライン入力の暗騒音よりは
+    上、耳に聞こえる信号よりは下に取っています。画面の「無音です」の表示も同じ
+    値を使います（要件 FR-A.3）。
+
+    A stretch quieter than this is not analysed at all.
+
+    The model emits something even for near-silence; in measurement it produced
+    a run of commas. Characters appearing when no signal is present leaves the
+    operator unable to tell whether anything is being copied. About -46 dBFS,
+    above the noise of a quiet line input and below anything audible. The
+    "silent" display on screen uses the same value (requirement FR-A.3). }
+  STREAM_SQUELCH_LEVEL = 0.005;
+
 type
   TStreamingDecoder = class
   private
@@ -87,6 +104,7 @@ type
     FDroppedSamples: Int64;
     FTailGuard: Double;
     FMinConfirmed: Double;
+    FSquelch: Double;
     procedure SetTuneHz(Value: Double);
     procedure SetBandwidth(Value: TTunerBandwidth);
     function SourceRate: Integer;
@@ -101,6 +119,10 @@ type
     function DropLeadArtifacts(const Chars: TDecodedChars): TDecodedChars;
     procedure SetProvisional(const Chars: TDecodedChars);
     procedure DropLeading(Samples: Integer);
+    { 解析にかけるだけの音量があるか。無ければ、溜めた分を捨てて時刻を進めます。
+      Whether there is enough level to analyse; if not, the buffer is dropped
+      and the time base advanced past it. }
+    function SquelchClosed(const Audio: TSingleArray; Rate: Integer): Boolean;
     function FindSplit(const Chars: TDecodedChars; AnalysisSeconds: Double;
       Forced: Boolean; out SplitSeconds: Double): Integer;
   public
@@ -156,6 +178,10 @@ type
       Bandwidth applied while tuned; automatic by default. }
     property Bandwidth: TTunerBandwidth read FBandwidth write SetBandwidth;
 
+    { これを下回る振幅の区間は解析しません。0 にすると常に解析します。
+      Stretches quieter than this are not analysed; 0 analyses everything. }
+    property SquelchLevel: Double read FSquelch write FSquelch;
+
     { 末尾を確定させずに残す時間。長いほど確定は遅れますが確かになります。
       Seconds left uncommitted at the tail; longer is slower but safer. }
     property TailGuardSeconds: Double read FTailGuard write FTailGuard;
@@ -179,6 +205,7 @@ begin
   FBandwidth := tbAuto;
   FTailGuard := STREAM_TAIL_GUARD_SECONDS;
   FMinConfirmed := STREAM_MIN_CONFIRMED_SECONDS;
+  FSquelch := STREAM_SQUELCH_LEVEL;
   FSourceRate := ADecoder.Metadata.SampleRate;
   InitCriticalSection(FLock);
 end;
@@ -332,6 +359,45 @@ begin
   end;
 end;
 
+{ 末尾のガードぶんだけ残して捨てます。全部捨てると、無音の直後に始まった符号の
+  頭が切れてしまいます。
+
+  All but the tail guard is dropped; dropping everything would clip the start
+  of code that begins right after the silence. }
+function TStreamingDecoder.SquelchClosed(const Audio: TSingleArray;
+  Rate: Integer): Boolean;
+var
+  I, Keep, Drop: Integer;
+  Peak: Double;
+begin
+  Result := False;
+  if FSquelch <= 0 then
+    Exit;
+  Peak := 0;
+  for I := 0 to High(Audio) do
+    Peak := Max(Peak, Abs(Audio[I]));
+  if Peak >= FSquelch then
+    Exit;
+
+  Result := True;
+  Keep := Round(FTailGuard * Rate);
+  Drop := Length(Audio) - Keep;
+  if Drop <= 0 then
+    Exit;
+  EnterCriticalSection(FLock);
+  try
+    FProvisional := nil;
+    { 捨てた分だけ時刻を進めます。進めないと、以後の文字の時刻が無音の長さ
+      だけ手前にずれます。
+      Advance the time base by what was dropped; without this every later
+      character would be timed early by the length of the silence. }
+    FConfirmedSeconds := FConfirmedSeconds + Drop / Rate;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  DropLeading(Drop);
+end;
+
 function TStreamingDecoder.Ready: Boolean;
 begin
   Result := PendingSeconds >= STREAM_MIN_PENDING_SECONDS;
@@ -469,6 +535,12 @@ begin
   if AnalysisSeconds < STREAM_MIN_PENDING_SECONDS then
     Exit;
 
+  { 信号が来ていない間は解析しません。文字が湧かず、CPU も使いません。
+    Nothing is analysed while no signal is present: no characters appear out
+    of nowhere, and no processor time is spent. }
+  if SquelchClosed(Audio, Rate) then
+    Exit;
+
   Prepared := PrepareForModel(Audio);
   if Length(Prepared) = 0 then
     Exit;
@@ -549,6 +621,8 @@ begin
   Rate := SourceRate;
   Audio := TakeSnapshot;
   if Length(Audio) = 0 then
+    Exit;
+  if SquelchClosed(Audio, Rate) then
     Exit;
   Prepared := PrepareForModel(Audio);
   if Length(Prepared) = 0 then

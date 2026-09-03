@@ -48,7 +48,9 @@ lazarus/cli/decode_morse
 lazarus/cli/cw_loopback
 lazarus/cli/cw_stream
 lazarus/cli/cw_tune
+lazarus/cli/cw_devices
 lazarus/app/waterfall_probe
+lazarus/dist/
 
 # Build and runtime output
 build/
