@@ -129,9 +129,12 @@ Article 19 and so cannot be verified by the decode tests:
 ./cli/cw_tune --tests shape
 ```
 
-Twenty-six examples, real prefixes of every permitted form on one side and
+Thirty-two examples, real prefixes of every permitted form on one side and
 malformed ones on the other. A mistranscription here either drops real
-stations from the band map or lets false ones onto it, both silently.
+stations from the band map or lets false ones onto it, both silently. The
+provisions transcribed are 19.50, 19.68, 19.68.1 and 19.69 — the last of which
+exempts amateur stations from the ban on the digits 0 and 1, and without it
+JA1ABC, K1ABC and G0ABC would all be rejected.
 
 Check the waterfall control itself, including on a machine with no display:
 

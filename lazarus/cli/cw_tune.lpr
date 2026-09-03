@@ -769,7 +769,7 @@ type
     Why: string;
   end;
 const
-  CASES: array[0..25] of TCase = (
+  CASES: array[0..31] of TCase = (
     (Token: 'JA1ABC'; Expect: True;  Why: '日本の標準形'),
     (Token: 'JH2XYZ'; Expect: True;  Why: '日本の標準形'),
     (Token: '7K1TUV'; Expect: True;  Why: '数字＋英字の前置符字'),
@@ -786,7 +786,13 @@ const
     (Token: '2E0ABC'; Expect: True;  Why: '数字＋英字の前置符字'),
     (Token: 'A51ABC'; Expect: True;  Why: '英字＋数字の前置符字'),
     (Token: 'KH6ABC'; Expect: True;  Why: '英字 2 字の前置符字'),
-    (Token: 'EA5X1A'; Expect: True;  Why: '後置符字に数字（ITU は許す。末尾が英字）'),
+    (Token: 'EA5X1A'; Expect: True;  Why: '後置符字に数字（19.68 は許す。末尾が英字）'),
+    (Token: '3DA0AB'; Expect: True;  Why: '半系列の 3 字前置符字（19.68.1）'),
+    (Token: 'JA0ABC'; Expect: True;  Why: '地域番号 0（19.69 でアマチュアは除外）'),
+    (Token: 'G0ABC';  Expect: True;  Why: '地域番号 0'),
+    (Token: 'M0ABC';  Expect: True;  Why: '地域番号 0'),
+    (Token: '3DA0ABCD'; Expect: False; Why: '3 字前置符字の後置符字は 3 字まで'),
+    (Token: 'GB100RSGB'; Expect: False; Why: '19.68A の特別な呼出符号は受け付けない'),
     (Token: 'J1ADC';  Expect: False; Why: 'J は 1 字では割り当てが無い'),
     (Token: '12ABC';  Expect: False; Why: '数字 2 つの前置符字は無い'),
     (Token: 'JAABC';  Expect: False; Why: '地域番号が無い'),
