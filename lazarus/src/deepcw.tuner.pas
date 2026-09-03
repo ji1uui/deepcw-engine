@@ -72,6 +72,34 @@ const
     Band-pass length, applied at the model's sample rate. }
   TUNER_BANDPASS_TAPS = 127;
 
+  { ── 信号追跡（要件 FR-D.7）── }
+
+  { 同調点の周りでこの範囲だけを探します。狭く取るのは、隣の局へ乗り移らない
+    ためです。実測では隣局を分離できるのが 100 Hz 間隔まで（付録 G.2）なので、
+    その半分より内側に留めます。
+
+    Only this far either side of the tuned pitch is searched. It is kept narrow
+    so that tracking cannot walk onto a neighbour; measurement separates
+    neighbours down to 100 Hz apart (appendix G.2), so the search stays well
+    inside half of that. }
+  TUNER_TRACK_WINDOW_HZ = 50.0;
+
+  { 1 回の追跡で動かす上限。1 秒に 1 回追跡するので、毎秒 12.5 Hz までです。
+    実際の受信機のドリフトはこれよりはるかに遅く、乗り移りは防げます。
+
+    The most one tracking step moves. Tracking runs once a second, so the pitch
+    can follow 12.5 Hz per second; real receiver drift is far slower than that,
+    and the limit is what stops it from walking to another station. }
+  TUNER_TRACK_STEP_HZ = TUNER_STEP_HZ;
+
+  { 探した範囲の中央値からこれだけ上に出ていなければ、信号が居ないと見ます。
+    符号の切れ目や語間で雑音を追いかけないためです。
+
+    Unless the peak stands this far above the median of the searched range, no
+    signal is considered present. This is what keeps gaps between characters
+    and between words from dragging the tuning into the noise. }
+  TUNER_TRACK_MIN_DB = 8.0;
+
 type
   { 帯域幅の選択。既定は自動で、運用者は何も選ばずに使えます（要件 FR-D.3）。
     Bandwidth choice; the default is automatic so nothing need be chosen
@@ -109,6 +137,30 @@ function BandwidthHalfWidth(Bandwidth: TTunerBandwidth): Double;
 
 { 設定画面に出す表示名です。/ Display name for the settings panel. }
 function BandwidthCaption(Bandwidth: TTunerBandwidth): string;
+
+{ 同調している音程を、いま実際に信号が居る位置へ寄せます。
+
+  受信機のドリフトや相手局の移動で音程は動きます。同調したまま読めなくなるのは、
+  最初から読めないより悪い体験です。利用者は「合わせたはずなのに」と考え、
+  原因が分かりません（要件 FR-D.7）。
+
+  Magnitudes は同調点の周りを含むスペクトル、BinHz はその 1 ビンの幅です。
+  動かしたときだけ True を返し、NewHz に新しい音程を入れます。信号が見つからない
+  ときは動かしません。GUI に依存しないので、画面なしで検証できます（NFR-7.1）。
+
+  Moves the tuned pitch towards where the signal actually is.
+
+  A receiver drifts and the other station moves, and losing a station that was
+  already tuned is a worse experience than never reading it: the operator
+  thinks they tuned it and has no way to see what went wrong
+  (requirement FR-D.7).
+
+  Magnitudes is a spectrum covering the neighbourhood of the tuned pitch and
+  BinHz is the width of one of its bins. True is returned only when the pitch
+  moved, with the new value in NewHz; when no signal is found nothing moves.
+  It has no GUI dependency, so it can be checked without a display (NFR-7.1). }
+function TrackTone(const Magnitudes: TDoubleArray; BinHz, CurrentHz: Double;
+  out NewHz: Double): Boolean;
 
 { 録音された音声を、モデルへ渡せる形に整えます。
 
@@ -298,6 +350,74 @@ begin
       (requirement FR-D.3, appendix E). }
     Result := 250;
   end;
+end;
+
+function TrackTone(const Magnitudes: TDoubleArray; BinHz, CurrentHz: Double;
+  out NewHz: Double): Boolean;
+var
+  Centre, Span, First, Last, I, PeakBin, Count: Integer;
+  Window: TDoubleArray;
+  Swap, Peak, Median, Wanted, Step: Double;
+begin
+  Result := False;
+  NewHz := CurrentHz;
+  if (CurrentHz <= 0) or (BinHz <= 0) or (Length(Magnitudes) = 0) then
+    Exit;
+
+  Centre := Round(CurrentHz / BinHz);
+  Span := Max(1, Round(TUNER_TRACK_WINDOW_HZ / BinHz));
+  First := Max(0, Centre - Span);
+  Last := Min(High(Magnitudes), Centre + Span);
+  if Last - First < 2 then
+    Exit;
+
+  PeakBin := First;
+  Peak := Magnitudes[First];
+  SetLength(Window, Last - First + 1);
+  Count := 0;
+  for I := First to Last do
+  begin
+    if Magnitudes[I] > Peak then
+    begin
+      Peak := Magnitudes[I];
+      PeakBin := I;
+    end;
+    Window[Count] := Magnitudes[I];
+    Inc(Count);
+  end;
+
+  { 中央値を雑音の高さとします。平均だと、探している信号自身が押し上げます。
+    The median stands for the noise level; a mean would be pushed up by the
+    very signal being looked for. }
+  for I := 0 to High(Window) - 1 do
+    for Count := 0 to High(Window) - 1 - I do
+      if Window[Count] > Window[Count + 1] then
+      begin
+        Swap := Window[Count];
+        Window[Count] := Window[Count + 1];
+        Window[Count + 1] := Swap;
+      end;
+  Median := Window[Length(Window) div 2];
+
+  if (Peak <= 0) or (Median <= 0) then
+    Exit;
+  if 20 * Log10(Peak / Median) < TUNER_TRACK_MIN_DB then
+    Exit;
+
+  Wanted := PeakBin * BinHz;
+  Step := Wanted - CurrentHz;
+  { ゆっくりしか動かしません。一足飛びに動けるなら、隣の局へ乗り移れてしまいます。
+    It only moves slowly; a pitch that can jump is a pitch that can land on the
+    next station. }
+  if Step > TUNER_TRACK_STEP_HZ then
+    Step := TUNER_TRACK_STEP_HZ
+  else if Step < -TUNER_TRACK_STEP_HZ then
+    Step := -TUNER_TRACK_STEP_HZ;
+
+  NewHz := QuantizeTone(CurrentHz + Step);
+  Result := Abs(NewHz - CurrentHz) >= TUNER_STEP_HZ / 2;
+  if not Result then
+    NewHz := CurrentHz;
 end;
 
 function PrepareForModel(const Samples: TSingleArray; SourceRate, ModelRate: Integer;

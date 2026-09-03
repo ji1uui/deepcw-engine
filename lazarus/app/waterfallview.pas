@@ -92,6 +92,21 @@ type
     FImageStale: Boolean;
 
     FTuneHz: Double;
+    { 直近の平均スペクトル。信号追跡はこれを見ます。表示のために毎行 FFT を
+      掛けているので、追跡のために新たに変換する必要はありません
+      （要件 FR-D.7）。
+
+      A smoothed recent spectrum, which is what signal tracking reads. An FFT
+      is already run for every row of the display, so tracking needs no
+      transform of its own (requirement FR-D.7). }
+    FAverage: TDoubleArray;
+    FRowsSinceTrack: Integer;
+    FTracking: Boolean;
+    { 直前の同調点の変化が、利用者の操作ではなく追跡によるものか。画面側が
+      案内文を出すかどうかを決めるのに使います。
+      Whether the last change of pitch came from tracking rather than from the
+      operator, which is how the form decides whether to say anything. }
+    FAutoTuned: Boolean;
     { 直前にクリックされた音程。丸めも範囲の制限も掛けていない値です。
       画面側が「その音程には合わせられない」と案内するために使います
       （要件 FR-D.4）。
@@ -109,6 +124,9 @@ type
     function FrequencyToX(Hz: Double): Integer;
     procedure RefreshImage;
     procedure NudgeTune(Steps: Integer);
+    { 1 秒に 1 度、信号のいる位置へ同調点を寄せます。
+      Once a second, eases the tuned pitch towards where the signal is. }
+    procedure FollowSignal;
     { Value を同調先とし、Requested には丸めや範囲の制限を掛ける前の値を残し
       ます。両者が離れているかどうかで、画面側は「寄せた」ことを案内できます。
 
@@ -150,6 +168,12 @@ type
     property SampleRate: Integer read FSampleRate;
     { 直前にクリックされた、丸める前の音程。/ The last click, unrounded. }
     property RequestedHz: Double read FRequestedHz;
+    { 動いていく信号を自動で追いかけるか。既定で有効です（要件 FR-D.7）。
+      Whether to follow a signal that moves; on by default (FR-D.7). }
+    property Tracking: Boolean read FTracking write FTracking;
+    { 直前の変化が追跡によるものか。/ Whether the last change came from
+      tracking rather than the operator. }
+    property AutoTuned: Boolean read FAutoTuned;
     { 同調できる音程の範囲。案内の文言に使います。
       The range of tunable pitches, for the guidance message. }
     function LowestHz: Double;
@@ -217,6 +241,8 @@ begin
   FTopHz := WATERFALL_TOP_HZ;
   FHalfWidthHz := 0;
   FTuneHz := 0;
+  FTracking := True;
+  FAutoTuned := False;
   FMessage := '受信を開始すると、ここに信号が流れます。読みたい信号をクリックしてください。';
   FBitmap := TBitmap.Create;
   Configure(8000);
@@ -253,6 +279,8 @@ begin
 
   SetLength(FCarry, FFFTSize * 2);
   FCarryCount := 0;
+  FAverage := nil;
+  FRowsSinceTrack := 0;
   FRow := 0;
   FFilled := 0;
   FHasScale := False;
@@ -281,6 +309,8 @@ begin
   FRow := 0;
   FFilled := 0;
   FCarryCount := 0;
+  FAverage := nil;
+  FRowsSinceTrack := 0;
   FHasScale := False;
   FImageStale := True;
   Invalidate;
@@ -328,10 +358,57 @@ begin
     FImage.Colors[I, FRow] := WaterfallColour(ClampInt(Round(255 * Value), 0, 255));
   end;
 
+  { 追跡のために、生の振幅を穏やかに平均します。1 行ごとの絵は符号の断続で
+    大きく揺れますが、平均すれば信号のいる位置は安定して見えます。
+
+    For tracking, the raw magnitudes are eased into an average. A single row
+    swings wildly as the code keys on and off, but the average shows where the
+    signal sits steadily. }
+  if Length(FAverage) <> FColumns then
+  begin
+    SetLength(FAverage, FColumns);
+    for I := 0 to FColumns - 1 do
+      if I <= High(Magnitudes) then
+        FAverage[I] := Magnitudes[I]
+      else
+        FAverage[I] := 0;
+  end
+  else
+    for I := 0 to FColumns - 1 do
+      if I <= High(Magnitudes) then
+        FAverage[I] := FAverage[I] + (Magnitudes[I] - FAverage[I]) * 0.08;
+
   FRow := (FRow + 1) mod WATERFALL_ROWS;
   if FFilled < WATERFALL_ROWS then
     Inc(FFilled);
   FImageStale := True;
+
+  Inc(FRowsSinceTrack);
+  if FRowsSinceTrack >= WATERFALL_ROWS_PER_SECOND then
+  begin
+    FRowsSinceTrack := 0;
+    FollowSignal;
+  end;
+end;
+
+procedure TWaterfallView.FollowSignal;
+var
+  Wanted: Double;
+begin
+  if (not FTracking) or (FTuneHz <= 0) or (FFFTSize <= 0) then
+    Exit;
+  if not TrackTone(FAverage, FSampleRate / FFFTSize, FTuneHz, Wanted) then
+    Exit;
+  { 追跡による変化であることを控えてから知らせます。画面側は、これを見て
+    案内文を出すかどうかを決めます。
+    Note that the change came from tracking before announcing it; the form
+    reads this to decide whether to say anything. }
+  FAutoTuned := True;
+  try
+    ApplyTune(Wanted, Wanted);
+  finally
+    FAutoTuned := False;
+  end;
 end;
 
 procedure TWaterfallView.PushSamples(const Samples: TSingleArray;

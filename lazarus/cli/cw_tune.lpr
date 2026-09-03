@@ -42,7 +42,7 @@ var
   ModelPath: string = '';
   MetadataPath: string = '';
   RuntimePath: string = '';
-  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,wide';
+  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,track,wide';
   { 合成に加える白色雑音の大きさ。差が出る水準を選びます。
     White noise level for the synthesis, picked so differences show. }
   Noise: Double = 0.30;
@@ -831,6 +831,219 @@ begin
   WriteLn(Format('  %d / %d', [Passed, Length(CASES)]));
 end;
 
+{ 音程が動いていく信号を、追いかけずに読んだ場合と追いかけて読んだ場合で比べます。
+
+  受信機のドリフトや相手局の移動を模した合成信号を、流し込み受信の経路へ通します。
+  追跡は 1 秒に 1 度、直近の音のスペクトルを見て同調点を寄せます。**実際の画面で
+  起きることと同じ手順**であり、画面なしで確かめられます（要件 FR-D.7、NFR-7.1）。
+
+  Compares reading a signal whose pitch moves, with and without following it.
+
+  A synthesised signal standing in for receiver drift is fed through the
+  streaming path, and tracking looks at the spectrum of the recent audio once a
+  second and eases the tuned pitch across. **This is the same sequence the real
+  window performs**, checked without a display (requirements FR-D.7,
+  NFR-7.1). }
+procedure RunTrack;
+const
+  CAPTURE_RATE = 8000;
+  START_HZ = 1400.0;
+  { 20 秒で 150 Hz。実際の受信機のドリフトよりずっと速く、追跡の上限
+    （毎秒 12.5 Hz）の内側に収まる速さです。
+    150 Hz over twenty seconds: far faster than a real receiver drifts, and
+    inside the 12.5 Hz per second the tracker can follow. }
+  DRIFT_HZ = 150.0;
+  CHUNK_SECONDS = 0.5;
+var
+  I, J, Position, Count, Rate: Integer;
+  Timing: TCWTiming;
+  Options: TCWToneOptions;
+  Segments: TCWSegments;
+  Audio, Chunk, Recent: TSingleArray;
+  Reference, Fixed, Tracked: string;
+  Phase, Hz, Seconds: Double;
+
+  { 音程が徐々に上がっていく符号を作ります。位相を積み上げるので、途中で
+    途切れることはありません。
+    Builds code whose pitch rises gradually; the phase is accumulated, so it
+    never breaks. }
+  function DriftingAudio(const Text: string): TSingleArray;
+  var
+    { J は外側にもありますが、入れ子の関数では繰り返しの変数に使えないため、
+      ここで宣言し直します。
+      J exists in the enclosing scope too, but a nested routine cannot use one
+      as a loop counter, so it is declared again here. }
+    J, K, N, Ramp, At: Integer;
+    Gain, Duration: Double;
+    Segment: TCWSegment;
+  begin
+    RandSeed := 4242;
+    Timing := DefaultTiming;
+    Timing.CharWpm := 22;
+    Timing.TextWpm := 22;
+    Segments := TextToSegments(Text, Timing);
+    Options := DefaultToneOptions;
+    Options.SampleRate := CAPTURE_RATE;
+    Duration := SegmentsDuration(Segments) + 1.0;
+    SetLength(Result, Round(Duration * CAPTURE_RATE));
+    for K := 0 to High(Result) do
+      Result[K] := Noise * 0.25 * (Random + Random - 1);
+
+    Phase := 0;
+    At := Round(0.5 * CAPTURE_RATE);
+    Ramp := Round(0.005 * CAPTURE_RATE);
+    for K := 0 to High(Segments) do
+    begin
+      Segment := Segments[K];
+      N := Round(Segment.Duration * CAPTURE_RATE);
+      for J := 0 to N - 1 do
+      begin
+        if At + J > High(Result) then
+          Break;
+        Hz := START_HZ + DRIFT_HZ * (At + J) / Length(Result);
+        Phase := Phase + 2 * Pi * Hz / CAPTURE_RATE;
+        if not Segment.Tone then
+          Continue;
+        Gain := 1;
+        if J < Ramp then
+          Gain := 0.5 - 0.5 * Cos(Pi * J / Ramp)
+        else if J > N - Ramp then
+          Gain := 0.5 - 0.5 * Cos(Pi * (N - J) / Ramp);
+        Result[At + J] := Result[At + J] + 0.5 * Gain * Sin(Phase);
+      end;
+      Inc(At, N);
+    end;
+  end;
+
+  { 経路を 1 回通します。Follow が真なら 1 秒ごとに同調点を寄せます。
+    Runs the path once; when Follow is set the pitch is eased across each
+    second. }
+  function RunOnce(Follow: Boolean; Width: TTunerBandwidth;
+    out FinalHz: Double): string;
+  var
+    Stream: TStreamingDecoder;
+    Wide: TSpectrogram;
+    Magnitudes: TDoubleArray;
+    Prepared: TSingleArray;
+    WideRate, Bin, Frame, Taken: Integer;
+    NextHz, Sum: Double;
+  begin
+    WideRate := Decoder.Metadata.SampleRate * 2;
+    Stream := TStreamingDecoder.Create(Decoder);
+    try
+      Stream.TuneHz := START_HZ;
+      Stream.Bandwidth := Width;
+      Position := 0;
+      while Position < Length(Audio) do
+      begin
+        Count := Min(Round(CHUNK_SECONDS * Rate), Length(Audio) - Position);
+        Chunk := Copy(Audio, Position, Count);
+        Stream.Append(Chunk, Rate);
+        Inc(Position, Count);
+
+        if Follow then
+        begin
+          { 直近 2 秒の平均スペクトルを見ます。画面のウォーターフォールが
+            持っている情報と同じものです。
+            The mean spectrum of the last two seconds, which is what the
+            waterfall on screen already holds. }
+          Taken := Min(Position, Round(2 * Rate));
+          Recent := Copy(Audio, Position - Taken, Taken);
+          if Length(Recent) > Decoder.Metadata.FFTLength * 2 then
+          begin
+            Prepared := ResampleLinear(Recent, Rate, WideRate);
+            Wide := ComputeWideSpectrogram(Prepared, WideRate, Decoder.Metadata);
+            SetLength(Magnitudes, Wide.Bins);
+            for Bin := 0 to Wide.Bins - 1 do
+            begin
+              Sum := 0;
+              for Frame := 0 to Wide.Frames - 1 do
+                Sum := Sum + Wide.Data[Frame * Wide.Bins + Bin];
+              Magnitudes[Bin] := Sum / Wide.Frames;
+            end;
+            if TrackTone(Magnitudes,
+                 WideRate / (Decoder.Metadata.FFTLength * 2),
+                 Stream.TuneHz, NextHz) then
+              Stream.TuneHz := NextHz;
+          end;
+        end;
+
+        if Stream.Ready then
+          Stream.Step;
+      end;
+      Stream.Finish;
+      FinalHz := Stream.TuneHz;
+      Result := Trim(DecodedText(Stream.ConfirmedChars));
+    finally
+      Stream.Free;
+    end;
+  end;
+
+const
+  OFFSETS: array[0..6] of Double = (0, 50, 100, 150, 200, 250, 300);
+var
+  FixedHz, TrackedHz, Total: Double;
+  Width: TTunerBandwidth;
+  Line: string;
+  K: Integer;
+begin
+  Rate := CAPTURE_RATE;
+  WriteLn;
+  WriteLn('track: 動いていく信号を追いかける / following a signal that moves');
+
+  { [1] ずれるとどこで壊れるか。追跡が何を守っているのかを先に測ります。
+    [1] Where mistuning breaks reading, which is what tracking protects. }
+  WriteLn;
+  WriteLn('  [1] 同調がずれたときの文字誤り率 / error rate against mistuning');
+  Write('  ずれ(Hz) ');
+  for K := 0 to High(OFFSETS) do
+    Write(Format('%7.0f', [OFFSETS[K]]));
+  WriteLn;
+  for Width := tbAuto to tbWide do
+  begin
+    Line := Format('  %-12s', [BandwidthCaption(Width)]);
+    for K := 0 to High(OFFSETS) do
+    begin
+      Total := 0;
+      for I := 0 to High(MESSAGES) do
+      begin
+        Reference := NormalizeText(MESSAGES[I]);
+        Audio := Synthesise(Reference, Rate, START_HZ, Noise, 9000 + I);
+        Chunk := ToModelRate(FrequencyShift(Audio, Rate,
+          (START_HZ + OFFSETS[K]) - TUNER_TARGET_TONE_HZ), Rate,
+          BandwidthHalfWidth(Width));
+        Total := Total + CharErrorRate(Reference,
+          Trim(Decoder.DecodeLongSamples(Chunk, Decoder.Metadata.SampleRate)));
+      end;
+      Line := Line + Format('%7.3f', [Total / Length(MESSAGES)]);
+    end;
+    WriteLn(Line);
+  end;
+
+  { [2] 追跡がずれをどこまで詰めるか。文字誤り率ではなく、残ったずれで見ます。
+    ずれが小さければ [1] の表がそのまま安全余裕になります。
+
+    [2] How far tracking closes the gap, measured as the remaining offset
+    rather than as an error rate; a small offset turns table [1] straight into
+    a margin of safety. }
+  WriteLn;
+  WriteLn(Format('  [2] %.0f Hz から %.0f Hz へ移動する信号を追いかける（毎秒 %.1f Hz 前後）',
+    [START_HZ, START_HZ + DRIFT_HZ, DRIFT_HZ / 20]));
+  WriteLn('     本文                          追跡なしのずれ  追跡ありのずれ');
+  for I := 0 to High(MESSAGES) do
+  begin
+    Reference := NormalizeText(MESSAGES[I]);
+    Audio := DriftingAudio(Reference);
+    Seconds := Length(Audio) / Rate;
+    Fixed := RunOnce(False, tbAuto, FixedHz);
+    Tracked := RunOnce(True, tbAuto, TrackedHz);
+    WriteLn(Format('     %-28s %10.0f Hz %13.0f Hz  %s',
+      [Copy(Reference, 1, 28), START_HZ + DRIFT_HZ - FixedHz,
+       START_HZ + DRIFT_HZ - TrackedHz,
+       BoolToStr(Tracked = Reference, '一致', '不一致')]));
+  end;
+end;
+
 var
   Index: Integer;
   Key, Value: string;
@@ -892,6 +1105,8 @@ begin
       RunShape;
     if Pos('callsign', Tests) > 0 then
       RunCallsign;
+    if Pos('track', Tests) > 0 then
+      RunTrack;
     if Pos('wide', Tests) > 0 then
     begin
       { 広く離れている場合と、コンテストのように詰まっている場合の両方を見ます。

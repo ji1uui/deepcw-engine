@@ -120,7 +120,9 @@ the model's 400-1200 Hz passband readable:
 
 Each test prints character error rates, so a change that makes tuning worse
 shows up as a number rather than as a feeling. `--tests sweep` re-derives the
-pitch that translation aims at.
+pitch that translation aims at, and `--tests track` measures how far the
+tuning may drift before reading breaks, and how much of that drift signal
+tracking takes back.
 
 Check the call sign shape rule, which transcribes ITU Radio Regulations
 Article 19 and so cannot be verified by the decode tests:

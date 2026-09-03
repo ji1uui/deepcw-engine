@@ -161,6 +161,7 @@ type
     FRxWaterfall: TWaterfallView;
     FRxTuneInfo: TLabel;
     FRxTuneClear: TButton;
+    FRxTrack: TCheckBox;
     FRxBusy: TLabel;
 
     { 設定タブ / settings tab }
@@ -219,6 +220,7 @@ type
     function SelectedBandwidth: TTunerBandwidth;
     procedure RxTuneChanged(Sender: TObject);
     procedure RxTuneClearClick(Sender: TObject);
+    procedure RxTrackChanged(Sender: TObject);
     procedure UpdateTuneInfo;
 
     procedure PagesChanged(Sender: TObject);
@@ -330,6 +332,7 @@ begin
     The same holds for the tuning display: without this the panel would
     disagree with the actual state. }
   UpdateTuneInfo;
+  RxTrackChanged(nil);
   EnsureDecoder(True);
   RefreshInfo;
   RenderTransmit;
@@ -679,16 +682,28 @@ begin
   TuneTools.Height := 30;
   TuneTools.Align := alTop;
   TuneTools.BevelOuter := bvNone;
-  AddLabel(TuneTools, '読みたい信号をクリック。ホイールと上下キーで微調整、右クリックで解除。',
-    6, 7);
+  AddLabel(TuneTools, '読みたい信号をクリック。ホイールで微調整。', 6, 7);
   FRxTuneClear := AddButton(TuneTools, '同調を解除', 0, 2, 110, @RxTuneClearClick);
   Stretch(FRxTuneClear, alRight);
+  { 動いていく信号を追いかけるかどうか。既定は有効です。周波数を決め打ちで
+    見張りたい場合のために、切れるようにしてあります（要件 FR-D.7）。
+
+    Whether to follow a signal that moves; on by default, and switchable off
+    for an operator deliberately watching one frequency (FR-D.7). }
+  FRxTrack := TCheckBox.Create(TuneTools);
+  FRxTrack.Parent := TuneTools;
+  FRxTrack.Caption := '信号を自動で追う';
+  FRxTrack.Checked := True;
+  FRxTrack.Align := alRight;
+  FRxTrack.BorderSpacing.Right := 12;
+  FRxTrack.OnChange := @RxTrackChanged;
   FRxTuneInfo := TLabel.Create(TuneTools);
   FRxTuneInfo.Parent := TuneTools;
   FRxTuneInfo.Align := alRight;
   FRxTuneInfo.Layout := tlCenter;
   FRxTuneInfo.Alignment := taRightJustify;
   FRxTuneInfo.BorderSpacing.Right := 10;
+  FRxTuneInfo.BorderSpacing.Left := 24;
 
   FRxWaterfall := TWaterfallView.Create(WaterfallPanel);
   FRxWaterfall.Parent := WaterfallPanel;
@@ -888,6 +903,7 @@ begin
       connected, and otherwise it quietly falls back to the default
       (requirement FR-A.5). }
     RefreshDeviceList(Ini.ReadString('audio', 'input_device', ''));
+    FRxTrack.Checked := Ini.ReadBool('receive', 'track_signal', True);
   finally
     Ini.Free;
   end;
@@ -931,6 +947,7 @@ begin
       Ini.WriteInteger('receive', 'tune_hz', Round(FRxWaterfall.TuneHz));
       Ini.WriteInteger('receive', 'bandwidth', FSetBandwidth.ItemIndex);
       Ini.WriteString('audio', 'input_device', SelectedDeviceName);
+      Ini.WriteBool('receive', 'track_signal', FRxTrack.Checked);
     finally
       Ini.Free;
     end;
@@ -1552,6 +1569,13 @@ begin
   FRxWaterfall.TuneHz := 0;
 end;
 
+procedure TMainForm.RxTrackChanged(Sender: TObject);
+begin
+  FRxWaterfall.Tracking := FRxTrack.Checked;
+  if Sender <> nil then
+    MarkSettingsDirty;
+end;
+
 { ウォーターフォールで同調先が変わったときに呼ばれます。範囲の外を選ばれた
   ときは、断るのではなく、寄せた結果と受信機側でできることを伝えます
   （要件 FR-D.4）。
@@ -1569,6 +1593,16 @@ begin
     FStream.TuneHz := Tuned;
   UpdateTuneInfo;
   MarkSettingsDirty;
+
+  { 追跡が動かしたときは、何も言いません。1 秒ごとに「同調しました」と言われては
+    読むどころではなく、同調線と数字が動くことで十分に伝わります
+    （要件 FR-D.7）。
+
+    Nothing is said when tracking moved it. Being told "tuned" once a second
+    would drown out the text being read, and the line and the number moving
+    say it well enough (requirement FR-D.7). }
+  if FRxWaterfall.AutoTuned then
+    Exit;
 
   { 求めた音程と実際の同調先が離れていれば、寄せたことになります。左端側を
     選ばれると求めた値は 0 に近づくため、0 を除外してはいけません。

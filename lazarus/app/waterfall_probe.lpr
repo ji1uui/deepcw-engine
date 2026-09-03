@@ -116,6 +116,35 @@ begin
   end;
 end;
 
+{ 音程が徐々に上がっていく連続音です。/ A tone that sweeps upward. }
+function SweptAudio(SampleRate: Integer; FromHz, ToHz, Seconds: Double): TSingleArray;
+var
+  I, N: Integer;
+  Phase, Hz: Double;
+begin
+  RandSeed := 11;
+  N := Round(Seconds * SampleRate);
+  SetLength(Result, N);
+  Phase := 0;
+  for I := 0 to N - 1 do
+  begin
+    Hz := FromHz + (ToHz - FromHz) * I / N;
+    Phase := Phase + 2 * Pi * Hz / SampleRate;
+    Result[I] := 0.5 * Sin(Phase) + 0.02 * (Random + Random - 1);
+  end;
+end;
+
+{ 雑音だけ。/ Noise alone. }
+function NoiseOnly(SampleRate: Integer; Seconds: Double): TSingleArray;
+var
+  I: Integer;
+begin
+  RandSeed := 12;
+  SetLength(Result, Round(Seconds * SampleRate));
+  for I := 0 to High(Result) do
+    Result[I] := 0.05 * (Random + Random - 1);
+end;
+
 procedure SaveView(View: TWaterfallView; const FileName: string);
 var
   Shot: TBitmap;
@@ -232,6 +261,45 @@ begin
   View.Clear;
   Application.ProcessMessages;
   Check('クリアしても描画できる', True);
+
+  { 動いていく信号を追いかけること（要件 FR-D.7）。合成した掃引音を流し込み、
+    同調点が付いてくるかを見ます。
+    Following a signal that moves (requirement FR-D.7): a swept tone is fed in
+    and the tuned pitch is expected to come with it. }
+  View.Clear;
+  View.Tracking := True;
+  View.TuneHz := 900;
+  Watcher.Changes := 0;
+  View.PushSamples(SweptAudio(8000, 900, 1000, 12), 8000);
+  Application.ProcessMessages;
+  Check('動いた信号を追いかける', Abs(View.TuneHz - 1000) <= 60,
+    Format('(%.1f Hz、目標 1000 Hz)', [View.TuneHz]));
+  Check('追跡による変化だと分かる', Watcher.Changes > 0,
+    Format('(%d 回)', [Watcher.Changes]));
+  SaveView(View, IncludeTrailingPathDelimiter(OutDir) + 'waterfall_track.png');
+
+  { 追跡を切れば動かないこと。周波数を決め打ちで見張る場合のためです。
+    With tracking off it must not move, for an operator watching one
+    frequency deliberately. }
+  View.Clear;
+  View.Tracking := False;
+  View.TuneHz := 900;
+  View.PushSamples(SweptAudio(8000, 900, 1000, 12), 8000);
+  Application.ProcessMessages;
+  Check('追跡を切れば動かない', Abs(View.TuneHz - 900) < 0.01,
+    Format('(%.1f Hz)', [View.TuneHz]));
+
+  { 信号がいなければ雑音を追いかけないこと。符号の切れ目で流されると、
+    読めていた局を見失います。
+    With no signal it must not chase noise; drifting away during a gap would
+    lose a station that was being read. }
+  View.Clear;
+  View.Tracking := True;
+  View.TuneHz := 900;
+  View.PushSamples(NoiseOnly(8000, 12), 8000);
+  Application.ProcessMessages;
+  Check('無信号では動かない', Abs(View.TuneHz - 900) < 0.01,
+    Format('(%.1f Hz)', [View.TuneHz]));
 
   { 描画の費用を測ります。BGRABitmap のような描画ライブラリを持ち込むかどうかは、
     ここが遅いかどうかで決まります。標準の LCL で足りているなら、配布物を増やす
