@@ -27,7 +27,7 @@ program cw_tune;
 uses
   SysUtils, Classes, DateUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Decoder, DeepCW.Dsp, DeepCW.Morse, DeepCW.Tuner, DeepCW.Stream,
-  DeepCW.Callsign;
+  DeepCW.Callsign, DeepCW.Review;
 
 const
   { 試験に使う本文。実際の交信に出てくる形をなぞっています。
@@ -42,7 +42,7 @@ var
   ModelPath: string = '';
   MetadataPath: string = '';
   RuntimePath: string = '';
-  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,correctness,overload,track,wide';
+  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,correctness,overload,review,track,wide';
   { 合成に加える白色雑音の大きさ。差が出る水準を選びます。
     White noise level for the synthesis, picked so differences show. }
   Noise: Double = 0.30;
@@ -1272,6 +1272,181 @@ begin
     WriteLn(Format('  %d 件が通らなかった', [Failures]));
 end;
 
+{ 聴き直しの時刻が受信文と揃っているかを確かめます。
+
+  遡って聴き直せる（FR-E.10）ためには、受信文に付いた時刻と、保管した音声の
+  時刻が、同じ原点で数えられていなければならない。**ずれていても音は鳴るので、
+  耳で確かめるだけでは気づけない。**ここでは同じ音声を復号器と保管庫の両方へ
+  流し込み、2 つの時計が最後まで一致するかを直接見る。追いつけないほど流し
+  込んだ場合と、途中で録音周波数が変わった場合も同じように見る。どちらも
+  復号器が溜めていた音声を手放す場面で、時計がずれやすい。
+
+  Checks that the replay clock agrees with the transcript.
+
+  Seeking back through recent audio (FR-E.10) only works if the times carried
+  by the transcript and the times of the stored audio are counted from the same
+  origin. **Sound still comes out when they disagree, so listening does not
+  reveal it.** The same audio is fed to both the decoder and the store, and the
+  two clocks are compared directly, including when more is fed than analysis
+  can keep up with and when the capture rate changes part way. Both are moments
+  where the decoder releases buffered audio, and where a clock is most likely to
+  slip. }
+procedure RunReview;
+const
+  RATE = 8000;
+  SLICE_SECONDS = 0.5;
+var
+  Stream: TStreamingDecoder;
+  History: TAudioHistory;
+  Audio, Piece, Got: TSingleArray;
+  Reference: string;
+  I, Position, Taken, Failures, Rate2: Integer;
+  From_, To_: Double;
+  Chars: TDecodedChars;
+  First, Last: Double;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
+  { 受信の経路をそのままなぞります。取り込んだ音は、まず両方へ同じ形で渡します。
+    Follows the receive path as it is: captured audio goes to both, in the same
+    pieces. }
+  procedure FeedAll(Rate: Integer; Analyse: Boolean);
+  begin
+    Position := 0;
+    while Position < Length(Audio) do
+    begin
+      Taken := Min(Round(SLICE_SECONDS * Rate), Length(Audio) - Position);
+      Piece := Copy(Audio, Position, Taken);
+      Stream.Append(Piece, Rate);
+      History.Append(Piece, Rate);
+      Inc(Position, Taken);
+      if Analyse and Stream.Ready then
+        Stream.Step;
+    end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('review: 聴き直しの時刻合わせ / the replay clock');
+  Failures := 0;
+  Reference := NormalizeText(MESSAGES[1]);
+
+  { [1] 普通に受信したとき、2 つの時計が一致すること。
+        [1] The two clocks must agree through an ordinary reception. }
+  Stream := TStreamingDecoder.Create(Decoder);
+  History := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, RATE);
+  try
+    Audio := Synthesise(Reference, RATE, TUNER_TARGET_TONE_HZ, Noise, 6200);
+    FeedAll(RATE, True);
+    Stream.Finish;
+    Verdict('普通の受信で時計が一致する',
+      SameValue(Stream.ElapsedSeconds, History.LatestSeconds, 0.01),
+      Format('(復号 %.3f 秒 / 保管 %.3f 秒)',
+        [Stream.ElapsedSeconds, History.LatestSeconds]));
+
+    { [2] 確定した文字の時刻で音を引けること。**これが成り立たなければ、
+          受信文をたどっても聴き直せない。**
+          [2] A confirmed character's time must fetch audio. **Without this the
+          transcript cannot be used to listen again.** }
+    Chars := Stream.ConfirmedChars;
+    if Length(Chars) = 0 then
+      Verdict('確定した文字の時刻で音を引ける', False, '(文字が出なかった)')
+    else
+    begin
+      First := Chars[0].Seconds;
+      Last := Chars[High(Chars)].EndSeconds;
+      Got := History.Extract(First, Last, From_, To_, Rate2);
+      Verdict('確定した文字の時刻で音を引ける',
+        Length(Got) > 0, '(空で返った)');
+      Verdict('引いた区間が求めた区間と合う',
+        SameValue(From_, First, 0.01) and SameValue(To_, Last, 0.01),
+        Format('(求め %.3f..%.3f / 返り %.3f..%.3f)',
+          [First, Last, From_, To_]));
+      { 文字の並ぶ区間が、送った音声の中に収まっていること。時計がずれていれば
+        ここが外へはみ出す。
+        The stretch the characters span must lie inside the audio that was
+        sent; a slipped clock pushes it outside. }
+      Verdict('文字の時刻が受信した範囲に収まる',
+        (First >= -0.01) and (Last <= History.LatestSeconds + 0.01),
+        Format('(%.3f..%.3f のうち 0..%.3f)',
+          [First, Last, History.LatestSeconds]));
+    end;
+  finally
+    History.Free;
+    Stream.Free;
+  end;
+
+  { [3] 解析が追いつかず復号器が音声を捨てても、2 つの時計が一致すること。
+        捨てた分だけ復号器が時刻を進めるので、保管庫と揃うはず。
+        [3] The clocks must still agree when analysis falls behind and the
+        decoder discards audio: it advances its clock by what went, so the
+        store should keep step. }
+  Stream := TStreamingDecoder.Create(Decoder);
+  History := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, RATE);
+  try
+    Audio := Synthesise(Reference, RATE, TUNER_TARGET_TONE_HZ, Noise, 6201);
+    SetLength(Piece, Round(90 * RATE));
+    for I := 0 to High(Piece) do
+      Piece[I] := Audio[I mod Length(Audio)];
+    Audio := Piece;
+    { 解析を一度も回さずに流し込んでから、1 回だけ回す。上限を越えた分は
+      復号器が捨てる。
+      Feed it all without analysing, then analyse once; everything past the
+      cap is discarded by the decoder. }
+    FeedAll(RATE, False);
+    Stream.Step;
+    Verdict('捨てたあとも時計が一致する',
+      SameValue(Stream.ElapsedSeconds, History.LatestSeconds, 0.01),
+      Format('(復号 %.3f 秒 / 保管 %.3f 秒、捨てた %.1f 秒)',
+        [Stream.ElapsedSeconds, History.LatestSeconds, Stream.DroppedSeconds]));
+    Verdict('捨てた量を申告している', Stream.DroppedSeconds > 0,
+      Format('(%.1f 秒)', [Stream.DroppedSeconds]));
+  finally
+    History.Free;
+    Stream.Free;
+  end;
+
+  { [4] 途中で録音周波数が変わっても、2 つの時計が一致すること。装置を切り替え
+        たときに起こる。
+        [4] The clocks must agree across a change of capture rate, which is what
+        switching device does. }
+  Stream := TStreamingDecoder.Create(Decoder);
+  History := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, RATE);
+  try
+    Audio := Synthesise(Reference, RATE, TUNER_TARGET_TONE_HZ, Noise, 6202);
+    FeedAll(RATE, False);
+    Audio := Synthesise(Reference, 16000, TUNER_TARGET_TONE_HZ, Noise, 6203);
+    FeedAll(16000, True);
+    Stream.Finish;
+    Verdict('録音周波数が変わっても時計が一致する',
+      SameValue(Stream.ElapsedSeconds, History.LatestSeconds, 0.01),
+      Format('(復号 %.3f 秒 / 保管 %.3f 秒)',
+        [Stream.ElapsedSeconds, History.LatestSeconds]));
+    Verdict('周波数が変わったあとの音を引ける',
+      Length(History.Extract(History.LatestSeconds - 1, History.LatestSeconds,
+        From_, To_, Rate2)) > 0, '(空で返った)');
+    Verdict('引いた音は新しい周波数で返る', Rate2 = 16000,
+      Format('(%d Hz)', [Rate2]));
+  finally
+    History.Free;
+    Stream.Free;
+  end;
+
+  if Failures = 0 then
+    WriteLn('  すべて通った')
+  else
+    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+end;
+
 var
   Index: Integer;
   Key, Value: string;
@@ -1337,6 +1512,8 @@ begin
       RunCorrectness;
     if Pos('overload', Tests) > 0 then
       RunOverload;
+    if Pos('review', Tests) > 0 then
+      RunReview;
     if Pos('track', Tests) > 0 then
       RunTrack;
     if Pos('wide', Tests) > 0 then

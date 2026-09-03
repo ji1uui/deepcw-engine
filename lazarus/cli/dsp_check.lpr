@@ -17,7 +17,7 @@ program dsp_check;
 
 uses
   SysUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
-  DeepCW.Tuner;
+  DeepCW.Tuner, DeepCW.Review;
 
 var
   Meta: TDeepCWMetadata;
@@ -211,6 +211,127 @@ begin
     Format('(%.3f vs %.3f)', [Rms(B), Rms(A)]));
 end;
 
+{ 番号そのものを値に入れた音声。取り出した中身が、狙った区間のものかどうかを
+  一目で確かめられます。
+  Audio whose value is its own index, so that what comes back can be checked
+  against the stretch that was asked for. }
+function Ramp(First, Count: Integer): TSingleArray;
+var I: Integer;
+begin
+  SetLength(Result, Count);
+  for I := 0 to Count - 1 do
+    Result[I] := First + I;
+end;
+
+procedure TestHistory;
+const
+  RATE = 8000;
+var
+  History: TAudioHistory;
+  Got: TSingleArray;
+  From_, To_: Double;
+  R, I: Integer;
+  Ok: Boolean;
+begin
+  WriteLn('TAudioHistory');
+  { 60 秒 = 480000 標本を保持する。/ Sixty seconds is 480000 samples. }
+  History := TAudioHistory.Create(60, RATE);
+  try
+    { 10 秒ぶんを足す。/ Ten seconds in. }
+    History.Append(Ramp(0, 10 * RATE), RATE);
+    Check('入れた長さがそのまま残る',
+      SameValue(History.RetainedSeconds, 10, 1E-6),
+      Format('(%.3f 秒)', [History.RetainedSeconds]));
+    Check('いちばん古い時刻は 0', SameValue(History.EarliestSeconds, 0, 1E-9));
+    Check('いちばん新しい時刻は 10', SameValue(History.LatestSeconds, 10, 1E-9));
+
+    { 3.0〜4.0 秒を取り出すと、24000 番から 32000 番の手前まで。
+      Three to four seconds is sample 24000 up to 32000. }
+    Got := History.Extract(3, 4, From_, To_, R);
+    Check('求めた長さで返る', Length(Got) = RATE, Format('(%d)', [Length(Got)]));
+    Check('求めた区間の中身が返る',
+      (Length(Got) = RATE) and (Got[0] = 3 * RATE) and (Got[RATE - 1] = 4 * RATE - 1),
+      Format('(%.0f..%.0f)', [Got[0], Got[High(Got)]]));
+    Check('返した区間を申告する',
+      SameValue(From_, 3, 1E-6) and SameValue(To_, 4, 1E-6),
+      Format('(%.3f..%.3f)', [From_, To_]));
+    Check('録音周波数を申告する', R = RATE);
+
+    { 保持を超えて足す。合計 70 秒ぶんで、古い 10 秒は消える。
+      Past the retention: seventy seconds in total, so the first ten go. }
+    History.Append(Ramp(10 * RATE, 60 * RATE), RATE);
+    Check('保持時間を超えない',
+      SameValue(History.RetainedSeconds, 60, 1E-6),
+      Format('(%.3f 秒)', [History.RetainedSeconds]));
+    Check('消えたぶんだけ古い時刻が進む',
+      SameValue(History.EarliestSeconds, 10, 1E-6),
+      Format('(%.3f 秒)', [History.EarliestSeconds]));
+    Check('新しい時刻は足した合計のまま',
+      SameValue(History.LatestSeconds, 70, 1E-6),
+      Format('(%.3f 秒)', [History.LatestSeconds]));
+
+    { 環が一周したあとでも、時刻と中身の対応は崩れない。
+      The mapping from time to content survives the wrap. }
+    Got := History.Extract(65, 66, From_, To_, R);
+    Ok := Length(Got) = RATE;
+    if Ok then
+      for I := 0 to RATE - 1 do
+        if Got[I] <> 65 * RATE + I then
+        begin
+          Ok := False;
+          Break;
+        end;
+    Check('一周したあとも時刻と中身が合う', Ok);
+
+    { 消えた区間を求めたら、残っているところまで切り詰めて返す。
+      A request reaching into what has gone is clipped to what remains. }
+    Got := History.Extract(5, 12, From_, To_, R);
+    Check('消えた区間は切り詰めて返す',
+      (Length(Got) = 2 * RATE) and SameValue(From_, 10, 1E-6),
+      Format('(%d 標本, %.3f 秒から)', [Length(Got), From_]));
+    { 完全に消えた区間は、黙って別の音を返さず空で返す。
+      A stretch that has gone entirely comes back empty, not as some other
+      audio. }
+    Got := History.Extract(0, 5, From_, To_, R);
+    Check('完全に消えた区間は空で返す', Length(Got) = 0,
+      Format('(%d 標本)', [Length(Got)]));
+    { まだ来ていない先も同じ。/ The same for a stretch not yet received. }
+    Got := History.Extract(80, 90, From_, To_, R);
+    Check('まだ来ていない区間は空で返す', Length(Got) = 0,
+      Format('(%d 標本)', [Length(Got)]));
+
+    { 一度に容量を超える量が来ても、末尾が残り時刻は合う。
+      More than the capacity at once keeps the tail and the clock still adds
+      up. }
+    History.Clear;
+    History.Append(Ramp(0, 100 * RATE), RATE);
+    Check('容量超えの一括入力でも保持時間を守る',
+      SameValue(History.RetainedSeconds, 60, 1E-6),
+      Format('(%.3f 秒)', [History.RetainedSeconds]));
+    Check('容量超えの一括入力でも時刻が合う',
+      SameValue(History.LatestSeconds, 100, 1E-6) and
+      SameValue(History.EarliestSeconds, 40, 1E-6),
+      Format('(%.3f..%.3f)', [History.EarliestSeconds, History.LatestSeconds]));
+    Got := History.Extract(99, 100, From_, To_, R);
+    Check('容量超えの一括入力でも末尾が残る',
+      (Length(Got) = RATE) and (Got[0] = 99 * RATE),
+      Format('(%.0f)', [Got[0]]));
+
+    { 録音周波数が変わったら、中身は手放して時刻は続ける。
+      A change of rate releases the contents and continues the clock. }
+    History.Append(Ramp(0, 16000), 16000);
+    Check('周波数が変わったら中身を手放す',
+      SameValue(History.RetainedSeconds, 1, 1E-6),
+      Format('(%.3f 秒)', [History.RetainedSeconds]));
+    Check('周波数が変わっても時刻は続く',
+      SameValue(History.LatestSeconds, 101, 1E-6),
+      Format('(%.3f 秒)', [History.LatestSeconds]));
+    Check('新しい周波数を申告する', History.SampleRate = 16000);
+  finally
+    History.Free;
+  end;
+end;
+
 var
   ModelMeta, MetadataPath: string;
 begin
@@ -238,6 +359,7 @@ begin
     TestWideSlice;
     TestTrackTone;
     TestBandPass;
+    TestHistory;
   finally
     Meta.Free;
   end;

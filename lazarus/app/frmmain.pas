@@ -31,6 +31,7 @@ uses
   Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls, Spin,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
+  DeepCW.Review,
   TranscriptView, WaterfallView;
 
 type
@@ -104,6 +105,14 @@ type
     FRing: TAudioRing;
     FCapture: TAudioCapture;
     FPlayback: TAudioPlayback;
+    { 直近の受信音の保管庫と、その聴き直し用の再生。送信の再生とは別に持ちます。
+      片方を止めるつもりでもう片方が止まる、という取り違えを避けるためです。
+
+      The store of recent audio and a playback for replaying it, kept apart
+      from the transmit playback so that stopping one cannot be mistaken for
+      stopping the other. }
+    FHistory: TAudioHistory;
+    FReviewPlay: TAudioPlayback;
     FCaptureRate: Integer;
     { 選べる入力装置。番号は抜き差しで変わるため、覚えておくのは名前です
       （要件 FR-A.5）。
@@ -168,6 +177,9 @@ type
     FRxTuneClear: TButton;
     FRxTrack: TCheckBox;
     FRxBusy: TLabel;
+    FRxReplay: TButton;
+    FRxReplayStop: TButton;
+    FRxReplayInfo: TLabel;
 
     { 設定タブ / settings tab }
     FSetModel: TEdit;
@@ -177,6 +189,7 @@ type
     FSetCaptureRate: TComboBox;
     FSetThreads: TComboBox;
     FSetBandwidth: TComboBox;
+    FSetRetention: TComboBox;
     FSetApply: TButton;
     FSetInfo: TMemo;
 
@@ -208,6 +221,15 @@ type
     procedure TxStopClick(Sender: TObject);
     procedure TxSaveClick(Sender: TObject);
     procedure TxVerifyClick(Sender: TObject);
+
+    { 聴き直し（要件 FR-E.10） / replay (requirement FR-E.10) }
+    procedure RxCharChosen(Sender: TObject; Index: Integer);
+    procedure RxReplayClick(Sender: TObject);
+    procedure RxReplayStopClick(Sender: TObject);
+    procedure RxRetentionChanged(Sender: TObject);
+    procedure ReplayFrom(Index: Integer);
+    function SelectedRetention: Double;
+    procedure UpdateReplayInfo;
 
     procedure RxBrowseClick(Sender: TObject);
     procedure RxDecodeFileClick(Sender: TObject);
@@ -316,6 +338,8 @@ begin
   FTxSampleRate := 8000;
   FRing := TAudioRing.Create(FCaptureRate * 30);
   FPlayback := TAudioPlayback.Create;
+  FReviewPlay := TAudioPlayback.Create;
+  FHistory := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, FCaptureRate);
 
   BuildUI;
   LoadSettings;
@@ -327,6 +351,10 @@ begin
   { 読み込んだ表示設定を実際に反映します。設定は代入だけでは効きません。
     Apply the loaded display settings; assigning the controls is not enough. }
   RxDisplayChanged(nil);
+  { 読み込んだ保持時間を保管庫へ反映します。設定を読むだけでは効きません。
+    Apply the retention that was loaded; reading the setting is not enough. }
+  FHistory.SetRetention(SelectedRetention);
+  UpdateReplayInfo;
   { 設定に装置名が無かった場合でも一覧は用意します。
     The list is built even when the settings held no device name. }
   if FRxDevice.Items.Count = 0 then
@@ -351,6 +379,8 @@ begin
     FCapture.Stop;
   if FPlayback <> nil then
     FPlayback.Stop;
+  if FReviewPlay <> nil then
+    FReviewPlay.Stop;
   if FDecodeThread <> nil then
   begin
     { 主スレッドでの WaitFor は Synchronize を処理し続けるため、ワーカーは
@@ -367,6 +397,8 @@ begin
   FDiagnostics.Free;
   FCapture.Free;
   FPlayback.Free;
+  FReviewPlay.Free;
+  FHistory.Free;
   FRing.Free;
   FDecoder.Free;
   inherited Destroy;
@@ -748,8 +780,22 @@ begin
   FRxFontSize := AddSpin(TextTools, 512, 5, 9, 32, 14, @RxDisplayChanged);
   FRxCopy := AddButton(TextTools, 'コピー', 604, 2, 90, @RxCopyClick);
 
+  { 聴き直しの操作。文字を押せば鳴るので、この 2 つは「もう一度」と「止める」
+    だけです（要件 FR-E.10）。
+    The replay controls. A press on a character already plays it, so these two
+    are only "again" and "stop" (requirement FR-E.10). }
+  FRxReplay := AddButton(TextTools, 'もう一度聴く', 700, 2, 110, @RxReplayClick);
+  FRxReplay.Enabled := False;
+  FRxReplayStop := AddButton(TextTools, '停止', 814, 2, 60, @RxReplayStopClick);
+  FRxReplayStop.Enabled := False;
+  FRxReplayInfo := TLabel.Create(TextTools);
+  FRxReplayInfo.Parent := TextTools;
+  FRxReplayInfo.SetBounds(880, 9, 320, 20);
+  FRxReplayInfo.Caption := '文字を押すと、その音を聴き直せます。';
+
   FRxTranscript := TTranscriptView.Create(TextPanel);
   FRxTranscript.Parent := TextPanel;
+  FRxTranscript.OnCharChosen := @RxCharChosen;
   FRxTranscript.Font.Size := 14;
   Stretch(FRxTranscript, alClient);
 end;
@@ -781,7 +827,7 @@ begin
     Operating settings: what an operator actually changes. No jargon here. }
   Operating := TGroupBox.Create(Sheet);
   Operating.Parent := Sheet;
-  Operating.Height := 92;
+  Operating.Height := 122;
   Operating.Caption := '運用設定';
   Stretch(Operating, alTop);
 
@@ -799,6 +845,21 @@ begin
   FSetCaptureRate.ItemIndex := 0;
   AddLabel(Operating, '受信機の音を取り込む細かさです。うまく録音できないときだけ変えてください。',
     232, 36);
+
+  AddLabel(Operating, '聴き直せる長さ', 14, 62);
+  FSetRetention := TComboBox.Create(Operating);
+  FSetRetention.Parent := Operating;
+  FSetRetention.SetBounds(120, 58, 110, 28);
+  FSetRetention.Style := csDropDownList;
+  FSetRetention.Items.Add('5 分');
+  FSetRetention.Items.Add('10 分（推奨）');
+  FSetRetention.Items.Add('20 分');
+  FSetRetention.Items.Add('30 分');
+  FSetRetention.ItemIndex := 1;
+  FSetRetention.OnChange := @RxRetentionChanged;
+  AddLabel(Operating,
+    '受信テキストの文字を押して音を聴き直せる範囲です。長くするほど記憶を使います。',
+    248, 62);
 
   { ── 詳細・診断：困ったときだけ見るもの ──
     Advanced and diagnostics: only looked at when something is wrong. }
@@ -894,6 +955,7 @@ begin
     FRxDoubtStrength.Position := ClampInt(
       Ini.ReadInteger('receive', 'doubt_strength', 100), 0, 100);
     FRxFontSize.Value := ClampInt(Ini.ReadInteger('receive', 'font_size', 14), 9, 32);
+    FSetRetention.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'retention', 1), 0, 3);
     FSetBandwidth.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'bandwidth', 0),
       0, FSetBandwidth.Items.Count - 1);
     { 前回の同調先は覚えておきます。同じ設備なら音程は同じであることが多く、
@@ -950,6 +1012,7 @@ begin
       Ini.WriteInteger('receive', 'font_size', FRxFontSize.Value);
       Ini.WriteInteger('receive', 'tune_hz', Round(FRxWaterfall.TuneHz));
       Ini.WriteInteger('receive', 'bandwidth', FSetBandwidth.ItemIndex);
+      Ini.WriteInteger('receive', 'retention', FSetRetention.ItemIndex);
       Ini.WriteString('audio', 'input_device', SelectedDeviceName);
       Ini.WriteBool('receive', 'track_signal', FRxTrack.Checked);
     finally
@@ -1038,6 +1101,16 @@ begin
       if FStream.DroppedSeconds > 0 then
         Lines.Add(Format('追いつけずに捨てた音声: %.1f 秒', [FStream.DroppedSeconds]));
     end;
+    if FHistory <> nil then
+      { 保持している音の量と、それが使っている記憶を出します。長くするほど
+        増えるので、選ぶ前ではなく選んだあとに実際の数字が見えることが要ります
+        （要件 FR-G.3）。
+        How much audio is held and what it costs in memory. It grows with the
+        retention, so the real figure has to be visible after the choice rather
+        than only described before it (requirement FR-G.3). }
+      Lines.Add(Format('聴き直せる音声: %.0f 秒 / 保持の上限 %.0f 分（約 %.0f MB）',
+        [FHistory.RetainedSeconds, FHistory.RetentionSeconds / 60,
+         FHistory.RetentionSeconds * FHistory.SampleRate * SizeOf(Single) / (1024 * 1024)]));
     if Length(FDevices) = 0 then
       Lines.Add('入力装置: 見つかりません')
     else
@@ -1449,6 +1522,24 @@ begin
     Exit;
   FLiveChars := nil;
   FAppendMode := False;
+  { ファイルの復号は受信をやり直すのと同じ扱いにします。前の受信の続きとして
+    時刻を数えたままだと、出てくる文字（0 秒から始まる）と保管庫の音が食い違い、
+    聴き直しが別の場所を鳴らします（要件 FR-E.10）。
+
+    Decoding a file is treated as starting reception afresh. Carrying the
+    previous reception's clock forward would leave the characters, which start
+    at zero, disagreeing with the stored audio, and a replay would play the
+    wrong place (requirement FR-E.10). }
+  if FStream <> nil then
+    FStream.Reset;
+  FReviewPlay.Stop;
+  FHistory.Clear;
+  { ファイルの音そのものを保管します。これで、ファイルから読んだ文字も押せば
+    聴き直せます。保持時間より長いファイルは、後ろのぶんだけが残ります。
+    The file's own audio is stored, so characters read from a file can be
+    replayed too. A file longer than the retention keeps only its tail. }
+  FHistory.Append(Samples, SampleRate);
+  UpdateReplayInfo;
   StartDecode(PrepareForDecoder(Samples, SampleRate),
     FDecoder.Metadata.SampleRate);
 end;
@@ -1535,8 +1626,17 @@ begin
   FLiveChars := nil;
   if FStream <> nil then
     FStream.Reset;
+  { 受信テキストを消したら、そこを指していた音も手放します。残しておくと、
+    次の受信の時刻と噛み合わない音が保管庫に居座ります（要件 FR-E.10）。
+    Clearing the transcript releases the audio it pointed at; keeping it would
+    leave audio in the store whose times no longer match the next reception
+    (requirement FR-E.10). }
+  FReviewPlay.Stop;
+  if FHistory <> nil then
+    FHistory.Clear;
   FRxTranscript.Clear;
   FRxWaterfall.Clear;
+  UpdateReplayInfo;
 end;
 
 procedure TMainForm.RxCopyClick(Sender: TObject);
@@ -1544,6 +1644,161 @@ begin
   Clipboard.AsText := FRxTranscript.AsText;
   SetStatus('', '', Format('受信テキスト %d 文字をコピーしました。',
     [FRxTranscript.CharCount]));
+end;
+
+{ ---- 聴き直し（要件 FR-E.10） / replay (requirement FR-E.10) ---- }
+
+{ 保持時間の選択肢を秒に写します。選択肢と秒の対応はここ 1 か所だけに置きます。
+  Maps the retention choice onto seconds, in this one place only. }
+function TMainForm.SelectedRetention: Double;
+begin
+  case FSetRetention.ItemIndex of
+    0: Result := 5 * 60;
+    2: Result := 20 * 60;
+    3: Result := 30 * 60;
+  else
+    Result := REVIEW_DEFAULT_SECONDS;
+  end;
+end;
+
+procedure TMainForm.RxRetentionChanged(Sender: TObject);
+begin
+  if FHistory = nil then
+    Exit;
+  { 長さを変えると、それまで保管していた音は失われます。黙って消すのではなく、
+    そう言います（第 10 章 10.9）。
+    Changing the length loses what was held; it is said rather than done
+    silently (chapter 10, rule 10.9). }
+  FHistory.SetRetention(SelectedRetention);
+  FRxTranscript.SelectedIndex := -1;
+  UpdateReplayInfo;
+  SetStatus('', '', Format(
+    '聴き直せる長さを %d 分にしました。それまでに保管していた音は消えました。',
+    [Round(SelectedRetention / 60)]));
+  MarkSettingsDirty;
+end;
+
+procedure TMainForm.UpdateReplayInfo;
+var
+  Held: Double;
+begin
+  if (FHistory = nil) or (FRxReplay = nil) then
+    Exit;
+  FRxReplay.Enabled := (FRxTranscript.SelectedIndex >= 0) and
+    (FHistory.RetainedSeconds > 0);
+  FRxReplayStop.Enabled := FReviewPlay.Running;
+  if FRxTranscript.SelectedIndex >= 0 then
+    Exit;
+  Held := FHistory.RetainedSeconds;
+  if Held <= 0 then
+    FRxReplayInfo.Caption := '文字を押すと、その音を聴き直せます。'
+  else
+    FRxReplayInfo.Caption := Format(
+      '文字を押すと、その音を聴き直せます（直近 %d 分 %d 秒を保管中）。',
+      [Trunc(Held) div 60, Trunc(Held) mod 60]);
+end;
+
+{ 押された文字を含む「語」の音を鳴らします。
+
+  1 文字だけでは短すぎて（短点は 0.06 秒ほど）耳では判じられません。前後の空白
+  までを取り、語としてまとめて鳴らします。読み取りが怪しいときに運用者が確かめ
+  たいのは、たいてい 1 文字ではなくコールサインや符丁ひとまとまりだからです。
+
+  Plays the sound of the whole word containing the character pressed.
+
+  One character alone is too short to judge by ear: a dit lasts about 0.06
+  seconds. The stretch is extended to the surrounding spaces and played as a
+  word, because what an operator wants to check is usually a call sign or a
+  whole abbreviation rather than a single letter. }
+procedure TMainForm.ReplayFrom(Index: Integer);
+var
+  First, Last: Integer;
+  Item: TDecodedChar;
+  FromSeconds, ToSeconds, GotFrom, GotTo: Double;
+  Audio: TSingleArray;
+  Rate: Integer;
+begin
+  if (FHistory = nil) or (FReviewPlay = nil) then
+    Exit;
+  if not FRxTranscript.CharItem(Index, Item) then
+    Exit;
+
+  First := Index;
+  while (First > 0) and FRxTranscript.CharItem(First - 1, Item) and
+        (Item.Text <> ' ') do
+    Dec(First);
+  Last := Index;
+  while FRxTranscript.CharItem(Last + 1, Item) and (Item.Text <> ' ') do
+    Inc(Last);
+
+  if not FRxTranscript.CharItem(First, Item) then
+    Exit;
+  FromSeconds := Item.Seconds - REVIEW_PAD_SECONDS;
+  if not FRxTranscript.CharItem(Last, Item) then
+    Exit;
+  ToSeconds := Item.EndSeconds + REVIEW_PAD_SECONDS;
+
+  Audio := FHistory.Extract(FromSeconds, ToSeconds, GotFrom, GotTo, Rate);
+  if Length(Audio) = 0 then
+  begin
+    { 保管の外へ出た音は戻りません。別の音を鳴らして誤魔化さず、そう言います。
+      Audio that has fallen outside the retention is gone; rather than playing
+      something else, it is said plainly. }
+    FRxReplayInfo.Caption := 'この部分の音はもう残っていません。';
+    { なぜ残っていないのかで案内を分けます。「設定を延ばせば遡れる」と言って
+      よいのは、保持時間の外へ出た場合だけです。
+      The guidance depends on why it is gone: telling the operator that a longer
+      retention would reach it is only true when it fell off the far end. }
+    if FromSeconds < FHistory.EarliestSeconds then
+      SetStatus('', '', Format(
+        'この部分の音は保管の範囲（直近 %d 分）から出ています。' +
+        '設定タブの「聴き直せる長さ」を延ばすと、より前まで遡れます。',
+        [Round(SelectedRetention / 60)]))
+    else
+      SetStatus('', '', 'この部分の音は保管していません。' +
+        '受信テキストを消したか、録音の設定を変えたあとの文字です。');
+    Exit;
+  end;
+
+  { 送信の再生が鳴っていれば止めます。2 つの音が重なると、どちらを聴いているのか
+    分からなくなります。
+    Stop any transmit playback first: two sounds at once leave the operator
+    unable to tell which is which. }
+  if FPlayback.Running then
+  begin
+    FPlayback.Stop;
+    FTxPlaying := False;
+  end;
+  FReviewPlay.Stop;
+  FReviewPlay.Play(Audio, Rate);
+  if FReviewPlay.LastError <> '' then
+  begin
+    LogDiagnostic('聴き直し', FReviewPlay.LastError);
+    SetStatus('', '', StatusLine(FReviewPlay.LastError));
+    Exit;
+  end;
+  FRxReplayStop.Enabled := True;
+  FRxReplayInfo.Caption := Format('%s：受信開始から %d 分 %d 秒の音（%.1f 秒）',
+    [Trim(DecodedText(Copy(FLiveChars, First, Last - First + 1))),
+     Trunc(GotFrom) div 60, Trunc(GotFrom) mod 60, GotTo - GotFrom]);
+end;
+
+procedure TMainForm.RxCharChosen(Sender: TObject; Index: Integer);
+begin
+  ReplayFrom(Index);
+  UpdateReplayInfo;
+end;
+
+procedure TMainForm.RxReplayClick(Sender: TObject);
+begin
+  if FRxTranscript.SelectedIndex >= 0 then
+    ReplayFrom(FRxTranscript.SelectedIndex);
+end;
+
+procedure TMainForm.RxReplayStopClick(Sender: TObject);
+begin
+  FReviewPlay.Stop;
+  FRxReplayStop.Enabled := False;
 end;
 
 { 「確定の速さ」を、実際の確定条件へ写します。末尾を長く残すほど確定は遅れますが、
@@ -1828,6 +2083,12 @@ begin
       transient at every seam, so the stream applies it to one whole buffer
       just before analysis. }
     FStream.Append(Fresh, FCaptureRate);
+    { 保管庫にも同じものを、同じ形で渡します。復号器と同じ音を同じ順に受け取る
+      ことが、2 つの時計が一致し続ける根拠です（要件 FR-E.10）。
+      The store receives the same audio in the same pieces. Both receiving the
+      same sound in the same order is what keeps the two clocks in step
+      (requirement FR-E.10). }
+    FHistory.Append(Fresh, FCaptureRate);
     { ウォーターフォールには、同調も帯域制限も掛ける前の音を見せます。まだ
       選んでいない信号も見えていなければ、選びようがないためです。
       The waterfall is fed the audio before any tuning or filtering: a signal
@@ -1884,6 +2145,11 @@ begin
   FRxStart.Enabled := FCapture = nil;
   FRxStop.Enabled := FCapture <> nil;
   FRxDecodeFile.Enabled := not DecoderBusy;
+  { 聴き直しの操作は、保管の中身と再生の状態で決まります。どちらもここでしか
+    変わらないので、毎回まとめて映します。
+    The replay controls follow what the store holds and whether it is playing;
+    both change only here, so they are refreshed together. }
+  UpdateReplayInfo;
 end;
 
 procedure TMainForm.SetStatus(const Engine, Audio, Message_: string);

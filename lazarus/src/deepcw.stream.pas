@@ -119,14 +119,34 @@ type
     FConfirmed: TDecodedChars;
     FProvisional: TDecodedChars;
     FConfirmedSeconds: Double;
-    FDroppedSamples: Int64;
+    { 取りこぼしは「秒」で数えます。録音周波数が途中で変わっても数え直しに
+      ならないためです。
+      Loss is counted in seconds, so that a change of capture rate part way
+      through does not reinterpret what was already counted. }
+    FDroppedSeconds: Double;
+    { 解析の世代。Reset や録音周波数の変更でバッファを捨てるたびに進めます。
+      解析スレッドは取り出したときの世代を覚えておき、確定させる直前に照合
+      します。食い違っていれば、その解析結果は既に無い音声のものなので、
+      丸ごと捨てます（付録 K）。
+      The analysis generation, advanced whenever the buffer is discarded by
+      Reset or by a change of capture rate. The analysis thread remembers the
+      generation it read and checks it again just before committing; if they
+      differ the result describes audio that no longer exists and is dropped
+      whole (appendix K). }
+    FEpoch: Int64;
     FTailGuard: Double;
     FMinConfirmed: Double;
     FSquelch: Double;
     procedure SetTuneHz(Value: Double);
     procedure SetBandwidth(Value: TTunerBandwidth);
-    function SourceRate: Integer;
-    function TakeSnapshot: TSingleArray;
+    { 解析にかける音声・その録音周波数・世代を、ひと繋がりの排他区間で取り出
+      します。3 つを別々に読むと、その隙間に録音周波数が変わり得ます。
+      Read the audio to analyse, its capture rate and the generation inside a
+      single locked section; reading them separately leaves a gap in which the
+      capture rate could change. }
+    procedure BeginAnalysis(out Audio: TSingleArray; out Rate: Integer;
+      out Epoch: Int64);
+    function StillCurrent(Epoch: Int64): Boolean;
     { 解析にかける形へ整えます。同調・帯域制限・標本化周波数の変換を、途切れの
       ない 1 本の音声に対してまとめて行います。
       Prepares audio for analysis: tuning, band limiting and rate conversion,
@@ -165,6 +185,18 @@ type
       Seconds of audio dropped through falling behind; anything but zero means
       analysis is not keeping up. Shown in the diagnostics. }
     function DroppedSeconds: Double;
+
+    { 受信を始めてから今までに受け取った音声の長さ（秒）。文字に付く時刻と
+      同じ原点で数えます。捨てた音声もここには含まれます。捨てた分だけ時刻を
+      進めているためで、そうしないと聴き直しの位置が受信文とずれます
+      （要件 FR-E.10）。
+
+      Seconds of audio received since reception began, counted from the same
+      origin as the times carried by the characters. Audio that was discarded
+      still counts, because the time base was advanced past it; otherwise the
+      point a replay starts from would not match the transcript
+      (requirement FR-E.10). }
+    function ElapsedSeconds: Double;
 
     { 溜まった音声を 1 回解析します。確定が進んだら True を返します。
       時間がかかるため、GUI とは別のスレッドから呼んでください。
@@ -255,7 +287,8 @@ begin
     FConfirmed := nil;
     FProvisional := nil;
     FConfirmedSeconds := 0;
-    FDroppedSamples := 0;
+    FDroppedSeconds := 0;
+    Inc(FEpoch);
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -273,8 +306,21 @@ begin
       A change of capture rate invalidates what is buffered. }
     if (FSourceRate <> SampleRate) and (FPendingCount > 0) then
     begin
+      { 捨てた分だけ時刻を進め、取りこぼしとして数えます。ここを飛ばすと、
+        以後の文字の時刻が捨てた秒数だけ前へずれ、受信文から音声へ戻れなく
+        なります（要件 FR-E.10）。長さは**変更前の**周波数で秒に直します。
+        Advance the time base by what was discarded and count it as a loss.
+        Skipping this would shift every later character earlier by the discarded
+        duration, and the transcript could no longer point back at the audio
+        (requirement FR-E.10). The duration is computed at the **previous**
+        rate. }
+      FConfirmedSeconds := FConfirmedSeconds + FPendingCount / Max(1, FSourceRate);
+      FDroppedSeconds := FDroppedSeconds + FPendingCount / Max(1, FSourceRate);
       FPendingCount := 0;
       FProvisional := nil;
+      { 解析中のものがあれば、その結果は既に無い音声のものになります。
+        Any analysis in flight now describes audio that no longer exists. }
+      Inc(FEpoch);
     end;
     FSourceRate := SampleRate;
 
@@ -301,11 +347,21 @@ begin
   end;
 end;
 
+function TStreamingDecoder.ElapsedSeconds: Double;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FConfirmedSeconds + FPendingCount / Max(1, FSourceRate);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
 function TStreamingDecoder.DroppedSeconds: Double;
 begin
   EnterCriticalSection(FLock);
   try
-    Result := FDroppedSamples / Max(1, FSourceRate);
+    Result := FDroppedSeconds;
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -363,27 +419,27 @@ begin
   end;
 end;
 
-function TStreamingDecoder.SourceRate: Integer;
+procedure TStreamingDecoder.BeginAnalysis(out Audio: TSingleArray;
+  out Rate: Integer; out Epoch: Int64);
+var
+  Wanted: Integer;
 begin
   EnterCriticalSection(FLock);
   try
-    Result := Max(1, FSourceRate);
+    Rate := Max(1, FSourceRate);
+    Epoch := FEpoch;
+    Wanted := Min(FPendingCount, Round(STREAM_MAX_SECONDS * Rate));
+    Audio := Copy(FPending, 0, Wanted);
   finally
     LeaveCriticalSection(FLock);
   end;
 end;
 
-function TStreamingDecoder.TakeSnapshot: TSingleArray;
-var
-  Rate, Wanted: Integer;
+function TStreamingDecoder.StillCurrent(Epoch: Int64): Boolean;
 begin
   EnterCriticalSection(FLock);
   try
-    Rate := FSourceRate;
-    { 解析にかけるのは先頭から最大 STREAM_MAX_SECONDS 分だけです。
-      Only the first STREAM_MAX_SECONDS of the buffer is analysed. }
-    Wanted := Min(FPendingCount, Round(STREAM_MAX_SECONDS * Rate));
-    Result := Copy(FPending, 0, Wanted);
+    Result := FEpoch = Epoch;
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -408,7 +464,7 @@ begin
         Only this analysis thread moves the front, so it cannot desync with
         the DropLeading that follows in the same Step. }
       FConfirmedSeconds := FConfirmedSeconds + Excess / FSourceRate;
-      Inc(FDroppedSamples, Excess);
+      FDroppedSeconds := FDroppedSeconds + Excess / FSourceRate;
       FProvisional := nil;
     end;
   finally
@@ -610,6 +666,7 @@ var
   Rate, SplitIndex, I, Count: Integer;
   AnalysisSeconds, SplitSeconds: Double;
   Forced: Boolean;
+  Epoch: Int64;
 begin
   Result := False;
   { まず溜め込みの上限を掛けます。入力が解析に追いつかないときは、ここで古い
@@ -623,8 +680,7 @@ begin
   { 時間の計算はすべて録音された周波数で行い、モデルへ渡す直前にだけ変換します。
     All timing is computed at the capture rate; conversion happens only just
     before the audio reaches the model. }
-  Rate := SourceRate;
-  Audio := TakeSnapshot;
+  BeginAnalysis(Audio, Rate, Epoch);
   if Length(Audio) = 0 then
     Exit;
 
@@ -673,6 +729,8 @@ begin
           advances by what went. }
         EnterCriticalSection(FLock);
         try
+          if FEpoch <> Epoch then
+            Exit;
           SetProvisional(Chars);
           FConfirmedSeconds := FConfirmedSeconds + SplitSeconds;
         finally
@@ -686,13 +744,21 @@ begin
     begin
       EnterCriticalSection(FLock);
       try
-        SetProvisional(Chars);
+        if FEpoch = Epoch then
+          SetProvisional(Chars);
       finally
         LeaveCriticalSection(FLock);
       end;
       Exit;
     end;
   end;
+
+  { 取り出してから解析を終えるまでに、バッファが捨てられていないか確かめます。
+    捨てられていれば、この結果は既に無い音声のものです。
+    Check that the buffer was not discarded between reading it and finishing the
+    analysis; if it was, this result describes audio that no longer exists. }
+  if not StillCurrent(Epoch) then
+    Exit;
 
   { 確定させる文字を取り出します。語間そのものは確定側の末尾に残します。
     Take the characters to commit, keeping the word space itself. }
@@ -710,6 +776,8 @@ begin
 
   EnterCriticalSection(FLock);
   try
+    if FEpoch <> Epoch then
+      Exit;
     AppendConfirmed(Committed);
     FProvisional := nil;
     FConfirmedSeconds := FConfirmedSeconds + SplitSeconds;
@@ -726,9 +794,9 @@ var
   Audio, Prepared: TSingleArray;
   Chars: TDecodedChars;
   Rate, I: Integer;
+  Epoch: Int64;
 begin
-  Rate := SourceRate;
-  Audio := TakeSnapshot;
+  BeginAnalysis(Audio, Rate, Epoch);
   if Length(Audio) = 0 then
     Exit;
   if SquelchClosed(Audio, Rate) then
@@ -745,6 +813,8 @@ begin
   end;
   EnterCriticalSection(FLock);
   try
+    if FEpoch <> Epoch then
+      Exit;
     AppendConfirmed(Chars);
     FProvisional := nil;
     FConfirmedSeconds := FConfirmedSeconds + Length(Audio) / Rate;

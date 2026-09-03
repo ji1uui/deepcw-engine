@@ -19,6 +19,7 @@ program gui_probe;
 uses
   SysUtils, DateUtils, Math, Classes, Interfaces, Forms, Controls, Graphics, LCLType,
   DeepCW.Types, DeepCW.Morse, DeepCW.Tuner, DeepCW.Decoder,
+  DeepCW.Review,
   WaterfallView, TranscriptView;
 
 type
@@ -39,10 +40,25 @@ type
     procedure Touch;
   end;
 
+  { 受信テキストの押下も、そのままでは外から呼べません。
+    The transcript's press handler is protected too. }
+  TProbeTranscript = class(TTranscriptView)
+  public
+    procedure Tap(X, Y: Integer);
+  end;
+
   { 同調の通知が届いたかを数えます。/ Counts the tuning notifications. }
   TWatcher = class
     Changes: Integer;
     procedure Changed(Sender: TObject);
+  end;
+
+  { どの文字が選ばれたかを控えます。/ Records which character was chosen. }
+  TChoiceWatcher = class
+    Chosen: Integer;
+    Count: Integer;
+    constructor Create;
+    procedure Choose(Sender: TObject; Index: Integer);
   end;
 
 procedure TProbeView.Tap(X: Integer; Button: TMouseButton);
@@ -63,6 +79,23 @@ end;
 procedure TProbeView.Touch;
 begin
   MarkImageStale;
+end;
+
+procedure TProbeTranscript.Tap(X, Y: Integer);
+begin
+  MouseDown(mbLeft, [], X, Y);
+end;
+
+constructor TChoiceWatcher.Create;
+begin
+  inherited Create;
+  Chosen := -1;
+end;
+
+procedure TChoiceWatcher.Choose(Sender: TObject; Index: Integer);
+begin
+  Chosen := Index;
+  Inc(Count);
 end;
 
 procedure TWatcher.Changed(Sender: TObject);
@@ -227,9 +260,14 @@ const
     At 22 WPM ten thousand characters is about forty minutes of solid copy and
     fifty thousand about three and a half hours. }
   SIZES: array[0..3] of Integer = (1000, 10000, 50000, 200000);
+  { 押す位置。先頭の行でも桁でもない、どこか中ほどを選びます。
+    The point pressed: somewhere in the middle rather than the first row or
+    column. }
+  REPLAY_PROBE_X = 120;
+  REPLAY_PROBE_Y = 40;
 var
   Form: TForm;
-  Transcript: TTranscriptView;
+  Transcript: TProbeTranscript;
   Chars: TDecodedChars;
   SetMs, PaintMs: Double;
   Repeats: Integer;
@@ -242,6 +280,12 @@ var
   Shot: TBitmap;
   Started: TDateTime;
   Elapsed: Double;
+  Choice: TChoiceWatcher;
+  History: TAudioHistory;
+  Picked: TDecodedChar;
+  Replay: TSingleArray;
+  GotFrom, GotTo: Double;
+  PickedIndex, PlayRate: Integer;
 
 begin
   OutDir := ParamStr(1);
@@ -407,7 +451,7 @@ begin
     it is used.** This is timed rather than assumed (requirement NFR-1.5). }
   WriteLn;
   WriteLn('受信テキストの検証 / transcript checks');
-  Transcript := TTranscriptView.Create(Form);
+  Transcript := TProbeTranscript.Create(Form);
   Transcript.Parent := Form;
   Transcript.Align := alClient;
   View.Visible := False;
@@ -445,6 +489,82 @@ begin
     Shot.Free;
   end;
 
+  { ── 受信テキストから音へ戻れること（要件 FR-E.10）──
+    押した場所と、鳴らす音の場所が一致していなければ、この機能は成り立たない。
+    **ずれていても音は鳴るので、動かして耳で聴くだけでは気づけない。**押下から
+    文字の番号を求め、その文字の時刻で保管庫を引き、返ってきた音が本当にその
+    時刻のものかを、値そのもので確かめる。
+
+    Getting from the transcript back to the sound (requirement FR-E.10).
+    The feature only works if the place pressed and the place played are the
+    same. **Sound comes out either way, so running it and listening does not
+    reveal a mismatch.** The index is taken from a press, the store is read at
+    that character's time, and the audio that comes back is checked by value. }
+  WriteLn;
+  WriteLn('聴き直しの検証 / replay checks');
+  Chars := BuildChars(400);
+  Transcript.SetChars(Chars);
+  Transcript.FollowTail := False;
+  Transcript.SelectedIndex := -1;
+  Choice := TChoiceWatcher.Create;
+  Transcript.OnCharChosen := @Choice.Choose;
+  Application.ProcessMessages;
+
+  { 文字の幅も行の高さも部品が決めるので、ここでは特定の桁を狙いません。ある
+    一点を押し、同じ一点を当て直して、押下と当てが同じ番号を指すことを見ます。
+    食い違えば、枠で囲まれる文字と鳴る音が別のものになります。
+    The character width and line height are the control's business, so no
+    particular column is aimed at. One point is pressed and the same point is
+    hit-tested: the press and the hit test must name the same character, or the
+    character boxed and the sound played would be different ones. }
+  Transcript.Tap(REPLAY_PROBE_X, REPLAY_PROBE_Y);
+  PickedIndex := Transcript.IndexAt(REPLAY_PROBE_X, REPLAY_PROBE_Y);
+  Check('押した位置の文字が選ばれる',
+    (Choice.Count = 1) and (Choice.Chosen = PickedIndex) and
+    (Transcript.SelectedIndex = PickedIndex),
+    Format('(通知 %d 回、選ばれた %d、当てた %d)',
+      [Choice.Count, Choice.Chosen, PickedIndex]));
+  Check('選ばれた文字を取り出せる',
+    Transcript.CharItem(PickedIndex, Picked), '(取り出せなかった)');
+
+  { 押した文字の時刻に、値がその時刻そのものである音を入れておく。取り出した
+    音の先頭が違う値なら、時刻の対応がずれている。
+    Audio whose value is its own time is stored, so a first sample that does not
+    match means the mapping from time to sound has slipped. }
+  History := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, Rate);
+  try
+    SetLength(Audio, Round(200 * Rate));
+    for X := 0 to High(Audio) do
+      Audio[X] := X / Rate;
+    History.Append(Audio, Rate);
+    if Transcript.CharItem(PickedIndex, Picked) then
+    begin
+      Replay := History.Extract(Picked.Seconds, Picked.EndSeconds,
+        GotFrom, GotTo, PlayRate);
+      Check('選んだ文字の時刻で音を引ける', Length(Replay) > 0, '(空で返った)');
+      Check('引いた音がその時刻のものである',
+        (Length(Replay) > 0) and
+        (Abs(Replay[0] - Picked.Seconds) < 2 / Rate),
+        Format('(%.4f を求めて %.4f が返った)',
+          [Picked.Seconds, Replay[0]]));
+      Check('引いた区間の申告が求めた区間と合う',
+        SameValue(GotFrom, Picked.Seconds, 1 / Rate) and
+        SameValue(GotTo, Picked.EndSeconds, 1 / Rate),
+        Format('(求め %.4f..%.4f / 返り %.4f..%.4f)',
+          [Picked.Seconds, Picked.EndSeconds, GotFrom, GotTo]));
+    end;
+    { 文字数が減る差し替えのあとも、範囲の外を指したままにしない。
+      A replacement with fewer characters must not leave the choice pointing
+      outside the array. }
+    Transcript.SetChars(BuildChars(10));
+    Check('文字が減ったら選び直しになる', Transcript.SelectedIndex < 0,
+      Format('(%d のままだった)', [Transcript.SelectedIndex]));
+  finally
+    History.Free;
+  end;
+  Choice.Free;
+  Transcript.OnCharChosen := nil;
+
   { ── 長時間使ったときにメモリが増え続けないこと ──
     常設シャックは何時間も動かしたままになる。**増え続けるなら、いつか止まる。**
     描画を繰り返して実メモリを測る（要件 NFR-4）。
@@ -480,14 +600,14 @@ begin
   finally
     Shot.Free;
   end;
-  WriteLn(Format('  500 回の描画: %d kB → %d kB（%+d kB）',
+  WriteLn(Format('  500 回の描画: %d kB → %d kB（差 %d kB）',
     [BeforeKb, AfterKb, AfterKb - BeforeKb]));
   { 500 回で 20 MB 増えるなら、毎秒 10 回の描画で 1 時間に 1.4 GB になる。
     Twenty megabytes over five hundred paints is 1.4 GB an hour at ten paints
     a second. }
   Check('描画を繰り返してもメモリが増え続けない',
     (BeforeKb = 0) or (AfterKb - BeforeKb < 20000),
-    Format('(%+d kB)', [AfterKb - BeforeKb]));
+    Format('(差 %d kB)', [AfterKb - BeforeKb]));
 
   Watcher.Free;
   Form.Free;

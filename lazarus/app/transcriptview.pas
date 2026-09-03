@@ -25,6 +25,11 @@ uses
   DeepCW.Types, DeepCW.Decoder;
 
 type
+  { 文字がひとつ選ばれたことを知らせます。番号は文字配列上の位置です。
+    Reports that one character was chosen; the index is into the character
+    array. }
+  TCharChosenEvent = procedure(Sender: TObject; Index: Integer) of object;
+
   { 折り返し後の 1 行が占める、文字配列上の範囲です。
     The range of the character array occupied by one wrapped line. }
   TTranscriptLine = record
@@ -49,6 +54,13 @@ type
     FDoubtStrength: Single;
     FFollowTail: Boolean;
     FPendingFrom: Integer;
+    { 選ばれている文字。-1 なら選ばれていません。聴き直しの起点になります
+      （要件 FR-E.10）。
+      The chosen character, or -1 for none; it is where a replay starts
+      (requirement FR-E.10). }
+    FSelected: Integer;
+    FOnCharChosen: TCharChosenEvent;
+    procedure SetSelected(Value: Integer);
     function VisibleLines: Integer;
     procedure MeasureFont;
     procedure Relayout;
@@ -66,6 +78,8 @@ type
     function DoMouseWheel(Shift: TShiftState; WheelDelta: Integer;
       MousePos: TPoint): Boolean; override;
     procedure KeyDown(var Key: Word; Shift: TShiftState); override;
+    procedure MouseDown(Button: TMouseButton; Shift: TShiftState;
+      X, Y: Integer); override;
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -84,6 +98,29 @@ type
     { 表示中のテキスト全体。コピー用です。/ The whole text, for copying. }
     function AsText: string;
     function CharCount: Integer;
+
+    { 画面上の点にある文字の番号。無ければ -1 を返します。行末より右を指した
+      ときは、その行の最後の文字を返します。押した位置がわずかに外れただけで
+      「何も選べない」となるより、そのほうが操作として素直です。
+
+      The index of the character at a point, or -1. A point past the end of a
+      line gives that line's last character: it reads better than refusing to
+      select because the press landed slightly wide. }
+    function IndexAt(X, Y: Integer): Integer;
+
+    { 番号で文字を取り出します。範囲外なら False を返します。
+      Fetches one character by index, returning False when out of range. }
+    function CharItem(Index: Integer; out Value: TDecodedChar): Boolean;
+
+    { 選ばれている文字を、画面に見えるところまで送ります。
+      Scrolls the chosen character into view. }
+    procedure ScrollToSelected;
+
+    { 選ばれている文字。設定すると、その文字が枠で囲まれます。
+      The chosen character; setting it draws a box around that character. }
+    property SelectedIndex: Integer read FSelected write SetSelected;
+    property OnCharChosen: TCharChosenEvent read FOnCharChosen
+      write FOnCharChosen;
 
     { 確からしさの濃淡を表示するか。/ Whether to shade by certainty. }
     property ShowDoubt: Boolean read FShowDoubt write SetShowDoubt;
@@ -131,6 +168,7 @@ begin
   FDoubtStrength := 1.0;
   FFollowTail := True;
   FPendingFrom := MaxInt;
+  FSelected := -1;
 
   FMeasure := TBitmap.Create;
   FMeasure.SetSize(1, 1);
@@ -294,6 +332,12 @@ end;
 procedure TTranscriptView.SetChars(const Value: TDecodedChars);
 begin
   FChars := Value;
+  { 差し替えで文字数が減ったら、選び直しになります。範囲の外を指したまま
+    にすると、聴き直しが別の場所を鳴らします。
+    A replacement with fewer characters invalidates the choice; leaving it
+    pointing outside the array would replay the wrong place. }
+  if FSelected >= Length(FChars) then
+    FSelected := -1;
   Relayout;
   Invalidate;
 end;
@@ -304,6 +348,7 @@ begin
   FPendingFrom := MaxInt;
   FFollowTail := True;
   FTopLine := 0;
+  FSelected := -1;
   Relayout;
   Invalidate;
 end;
@@ -331,6 +376,84 @@ begin
   Result := BlendColor(Color, Font.Color, Strength);
 end;
 
+procedure TTranscriptView.SetSelected(Value: Integer);
+begin
+  if (Value < 0) or (Value >= Length(FChars)) then
+    Value := -1;
+  if Value = FSelected then
+    Exit;
+  FSelected := Value;
+  Invalidate;
+end;
+
+function TTranscriptView.IndexAt(X, Y: Integer): Integer;
+var
+  Row, LineIndex, Column: Integer;
+begin
+  Result := -1;
+  if (Length(FLines) = 0) or (FLineHeight <= 0) or (FCharWidth <= 0) then
+    Exit;
+  Row := (Y - 1) div FLineHeight;
+  if Row < 0 then
+    Exit;
+  LineIndex := FTopLine + Row;
+  if (LineIndex < 0) or (LineIndex >= Length(FLines)) then
+    Exit;
+  Column := (X - 4) div FCharWidth;
+  if Column < 0 then
+    Column := 0;
+  Result := FLines[LineIndex].First + Column;
+  if Result > FLines[LineIndex].Last then
+    Result := FLines[LineIndex].Last;
+end;
+
+function TTranscriptView.CharItem(Index: Integer; out Value: TDecodedChar): Boolean;
+begin
+  Result := (Index >= 0) and (Index < Length(FChars));
+  if Result then
+    Value := FChars[Index];
+end;
+
+procedure TTranscriptView.ScrollToSelected;
+var
+  LineIndex: Integer;
+begin
+  if FSelected < 0 then
+    Exit;
+  for LineIndex := 0 to High(FLines) do
+    if (FSelected >= FLines[LineIndex].First) and
+       (FSelected <= FLines[LineIndex].Last) then
+    begin
+      if LineIndex < FTopLine then
+        SetTopLine(LineIndex)
+      else if LineIndex >= FTopLine + VisibleLines then
+        SetTopLine(LineIndex - VisibleLines + 1);
+      Exit;
+    end;
+end;
+
+procedure TTranscriptView.MouseDown(Button: TMouseButton; Shift: TShiftState;
+  X, Y: Integer);
+var
+  Index: Integer;
+begin
+  inherited MouseDown(Button, Shift, X, Y);
+  if Button <> mbLeft then
+    Exit;
+  if CanFocus then
+    SetFocus;
+  Index := IndexAt(X, Y);
+  if Index < 0 then
+    Exit;
+  SetSelected(Index);
+  { 選ぶことと、選んだ結果どうするかは分けます。ここは選ばれたことだけを
+    知らせ、音を鳴らすかどうかはフォームが決めます。
+    Choosing and acting on the choice are kept apart: this only reports the
+    choice and the form decides whether to play anything. }
+  if Assigned(FOnCharChosen) then
+    FOnCharChosen(Self, Index);
+end;
+
 procedure TTranscriptView.Paint;
 var
   LineIndex, Index, Row, X, Y: Integer;
@@ -351,9 +474,19 @@ begin
     Y := Row * FLineHeight + 1;
     for Index := FLines[LineIndex].First to FLines[LineIndex].Last do
     begin
+      X := (Index - FLines[LineIndex].First) * FCharWidth + 4;
+      { 選ばれた文字には枠を描きます。塗り潰すと、濃淡で示している確からしさ
+        （要件 FR-B.4）が読めなくなるためです。
+        The chosen character is boxed rather than filled: filling would hide
+        the shading that carries certainty (requirement FR-B.4). }
+      if Index = FSelected then
+      begin
+        Canvas.Pen.Color := clHighlight;
+        Canvas.Brush.Style := bsClear;
+        Canvas.Rectangle(X - 1, Y - 1, X + FCharWidth + 1, Y + FLineHeight);
+      end;
       if FChars[Index].Text <> ' ' then
       begin
-        X := (Index - FLines[LineIndex].First) * FCharWidth + 4;
         Canvas.Font.Color := ShadeFor(Index);
         Canvas.TextOut(X, Y, FChars[Index].Text);
       end;
