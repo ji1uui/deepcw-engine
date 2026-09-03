@@ -14,6 +14,7 @@ lazarus/
          cw_stream       - feed a WAV in chunks, watch confirmed text grow
          cw_tune         - measure the tuning path: pitch, translation, bandwidth
          cw_devices      - list input devices and check the PortAudio ABI
+         dsp_check       - verify the DSP and tuning numerics without the model
     tools/  make_bundle.sh - assemble a distribution that needs no installs
 ```
 
@@ -146,6 +147,17 @@ xvfb-run -a ./app/gui_probe /tmp
 
 It creates the control for real, feeds it two signals, applies clicks, wheel
 events and key presses, and writes the painted result out as PNG files.
+
+Check the DSP and tuning numerics directly — resampling, the frequency
+shift, the wide-spectrogram slice that FR-I rests on, signal tracking, and the
+band-pass — against known inputs, without the model:
+
+```bash
+./cli/dsp_check
+```
+
+The decode tests pass as long as characters come out, even when a
+pre-processing number is subtly wrong; this checks the numbers themselves.
 
 Check that buffering stops growing when analysis cannot keep up — a slow
 machine, a device faster than real time, or an empty frequency where not one

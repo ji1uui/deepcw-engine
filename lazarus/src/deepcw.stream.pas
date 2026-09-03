@@ -137,6 +137,12 @@ type
     function DropLeadArtifacts(const Chars: TDecodedChars): TDecodedChars;
     procedure SetProvisional(const Chars: TDecodedChars);
     procedure DropLeading(Samples: Integer);
+    { 溜め込みの上限を掛けます。Step の先頭から、すなわち解析スレッドから
+      呼びます。入力が解析に追いつかないとき、古いほうから捨てて上限に収めます。
+      Applies the buffer cap. Called at the start of Step, i.e. from the
+      analysis thread. When input outruns analysis, the oldest is discarded to
+      stay within the limit. }
+    procedure CapBuffer;
     { 解析にかけるだけの音量があるか。無ければ、溜めた分を捨てて時刻を進めます。
       Whether there is enough level to analyse; if not, the buffer is dropped
       and the time base advanced past it. }
@@ -257,7 +263,7 @@ end;
 
 procedure TStreamingDecoder.Append(const Samples: TSingleArray; SampleRate: Integer);
 var
-  I, Needed, Limit, Excess: Integer;
+  I, Needed: Integer;
 begin
   if (Length(Samples) = 0) or (SampleRate <= 0) then
     Exit;
@@ -279,21 +285,17 @@ begin
       FPending[FPendingCount + I] := Samples[I];
     Inc(FPendingCount, Length(Samples));
 
-    { 上限を超えたら古いほうから捨てます。捨てた分だけ時刻を進めるので、
-      以後の文字の時刻はずれません。
-      Past the limit the oldest is discarded, and the time base advances by
-      what went, so later characters are still timed correctly. }
-    Limit := Round(STREAM_MAX_BUFFER_SECONDS * FSourceRate);
-    if FPendingCount > Limit then
-    begin
-      Excess := FPendingCount - Limit;
-      for I := 0 to Limit - 1 do
-        FPending[I] := FPending[I + Excess];
-      FPendingCount := Limit;
-      FConfirmedSeconds := FConfirmedSeconds + Excess / FSourceRate;
-      Inc(FDroppedSamples, Excess);
-      FProvisional := nil;
-    end;
+    { **ここでは捨てません。**溜め込みの上限は Step（別スレッド）の先頭で掛けます。
+      Append は主スレッドから、Step は解析スレッドから呼ばれます。両方が
+      バッファの先頭を動かすと、解析中に先頭がずれて時刻と取りこぼしの帳簿が
+      狂います。先頭を動かすのは解析スレッドだけ、と決めることで競合を断ちます
+      （付録 K）。
+
+      **Nothing is discarded here.** The buffer cap is applied at the start of
+      Step, which runs on the analysis thread; Append runs on the main thread.
+      If both moved the front, a front shift during analysis would desync the
+      timing and the dropped-audio accounting. Making the analysis thread the
+      only mutator of the front removes the race (appendix K). }
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -387,6 +389,33 @@ begin
   end;
 end;
 
+procedure TStreamingDecoder.CapBuffer;
+var
+  Limit, Excess, I: Integer;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Limit := Round(STREAM_MAX_BUFFER_SECONDS * FSourceRate);
+    if FPendingCount > Limit then
+    begin
+      Excess := FPendingCount - Limit;
+      for I := 0 to Limit - 1 do
+        FPending[I] := FPending[I + Excess];
+      FPendingCount := Limit;
+      { 捨てた分だけ時刻を進め、取りこぼしとして数えます。先頭を動かすのは
+        この解析スレッドだけなので、以後の DropLeading と食い違いません。
+        Advance the time base by what went and count it as a genuine loss.
+        Only this analysis thread moves the front, so it cannot desync with
+        the DropLeading that follows in the same Step. }
+      FConfirmedSeconds := FConfirmedSeconds + Excess / FSourceRate;
+      Inc(FDroppedSamples, Excess);
+      FProvisional := nil;
+    end;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
 procedure TStreamingDecoder.DropLeading(Samples: Integer);
 var
   I: Integer;
@@ -403,7 +432,17 @@ begin
         FPending[I] := FPending[I + Samples];
       Dec(FPendingCount, Samples);
     end;
-    Inc(FDroppedSamples, Samples);
+    { ここでは捨てた量を数えません。DropLeading は確定した音声・無音・受信終了の
+      後始末として日常的に呼ばれます。これを「取りこぼし」に数えると、正常な
+      受信でも確定した長さぶんだけ「追いつけずに捨てた」と申告してしまいます。
+      取りこぼしとして数えるのは、入力が解析に追いつかずに Append の上限で
+      あふれた分だけです（要件 NFR-4.6）。
+
+      Dropped audio is not counted here. DropLeading is called routinely to
+      tidy up after confirmed audio, silence and end of reception; counting it
+      would make a normal reception report the whole confirmed length as
+      "dropped through falling behind". Only the overflow at Append's cap,
+      where input outran analysis, is a genuine loss (requirement NFR-4.6). }
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -573,6 +612,14 @@ var
   Forced: Boolean;
 begin
   Result := False;
+  { まず溜め込みの上限を掛けます。入力が解析に追いつかないときは、ここで古い
+    ほうから捨てて上限に収めます。先頭を動かすのは Step だけなので、以後の
+    処理と帳簿が食い違いません（付録 K）。
+    Apply the buffer cap first: when input outruns analysis, the oldest audio
+    is discarded here. Only Step moves the front, so nothing downstream
+    desyncs (appendix K). }
+  CapBuffer;
+
   { 時間の計算はすべて録音された周波数で行い、モデルへ渡す直前にだけ変換します。
     All timing is computed at the capture rate; conversion happens only just
     before the audio reaches the model. }

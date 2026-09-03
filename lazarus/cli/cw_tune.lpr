@@ -42,7 +42,7 @@ var
   ModelPath: string = '';
   MetadataPath: string = '';
   RuntimePath: string = '';
-  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,overload,track,wide';
+  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,correctness,overload,track,wide';
   { 合成に加える白色雑音の大きさ。差が出る水準を選びます。
     White noise level for the synthesis, picked so differences show. }
   Noise: Double = 0.30;
@@ -1071,30 +1071,37 @@ begin
   WriteLn;
   WriteLn('overload: 追いつけないときに溜め込みが止まるか / buffering under overload');
 
-  { [1] 一度も解析せずに流し込み続ける。装置が実時間より速く音を返す場合や、
-        機械が遅すぎて解析が回らない場合にあたる。
-        [1] Feeding without ever analysing: a device faster than real time, or
-        a machine too slow to run the analysis at all. }
+  { [1] 解析が回る前に上限を超える量が溜まった場合。装置が実時間より速く音を
+        返す、または Step が呼ばれる間隔が空きすぎた状況にあたる。上限を超えた
+        分は、一度も解析されずに失われる本物の取りこぼしなので、捨てた量として
+        申告されなければならない。
+
+        [1] More than the cap accumulates before a Step runs — a device faster
+        than real time, or too long between Steps. The excess is audio lost
+        without ever being analysed, a genuine loss, so it must be reported as
+        dropped. }
   Stream := TStreamingDecoder.Create(Decoder);
   try
+    Stream.SquelchLevel := 0;
     RandSeed := 909;
-    SetLength(Block, RATE);
+    SetLength(Block, Round(STREAM_MAX_BUFFER_SECONDS * RATE) + 12 * RATE);
     for I := 0 to High(Block) do
-      Block[I] := 0.05 * (Random + Random - 1);
-    for I := 1 to FLOOD_SECONDS do
-      Stream.Append(Block, RATE);
-    WriteLn(Format('  [1] %d 秒を解析せずに投入 → 保持 %.1f 秒 / 捨てた %.1f 秒',
-      [FLOOD_SECONDS, Stream.PendingSeconds, Stream.DroppedSeconds]));
-    Assert(Stream.PendingSeconds <= STREAM_MAX_BUFFER_SECONDS + 1,
-      'the buffer grew past its limit');
+      Block[I] := 0.3 * (Random + Random - 1);
+    Stream.Append(Block, RATE);
+    Peak := Stream.PendingSeconds;
+    Stream.Step;
+    WriteLn(Format('  [1] 上限＋12 秒を一度に投入 → Step 前 %.1f 秒、Step 後の保持 %.1f 秒 / 捨てた %.1f 秒',
+      [Peak, Stream.PendingSeconds, Stream.DroppedSeconds]));
     if Stream.PendingSeconds <= STREAM_MAX_BUFFER_SECONDS + 1 then
       WriteLn('       ok   上限で止まる')
     else
-      WriteLn('       NG   上限を超えた');
-    if Stream.DroppedSeconds > 0 then
-      WriteLn('       ok   捨てたことを報告する')
+      WriteLn(Format('       NG   上限を超えた（%.1f 秒）', [Stream.PendingSeconds]));
+    { 12 秒を超えた分が捨てられているはず。丸めの余裕を見て 10 秒以上。
+      The 12 seconds of excess should be dropped; allow for rounding at 10+. }
+    if Stream.DroppedSeconds >= 10 then
+      WriteLn(Format('       ok   捨てた量を正しく申告する（%.1f 秒）', [Stream.DroppedSeconds]))
     else
-      WriteLn('       NG   捨てたのに報告しない');
+      WriteLn(Format('       NG   捨てた量の申告が足りない（%.1f 秒）', [Stream.DroppedSeconds]));
   finally
     Stream.Free;
   end;
@@ -1132,6 +1139,137 @@ begin
   finally
     Stream.Free;
   end;
+end;
+
+{ 流し込み受信の帳尻が合っているかを確かめます。
+
+  状態を持つ機械は、動くように見えても帳簿が狂っていることがある。**狂っていても
+  文字は出るので、復号の試験では見つからない。**捨てた量の申告、受信を止めた
+  ときの取りこぼし、時刻の連続性を、それぞれ直接調べる。
+
+  Checks that the streaming decoder's books balance.
+
+  A stateful machine can look right while its accounting is wrong, and **since
+  characters still come out, the decode tests do not catch it.** What is
+  reported as dropped, what is lost when reception stops, and whether times
+  stay continuous are each examined directly. }
+procedure RunCorrectness;
+const
+  RATE = 8000;
+  SLICE_SECONDS = 0.5;
+var
+  Stream: TStreamingDecoder;
+  Audio, Piece, Tail: TSingleArray;
+  Reference, Got: string;
+  I, Position, Taken, Failures, Backwards: Integer;
+  Times: TDecodedChars;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
+  procedure FeedAll;
+  begin
+    Position := 0;
+    while Position < Length(Audio) do
+    begin
+      Taken := Min(Round(SLICE_SECONDS * RATE), Length(Audio) - Position);
+      Stream.Append(Copy(Audio, Position, Taken), RATE);
+      Inc(Position, Taken);
+      if Stream.Ready then
+        Stream.Step;
+    end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('correctness: 流し込み受信の帳尻 / the streaming decoder books');
+  Failures := 0;
+  Reference := NormalizeText(MESSAGES[1]);
+
+  { [1] 正常に受信しただけで「捨てた」と申告しないこと。捨てた量は診断画面に
+        出るので、嘘をつけば利用者を惑わせる。
+        [1] A normal reception must not report having dropped anything; the
+        figure is shown in the diagnostics, so a false one misleads. }
+  Stream := TStreamingDecoder.Create(Decoder);
+  try
+    Audio := Synthesise(Reference, RATE, TUNER_TARGET_TONE_HZ, Noise, 6100);
+    FeedAll;
+    Stream.Finish;
+    Verdict('正常な受信で「捨てた」と申告しない', Stream.DroppedSeconds = 0,
+      Format('(%.1f 秒と申告した)', [Stream.DroppedSeconds]));
+  finally
+    Stream.Free;
+  end;
+
+  { [2] 受信を止めたときに、残っていた暫定部分が確定へ移ること。交信の最後は
+        たいてい無音で終わるので、そこで取りこぼすと最後の語が失われる。
+        [2] Stopping reception must move what is provisional into the confirmed
+        text. A contact usually ends in silence, so losing it there loses the
+        last word. }
+  Stream := TStreamingDecoder.Create(Decoder);
+  try
+    Audio := Synthesise(Reference, RATE, TUNER_TARGET_TONE_HZ, 0, 6101);
+    SetLength(Tail, Round(3 * RATE));
+    for I := 0 to High(Tail) do
+      Tail[I] := 0;
+    SetLength(Piece, Length(Audio) + Length(Tail));
+    for I := 0 to High(Audio) do
+      Piece[I] := Audio[I];
+    for I := 0 to High(Tail) do
+      Piece[Length(Audio) + I] := Tail[I];
+    Audio := Piece;
+    FeedAll;
+    Stream.Finish;
+    Got := Trim(DecodedText(Stream.ConfirmedChars));
+    Verdict('受信を止めたら暫定部分が確定へ移る', Got = Reference,
+      Format('(確定: "%s")', [Got]));
+    Verdict('止めたあとに暫定部分が残っていない',
+      Length(Stream.ProvisionalChars) = 0,
+      Format('(%d 文字残った)', [Length(Stream.ProvisionalChars)]));
+  finally
+    Stream.Free;
+  end;
+
+  { [3] 文字の時刻が単調で、無音を挟んでも巻き戻らないこと。巻き戻ると、
+        ウォーターフォールとの整列（FR-D.6）も遅延の測定も崩れる。
+        [3] Character times must not run backwards across silence; times that
+        go back break waterfall alignment (FR-D.6) and latency measurement. }
+  Stream := TStreamingDecoder.Create(Decoder);
+  try
+    SetLength(Piece, Round(6 * RATE));
+    for I := 0 to High(Piece) do
+      Piece[I] := 0;
+    Stream.Append(Piece, RATE);
+    Stream.Step;
+    Audio := Synthesise(Reference, RATE, TUNER_TARGET_TONE_HZ, 0, 6102);
+    FeedAll;
+    Stream.Finish;
+    Times := Stream.ConfirmedChars;
+    Backwards := 0;
+    for I := 1 to High(Times) do
+      if Times[I].Seconds < Times[I - 1].Seconds - 0.001 then
+        Inc(Backwards);
+    Verdict('文字の時刻が巻き戻らない', Backwards = 0,
+      Format('(%d 箇所で巻き戻った)', [Backwards]));
+    Verdict('無音を挟んでも本文が読める',
+      Trim(DecodedText(Times)) = Reference,
+      Format('(確定: "%s")', [Trim(DecodedText(Times))]));
+  finally
+    Stream.Free;
+  end;
+
+  if Failures = 0 then
+    WriteLn('  すべて通った')
+  else
+    WriteLn(Format('  %d 件が通らなかった', [Failures]));
 end;
 
 var
@@ -1195,6 +1333,8 @@ begin
       RunShape;
     if Pos('callsign', Tests) > 0 then
       RunCallsign;
+    if Pos('correctness', Tests) > 0 then
+      RunCorrectness;
     if Pos('overload', Tests) > 0 then
       RunOverload;
     if Pos('track', Tests) > 0 then

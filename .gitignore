@@ -49,6 +49,7 @@ lazarus/cli/cw_loopback
 lazarus/cli/cw_stream
 lazarus/cli/cw_tune
 lazarus/cli/cw_devices
+lazarus/cli/dsp_check
 lazarus/app/gui_probe
 lazarus/dist/
 
