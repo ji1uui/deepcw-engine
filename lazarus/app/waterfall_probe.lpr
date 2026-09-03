@@ -17,7 +17,7 @@ program waterfall_probe;
 {$mode objfpc}{$H+}
 
 uses
-  SysUtils, Math, Classes, Interfaces, Forms, Controls, Graphics, LCLType,
+  SysUtils, DateUtils, Math, Classes, Interfaces, Forms, Controls, Graphics, LCLType,
   DeepCW.Types, DeepCW.Morse, DeepCW.Tuner, WaterfallView;
 
 type
@@ -31,6 +31,11 @@ type
     procedure Tap(X: Integer; Button: TMouseButton);
     procedure Wheel(Delta: Integer);
     procedure Press(AKey: Word);
+    { 描画のたびに画像を作り直させます。実際に新しい行が来たときと同じ費用に
+      なります。
+      Forces the image to be rebuilt on every paint, matching what a newly
+      arrived row costs. }
+    procedure Touch;
   end;
 
   { 同調の通知が届いたかを数えます。/ Counts the tuning notifications. }
@@ -52,6 +57,11 @@ end;
 procedure TProbeView.Press(AKey: Word);
 begin
   KeyDown(AKey, []);
+end;
+
+procedure TProbeView.Touch;
+begin
+  MarkImageStale;
 end;
 
 procedure TWatcher.Changed(Sender: TObject);
@@ -130,8 +140,11 @@ var
   View: TProbeView;
   Watcher: TWatcher;
   Audio: TSingleArray;
-  Rate, X: Integer;
+  Rate, X, Frame: Integer;
   OutDir: string;
+  Shot: TBitmap;
+  Started: TDateTime;
+  Elapsed: Double;
 
 begin
   OutDir := ParamStr(1);
@@ -219,6 +232,34 @@ begin
   View.Clear;
   Application.ProcessMessages;
   Check('クリアしても描画できる', True);
+
+  { 描画の費用を測ります。BGRABitmap のような描画ライブラリを持ち込むかどうかは、
+    ここが遅いかどうかで決まります。標準の LCL で足りているなら、配布物を増やす
+    理由がありません（要件 NFR-1.5、NFR-8）。
+
+    Measures what drawing costs. Whether to bring in a drawing library such as
+    BGRABitmap turns on whether this is slow; if the plain LCL suffices there
+    is no reason to add to what has to be distributed
+    (requirements NFR-1.5, NFR-8). }
+  View.PushSamples(TestAudio(8000), 8000);
+  Application.ProcessMessages;
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(View.Width, View.Height);
+    Started := Now;
+    for Frame := 1 to 100 do
+    begin
+      View.Touch;
+      View.PaintTo(Shot.Canvas, 0, 0);
+    end;
+    Elapsed := MilliSecondsBetween(Now, Started) / 100;
+  finally
+    Shot.Free;
+  end;
+  WriteLn(Format('  1 回の描画: %.2f ms（毎秒 25 行の更新で %.1f %%）',
+    [Elapsed, Elapsed * 25 / 10]));
+  Check('描画が 1 行あたり 5 ms 未満', Elapsed < 5.0,
+    Format('(%.2f ms)', [Elapsed]));
 
   Watcher.Free;
   Form.Free;

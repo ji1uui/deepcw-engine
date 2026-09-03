@@ -27,7 +27,7 @@ unit FrmMain;
 interface
 
 uses
-  SysUtils, Classes, Math, DateUtils, IniFiles, Clipbrd, FPimage, IntfGraphics, GraphType,
+  SysUtils, Classes, Math, DateUtils, IniFiles, Clipbrd,
   Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls, Spin,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,

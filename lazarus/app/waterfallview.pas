@@ -119,6 +119,10 @@ type
     procedure SetTuneHz(Value: Double);
     procedure SetHalfWidthHz(Value: Double);
   protected
+    { 次の描画で画像を作り直させます。検証用の測定から呼びます。
+      Forces the image to be rebuilt on the next paint; called from the
+      verification harness. }
+    procedure MarkImageStale;
     procedure Paint; override;
     procedure MouseDown(Button: TMouseButton; Shift: TShiftState;
       X, Y: Integer); override;
@@ -394,6 +398,11 @@ begin
     Exit;
   FBitmap.LoadFromIntfImage(FImage);
   FImageStale := False;
+end;
+
+procedure TWaterfallView.MarkImageStale;
+begin
+  FImageStale := True;
 end;
 
 procedure TWaterfallView.Paint;
