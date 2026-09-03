@@ -81,12 +81,6 @@ type
 
     Peak magnitude of the newest Seconds worth of audio, for a level meter. }
     function PeakLevel(SampleRate: Integer; Seconds: Double): Single;
-    { これまでに書き込まれたサンプルの総数です。GUI が新しい音声の到着を知る
-    ために参照します。
-
-    Total samples ever pushed; the GUI uses it to notice new audio. }
-    function TotalWritten: Int64;
-
     { Position 以降に書き込まれた分を取り出し、Position を進めます。読み出しが
       間に合わずリングを一周した場合は、取り出せる最も古い位置まで切り上げ、
       False を返して取りこぼしを知らせます。
@@ -776,16 +770,6 @@ begin
     for I := 0 to Count - 1 do
       Data[I] := FData[(Start + I) mod FCapacity];
     Position := FTotal;
-  finally
-    LeaveCriticalSection(FLock);
-  end;
-end;
-
-function TAudioRing.TotalWritten: Int64;
-begin
-  EnterCriticalSection(FLock);
-  try
-    Result := FTotal;
   finally
     LeaveCriticalSection(FLock);
   end;

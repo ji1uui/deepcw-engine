@@ -34,8 +34,13 @@
     </RequiredPackages>
     <Units>
       <Unit>
-        <Filename Value="waterfall_probe.lpr"/>
+        <Filename Value="gui_probe.lpr"/>
         <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
+        <Filename Value="transcriptview.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="TranscriptView"/>
       </Unit>
       <Unit>
         <Filename Value="waterfallview.pas"/>
@@ -97,7 +102,7 @@
   <CompilerOptions>
     <Version Value="11"/>
     <Target>
-      <Filename Value="waterfall_probe"/>
+      <Filename Value="gui_probe"/>
     </Target>
     <SearchPaths>
       <IncludeFiles Value="$(ProjOutDir)"/>

@@ -56,13 +56,6 @@ function DefaultToneOptions: TCWToneOptions;
   True when the character has a Morse representation in this unit. }
 function IsSendable(Ch: Char): Boolean;
 
-{ DeepCW モデルが出力しうる文字、すなわちモデルの文字集合に含まれる文字で
-  あれば True を返します。送信はできても復号できない文字も送信自体は行います。
-
-  True when the DeepCW model can emit the character, i.e. it is in the model
-  alphabet. Sendable-but-undecodable characters are still transmitted. }
-function IsDecodable(Ch: Char): Boolean;
-
 { 1 文字分の '.-' 形式の符号を返します。定義が無い場合は空文字を返します。
 
   '.-' style code for one character, or '' when it has no representation. }
@@ -157,16 +150,6 @@ end;
 function IsSendable(Ch: Char): Boolean;
 begin
   Result := (Ch = ' ') or (MorseForChar(Ch) <> '');
-end;
-
-function IsDecodable(Ch: Char): Boolean;
-begin
-  { 書き出された文字集合は A-Z、0-9、コンマ、ピリオド、スラッシュ、疑問符、
-    空白です。したがって本ユニットが送出できる文字はすべて復号できます。
-
-    The exported alphabet is A-Z, 0-9, comma, full stop, slash, question mark
-    and space, so every character this unit can key is also decodable. }
-  Result := IsSendable(Ch);
 end;
 
 function TextToMorseCode(const Text: string): string;

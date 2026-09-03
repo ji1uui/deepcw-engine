@@ -42,7 +42,7 @@ var
   ModelPath: string = '';
   MetadataPath: string = '';
   RuntimePath: string = '';
-  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,track,wide';
+  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,overload,track,wide';
   { 合成に加える白色雑音の大きさ。差が出る水準を選びます。
     White noise level for the synthesis, picked so differences show. }
   Noise: Double = 0.30;
@@ -1044,6 +1044,96 @@ begin
   end;
 end;
 
+{ 解析が入力に追いつかないときに、溜め込みが止まることを確かめます。
+
+  常設シャックは何時間も動かしたままになる。**入ってくる速さが解析の速さを
+  上回る状況は必ず起きる。**遅い機械、実時間より速く音を返す装置、そして
+  信号の無い周波数で文字が 1 つも出ない状態である。上限が無ければ、その間ずっと
+  バッファが伸び続け、いずれメモリを使い尽くす（要件 NFR-4）。
+
+  Checks that buffering stops growing when analysis cannot keep up.
+
+  A shack leaves this running for hours, and audio **will** arrive faster than
+  it can be analysed: a slow machine, a device that returns audio faster than
+  real time, or an empty frequency where not one character comes out. Without a
+  limit the buffer grows until memory runs out (requirement NFR-4). }
+procedure RunOverload;
+const
+  RATE = 8000;
+  FLOOD_SECONDS = 600;
+  QUIET_SECONDS = 180;
+var
+  Stream: TStreamingDecoder;
+  Block: TSingleArray;
+  I, Steps: Integer;
+  Peak: Double;
+begin
+  WriteLn;
+  WriteLn('overload: 追いつけないときに溜め込みが止まるか / buffering under overload');
+
+  { [1] 一度も解析せずに流し込み続ける。装置が実時間より速く音を返す場合や、
+        機械が遅すぎて解析が回らない場合にあたる。
+        [1] Feeding without ever analysing: a device faster than real time, or
+        a machine too slow to run the analysis at all. }
+  Stream := TStreamingDecoder.Create(Decoder);
+  try
+    RandSeed := 909;
+    SetLength(Block, RATE);
+    for I := 0 to High(Block) do
+      Block[I] := 0.05 * (Random + Random - 1);
+    for I := 1 to FLOOD_SECONDS do
+      Stream.Append(Block, RATE);
+    WriteLn(Format('  [1] %d 秒を解析せずに投入 → 保持 %.1f 秒 / 捨てた %.1f 秒',
+      [FLOOD_SECONDS, Stream.PendingSeconds, Stream.DroppedSeconds]));
+    Assert(Stream.PendingSeconds <= STREAM_MAX_BUFFER_SECONDS + 1,
+      'the buffer grew past its limit');
+    if Stream.PendingSeconds <= STREAM_MAX_BUFFER_SECONDS + 1 then
+      WriteLn('       ok   上限で止まる')
+    else
+      WriteLn('       NG   上限を超えた');
+    if Stream.DroppedSeconds > 0 then
+      WriteLn('       ok   捨てたことを報告する')
+    else
+      WriteLn('       NG   捨てたのに報告しない');
+  finally
+    Stream.Free;
+  end;
+
+  { [2] 文字が 1 つも出ない音を、解析しながら流し込み続ける。信号の無い周波数を
+        聞いている状態である。スケルチが開く程度の大きさにしてある。
+        [2] Audio that yields no characters at all, analysed as it goes: what
+        listening to an empty frequency looks like. Loud enough that the
+        squelch stays open. }
+  Stream := TStreamingDecoder.Create(Decoder);
+  try
+    RandSeed := 910;
+    SetLength(Block, RATE div 2);
+    for I := 0 to High(Block) do
+      Block[I] := 0.05 * (Random + Random - 1);
+    Steps := 0;
+    Peak := 0;
+    for I := 1 to QUIET_SECONDS * 2 do
+    begin
+      Stream.Append(Block, RATE);
+      if Stream.Ready then
+      begin
+        Stream.Step;
+        Inc(Steps);
+      end;
+      if Stream.PendingSeconds > Peak then
+        Peak := Stream.PendingSeconds;
+    end;
+    WriteLn(Format('  [2] 文字の出ない音 %d 秒を解析しながら投入 → 保持の最大 %.1f 秒（解析 %d 回、確定 %d 文字）',
+      [QUIET_SECONDS, Peak, Steps, Length(Stream.ConfirmedChars)]));
+    if Peak <= STREAM_MAX_SECONDS + 1 then
+      WriteLn('       ok   解析の上限を超えて溜め込まない')
+    else
+      WriteLn('       NG   溜め込みが止まらない');
+  finally
+    Stream.Free;
+  end;
+end;
+
 var
   Index: Integer;
   Key, Value: string;
@@ -1105,6 +1195,8 @@ begin
       RunShape;
     if Pos('callsign', Tests) > 0 then
       RunCallsign;
+    if Pos('overload', Tests) > 0 then
+      RunOverload;
     if Pos('track', Tests) > 0 then
       RunTrack;
     if Pos('wide', Tests) > 0 then

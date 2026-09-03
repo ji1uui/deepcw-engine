@@ -49,7 +49,6 @@ type
     FSampleRate: Integer;
     FChars: TDecodedChars;
     FError: string;
-    FSpectrogram: TSpectrogram;
     FOnDone: TNotifyEvent;
     procedure ReportDone;
   protected
@@ -62,7 +61,6 @@ type
     constructor CreateStreaming(AStream: TStreamingDecoder; AOnDone: TNotifyEvent);
     property Chars: TDecodedChars read FChars;
     property Error: string read FError;
-    property Spectrogram: TSpectrogram read FSpectrogram;
   end;
 
   TMainForm = class(TForm)
@@ -94,6 +92,13 @@ type
       relying on a clean exit. }
     FSettingsDirty: Boolean;
     FSettingsSavedAt: TDateTime;
+    { 解析中に受信を止めた場合、その解析が終わってから残りを確定させます。
+      止めた瞬間に確定させようとすると、走っている解析と衝突します。
+
+      When reception is stopped while an analysis is running, the tail is
+      committed once that analysis finishes; doing it at the moment of
+      stopping would collide with the analysis in flight. }
+    FFinishPending: Boolean;
 
     { 音声 / audio }
     FRing: TAudioRing;
@@ -274,7 +279,6 @@ begin
       FStream.Step
     else
       FChars := FDecoder.DecodeLongSamplesTimed(FSamples, FSampleRate);
-    FSpectrogram := FDecoder.LastSpectrogram;
   except
     on E: Exception do
       FError := E.Message;
@@ -1024,6 +1028,16 @@ begin
       Lines.Add(PortAudioLoadError);
     end;
     Lines.Add('');
+    if FStream <> nil then
+    begin
+      Lines.Add(Format('未解析の音声: %.1f 秒', [FStream.PendingSeconds]));
+      { 追いつけずに捨てた分は、黙って消えてはいけません。読めなかった理由が
+        そこにあるかもしれないからです（要件 NFR-4、FR-G.3）。
+        Audio dropped through falling behind must not vanish silently: it may
+        be why something was not read (requirements NFR-4, FR-G.3). }
+      if FStream.DroppedSeconds > 0 then
+        Lines.Add(Format('追いつけずに捨てた音声: %.1f 秒', [FStream.DroppedSeconds]));
+    end;
     if Length(FDevices) = 0 then
       Lines.Add('入力装置: 見つかりません')
     else
@@ -1178,6 +1192,21 @@ begin
       FRxTranscript.PendingFrom := MaxInt;
       FRxTranscript.SetChars(FLiveChars);
       SetStatus('', '', Format('デコード完了: %d 文字', [Length(Thread.Chars)]));
+    end;
+  end;
+
+  { 受信を止めたあとに解析が終わったなら、ここで残りを確定させます。
+    If reception was stopped while this analysis ran, the tail is committed
+    now. }
+  if FFinishPending and (FCapture = nil) and (FStream <> nil) then
+  begin
+    FFinishPending := False;
+    try
+      FStream.Finish;
+      ShowStreamText;
+    except
+      on E: Exception do
+        LogDiagnostic('受信の終了', E.Message);
     end;
   end;
 
@@ -1480,15 +1509,23 @@ begin
   FRxSignal.Caption := '';
   { 残った暫定部分を確定させてから止めます（要件 FR-B.2）。
     Commit whatever is still provisional before stopping. }
-  if (FStream <> nil) and not DecoderBusy then
+  if FStream <> nil then
   begin
-    try
-      FStream.Finish;
-      ShowStreamText;
-    except
-      on E: Exception do
-        LogDiagnostic('受信の終了', E.Message);
-    end;
+    if DecoderBusy then
+      { 解析が走っている。終わってから確定させます。ここで捨てると、最後の
+        数文字が暫定のまま固まらずに残ります。
+        An analysis is running; the tail is committed when it finishes.
+        Abandoning it here would leave the last few characters provisional
+        for ever. }
+      FFinishPending := True
+    else
+      try
+        FStream.Finish;
+        ShowStreamText;
+      except
+        on E: Exception do
+          LogDiagnostic('受信の終了', E.Message);
+      end;
   end;
   SetStatus('', '待機中', '受信を停止しました。');
 end;

@@ -37,6 +37,24 @@ const
   STREAM_MIN_CONFIRMED_SECONDS = 2.0;
   { 解析を回す最小の間隔。/ Shortest interval between analyses. }
   STREAM_MIN_INTERVAL_SECONDS = 1.0;
+
+  { 溜めておく音声の上限。解析にかける長さの倍を持ちます。
+
+    **これを超えた分は捨てます。**入ってくる速さが解析の速さを上回ることは
+    起こりうる（遅い機械、実時間より速く音を返す装置、信号の無い周波数で
+    文字が 1 つも出ない状態）。上限が無ければ、その間ずっとバッファが伸び続け、
+    いずれメモリを使い尽くす。**追いつけないときに正しい振る舞いは、古い音を
+    捨てて、捨てたことを伝えることである**（要件 NFR-4）。
+
+    The most audio held. Twice what is ever analysed at once.
+
+    **Anything beyond this is discarded.** Audio can arrive faster than it can
+    be analysed — a slow machine, a device that returns audio faster than real
+    time, or an empty frequency where not a single character is produced. With
+    no limit the buffer simply grows until memory runs out. **The right
+    behaviour when falling behind is to drop the oldest audio and say so**
+    (requirement NFR-4). }
+  STREAM_MAX_BUFFER_SECONDS = STREAM_MAX_SECONDS * 2;
   { これだけ溜まるまでは解析しません。/ No analysis until this much is buffered. }
   STREAM_MIN_PENDING_SECONDS = 2.0;
   { 解析の先頭でこの時間内に現れた文字は捨てます。
@@ -136,6 +154,12 @@ type
       different thread to Step. }
     procedure Append(const Samples: TSingleArray; SampleRate: Integer);
 
+    { 追いつけずに捨てた音声の長さ（秒）。0 でなければ、解析が入力に
+      追いついていません。診断に出します。
+      Seconds of audio dropped through falling behind; anything but zero means
+      analysis is not keeping up. Shown in the diagnostics. }
+    function DroppedSeconds: Double;
+
     { 溜まった音声を 1 回解析します。確定が進んだら True を返します。
       時間がかかるため、GUI とは別のスレッドから呼んでください。
 
@@ -233,7 +257,7 @@ end;
 
 procedure TStreamingDecoder.Append(const Samples: TSingleArray; SampleRate: Integer);
 var
-  I, Needed: Integer;
+  I, Needed, Limit, Excess: Integer;
 begin
   if (Length(Samples) = 0) or (SampleRate <= 0) then
     Exit;
@@ -254,6 +278,32 @@ begin
     for I := 0 to High(Samples) do
       FPending[FPendingCount + I] := Samples[I];
     Inc(FPendingCount, Length(Samples));
+
+    { 上限を超えたら古いほうから捨てます。捨てた分だけ時刻を進めるので、
+      以後の文字の時刻はずれません。
+      Past the limit the oldest is discarded, and the time base advances by
+      what went, so later characters are still timed correctly. }
+    Limit := Round(STREAM_MAX_BUFFER_SECONDS * FSourceRate);
+    if FPendingCount > Limit then
+    begin
+      Excess := FPendingCount - Limit;
+      for I := 0 to Limit - 1 do
+        FPending[I] := FPending[I + Excess];
+      FPendingCount := Limit;
+      FConfirmedSeconds := FConfirmedSeconds + Excess / FSourceRate;
+      Inc(FDroppedSamples, Excess);
+      FProvisional := nil;
+    end;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TStreamingDecoder.DroppedSeconds: Double;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FDroppedSamples / Max(1, FSourceRate);
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -564,12 +614,24 @@ begin
         Dec(SplitIndex);
       if SplitIndex < 0 then
       begin
+        { 上限まで溜まったのに文字が 1 つも出なかった場合。信号の無い周波数を
+          聞いていればこうなる。**ここで何も捨てずに戻ると、バッファは永久に
+          伸び続ける。**確定するものは無いので、末尾のガードだけ残して捨て、
+          その分だけ時刻を進める。
+
+          The buffer filled and not one character came out, which is what
+          listening to an empty frequency looks like. **Returning here without
+          discarding anything lets the buffer grow forever.** There is nothing
+          to confirm, so everything but the tail guard goes, and the time base
+          advances by what went. }
         EnterCriticalSection(FLock);
         try
           SetProvisional(Chars);
+          FConfirmedSeconds := FConfirmedSeconds + SplitSeconds;
         finally
           LeaveCriticalSection(FLock);
         end;
+        DropLeading(Round(SplitSeconds * Rate));
         Exit;
       end;
     end

@@ -8,7 +8,7 @@ share the same units.
 lazarus/
 ├── src/    reusable units: metadata, WAV, DSP, ONNX Runtime, decoder, Morse, audio
 ├── app/    deepcw_station  - the GUI station (LCL)
-│        waterfall_probe - exercise the waterfall control without a display
+│        gui_probe - exercise the waterfall control without a display
 └── cli/    decode_morse    - decode one WAV file, like the Python and Node.js examples
          cw_loopback     - key six messages, decode them back, report the score
          cw_stream       - feed a WAV in chunks, watch confirmed text grow
@@ -74,7 +74,7 @@ lazbuild cli/cw_loopback.lpi
 lazbuild cli/cw_stream.lpi
 lazbuild cli/cw_tune.lpi
 lazbuild cli/cw_devices.lpi
-lazbuild app/waterfall_probe.lpi
+lazbuild app/gui_probe.lpi
 ```
 
 Then run the station:
@@ -141,11 +141,23 @@ JA1ABC, K1ABC and G0ABC would all be rejected.
 Check the waterfall control itself, including on a machine with no display:
 
 ```bash
-xvfb-run -a ./app/waterfall_probe /tmp
+xvfb-run -a ./app/gui_probe /tmp
 ```
 
 It creates the control for real, feeds it two signals, applies clicks, wheel
 events and key presses, and writes the painted result out as PNG files.
+
+Check that buffering stops growing when analysis cannot keep up — a slow
+machine, a device faster than real time, or an empty frequency where not one
+character comes out:
+
+```bash
+./cli/cw_tune --tests overload
+```
+
+Without a limit the buffer grows until memory runs out, and an empty frequency
+is ordinary operation rather than an error, so this is a normal-running
+failure rather than an exotic one.
 
 Check the sound card, and the PortAudio structure layout that reading it
 depends on:

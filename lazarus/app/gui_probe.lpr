@@ -1,13 +1,13 @@
-program waterfall_probe;
+program gui_probe;
 
-{ ウォーターフォール部品の検証用プログラムです。
+{ 受信画面の描画部品の検証用プログラムです。
 
   画面のない環境でも、部品を実際に生成し、音声を流し込み、描画させ、クリック
   やホイールの操作を与えて、結果を PNG に書き出せます。GUI の不具合は組み上げ
   てからでないと出ないため、これがないと確かめようがありません
   （要件 NFR-7.1）。
 
-  A harness for the waterfall control.
+  A harness for the receive tab's drawing controls.
 
   Even without a display it creates the control for real, feeds it audio, makes
   it paint, and applies clicks and wheel events, writing the result out as a
@@ -18,7 +18,8 @@ program waterfall_probe;
 
 uses
   SysUtils, DateUtils, Math, Classes, Interfaces, Forms, Controls, Graphics, LCLType,
-  DeepCW.Types, DeepCW.Morse, DeepCW.Tuner, WaterfallView;
+  DeepCW.Types, DeepCW.Morse, DeepCW.Tuner, DeepCW.Decoder,
+  WaterfallView, TranscriptView;
 
 type
   { 部品の保護された入力処理は、そのままでは外から呼べません。派生させて
@@ -145,6 +146,63 @@ begin
     Result[I] := 0.05 * (Random + Random - 1);
 end;
 
+{ いま使っている実メモリ（kB）。取れない環境では 0 を返します。
+  Resident memory in kilobytes, or 0 where it cannot be read. }
+function ResidentKb: Int64;
+{$IFDEF LINUX}
+var
+  Lines: TStringList;
+  I: Integer;
+  Line: string;
+begin
+  Result := 0;
+  Lines := TStringList.Create;
+  try
+    try
+      Lines.LoadFromFile('/proc/self/status');
+    except
+      Exit;
+    end;
+    for I := 0 to Lines.Count - 1 do
+    begin
+      Line := Lines[I];
+      if Pos('VmRSS:', Line) = 1 then
+      begin
+        Line := Trim(Copy(Line, 7, Length(Line)));
+        Result := StrToInt64Def(Trim(Copy(Line, 1, Pos(' ', Line + ' ') - 1)), 0);
+        Exit;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+{$ELSE}
+begin
+  Result := 0;
+end;
+{$ENDIF}
+
+{ 復号済みの文字を並べたものを作ります。長時間の受信で溜まった状態を模します。
+  Builds a run of decoded characters, standing in for what accumulates over a
+  long session. }
+function BuildChars(Count: Integer): TDecodedChars;
+const
+  ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ';
+var
+  I: Integer;
+begin
+  RandSeed := 5;
+  SetLength(Result, Count);
+  for I := 0 to Count - 1 do
+  begin
+    Result[I].Text := ALPHABET[1 + Random(Length(ALPHABET))];
+    Result[I].Seconds := I * 0.24;
+    Result[I].EndSeconds := Result[I].Seconds + 0.2;
+    Result[I].Confidence := 0.99 + Random * 0.01;
+  end;
+end;
+
 procedure SaveView(View: TWaterfallView; const FileName: string);
 var
   Shot: TBitmap;
@@ -164,8 +222,18 @@ begin
   end;
 end;
 
+const
+  { 22 WPM で連続受信した場合、1 万文字が約 40 分、5 万文字が約 3 時間半。
+    At 22 WPM ten thousand characters is about forty minutes of solid copy and
+    fifty thousand about three and a half hours. }
+  SIZES: array[0..3] of Integer = (1000, 10000, 50000, 200000);
 var
   Form: TForm;
+  Transcript: TTranscriptView;
+  Chars: TDecodedChars;
+  SetMs, PaintMs: Double;
+  Repeats: Integer;
+  BeforeKb, AfterKb: Int64;
   View: TProbeView;
   Watcher: TWatcher;
   Audio: TSingleArray;
@@ -328,6 +396,98 @@ begin
     [Elapsed, Elapsed * 25 / 10]));
   Check('描画が 1 行あたり 5 ms 未満', Elapsed < 5.0,
     Format('(%.2f ms)', [Elapsed]));
+
+  { ── 受信テキストの部品 ──
+    常設シャックでは何時間も流し聞きする。文字は溜まる一方であり、**溜まった
+    分だけ描画と複製が重くなるなら、長く使うほど画面が鈍る。**時間を測って
+    確かめる（要件 NFR-1.5）。
+
+    A shack runs for hours and the characters only accumulate. **If drawing and
+    copying grow with what has accumulated, the display gets slower the longer
+    it is used.** This is timed rather than assumed (requirement NFR-1.5). }
+  WriteLn;
+  WriteLn('受信テキストの検証 / transcript checks');
+  Transcript := TTranscriptView.Create(Form);
+  Transcript.Parent := Form;
+  Transcript.Align := alClient;
+  View.Visible := False;
+  Application.ProcessMessages;
+
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(Form.ClientWidth, Form.ClientHeight);
+    for Frame := 0 to High(SIZES) do
+    begin
+      Chars := BuildChars(SIZES[Frame]);
+
+      Started := Now;
+      for Repeats := 1 to 10 do
+        Transcript.SetChars(Chars);
+      SetMs := MilliSecondsBetween(Now, Started) / 10;
+
+      Started := Now;
+      for Repeats := 1 to 10 do
+        Transcript.PaintTo(Shot.Canvas, 0, 0);
+      PaintMs := MilliSecondsBetween(Now, Started) / 10;
+
+      WriteLn(Format('  %7d 文字: 差し替え %6.1f ms / 描画 %6.1f ms',
+        [SIZES[Frame], SetMs, PaintMs]));
+      { 受信中は毎秒数回これを行う。1 回 100 ms を超えれば画面が目に見えて
+        鈍る。
+        This runs several times a second while receiving; past 100 ms each the
+        display visibly drags. }
+      Check(Format('%d 文字で差し替えが 100 ms 未満', [SIZES[Frame]]),
+        SetMs < 100, Format('(%.1f ms)', [SetMs]));
+      Check(Format('%d 文字で描画が 100 ms 未満', [SIZES[Frame]]),
+        PaintMs < 100, Format('(%.1f ms)', [PaintMs]));
+    end;
+  finally
+    Shot.Free;
+  end;
+
+  { ── 長時間使ったときにメモリが増え続けないこと ──
+    常設シャックは何時間も動かしたままになる。**増え続けるなら、いつか止まる。**
+    描画を繰り返して実メモリを測る（要件 NFR-4）。
+
+    A shack leaves this running for hours. **If memory grows without bound it
+    eventually stops.** Drawing is repeated and resident memory measured
+    (requirement NFR-4). }
+  WriteLn;
+  WriteLn('メモリの検証 / memory checks');
+  View.Visible := True;
+  Transcript.Visible := False;
+  Application.ProcessMessages;
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(Form.ClientWidth, Form.ClientHeight);
+    Audio := SweptAudio(8000, 700, 900, 1);
+    { 先に少し回してから測り始めます。最初の確保を増加と数えないためです。
+      A warm-up first, so the initial allocations are not counted as growth. }
+    for Repeats := 1 to 50 do
+    begin
+      View.PushSamples(Audio, 8000);
+      View.Touch;
+      View.PaintTo(Shot.Canvas, 0, 0);
+    end;
+    BeforeKb := ResidentKb;
+    for Repeats := 1 to 500 do
+    begin
+      View.PushSamples(Audio, 8000);
+      View.Touch;
+      View.PaintTo(Shot.Canvas, 0, 0);
+    end;
+    AfterKb := ResidentKb;
+  finally
+    Shot.Free;
+  end;
+  WriteLn(Format('  500 回の描画: %d kB → %d kB（%+d kB）',
+    [BeforeKb, AfterKb, AfterKb - BeforeKb]));
+  { 500 回で 20 MB 増えるなら、毎秒 10 回の描画で 1 時間に 1.4 GB になる。
+    Twenty megabytes over five hundred paints is 1.4 GB an hour at ten paints
+    a second. }
+  Check('描画を繰り返してもメモリが増え続けない',
+    (BeforeKb = 0) or (AfterKb - BeforeKb < 20000),
+    Format('(%+d kB)', [AfterKb - BeforeKb]));
 
   Watcher.Free;
   Form.Free;
