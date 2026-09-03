@@ -172,6 +172,7 @@ the script does not fetch them for you.
 | `DeepCW.Decoder` | spectrogram to text, greedy CTC, window stitching |
 | `DeepCW.Morse` | the code table, PARIS and Farnsworth timing, tone synthesis |
 | `DeepCW.Stream` | splits a live stream into confirmed and provisional text |
+| `DeepCW.Callsign` | pulls callsign-shaped words out of decoded text and checks their shape — the shape only, never whether the station exists |
 | `DeepCW.Audio` | PortAudio capture and playback, device enumeration, loaded at run time |
 
 Only `DeepCW.Audio` and the GUI depend on PortAudio, and only `DeepCW.Onnx`

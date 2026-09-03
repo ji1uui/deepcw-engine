@@ -26,7 +26,8 @@ program cw_tune;
 
 uses
   SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave,
-  DeepCW.Decoder, DeepCW.Dsp, DeepCW.Morse, DeepCW.Tuner, DeepCW.Stream;
+  DeepCW.Decoder, DeepCW.Dsp, DeepCW.Morse, DeepCW.Tuner, DeepCW.Stream,
+  DeepCW.Callsign;
 
 const
   { 試験に使う本文。実際の交信に出てくる形をなぞっています。
@@ -41,7 +42,7 @@ var
   ModelPath: string = '';
   MetadataPath: string = '';
   RuntimePath: string = '';
-  Tests: string = 'sweep,shift,image,bandwidth,stream,wide';
+  Tests: string = 'sweep,shift,image,bandwidth,stream,callsign,wide';
   { 合成に加える白色雑音の大きさ。差が出る水準を選びます。
     White noise level for the synthesis, picked so differences show. }
   Noise: Double = 0.30;
@@ -585,6 +586,124 @@ begin
     [SharedMs, PerStationMs / Length(TONES), TunedMs]));
 end;
 
+{ コールサインの誤りが、形の検査だけでどこまで弾けるかを測ります。
+
+  復号を誤ったとき、その結果は 3 つに分かれます。
+    (a) 形が壊れている  — 形の検査だけで弾ける。通信も外部の情報も要らない
+    (b) 形は正しいが別のコールサイン — **実在の確認でしか弾けない**
+    (c) 正解
+
+  (b) がどれだけあるかが、総務省の無線局等情報検索のような外部確認に、
+  通信とプライバシーの代償を払う値打ちがあるかを決めます（要件 FR-K）。
+
+  Measures how much of a misread callsign a shape check alone can catch.
+
+  A wrong decode lands in one of three places: malformed, which the shape
+  check alone rejects with no network and no outside information; well formed
+  but a different station, which **only an existence check can catch**; or
+  correct. How large the middle case is decides whether an outside lookup is
+  worth its cost in network and privacy (requirement FR-K). }
+procedure RunCallsign;
+const
+  CALLS: array[0..7] of string = (
+    'JA1ABC', 'JH2XYZ', 'JR3KLM', 'JF6PQR', '7K1TUV', 'JE8WXY', 'JG5DEF', 'JM4GHI');
+  NOISES: array[0..4] of Double = (1.50, 1.75, 2.00, 2.25, 2.50);
+var
+  I, L, Rate: Integer;
+  Correct, Malformed, PlausibleButWrong, Agreed: Integer;
+  AgreedCorrect, AgreedWrong: Integer;
+  TotalCorrect, TotalMalformed, TotalPlausible: Integer;
+  TotalAgreedCorrect, TotalAgreedWrong: Integer;
+  Audio: TSingleArray;
+  Reference, Decoded, Best: string;
+  Found: TCallsigns;
+  Counts: array of Integer;
+  J, K, BestCount: Integer;
+begin
+  Rate := Decoder.Metadata.SampleRate;
+  WriteLn;
+  WriteLn('callsign: 形の検査だけでどこまで弾けるか / how far the shape check gets');
+  WriteLn('  本文は「CQ CQ DE <call> <call> K」。同じ符号を 2 回送る実運用の形です。');
+  WriteLn('  雑音   正解  形が壊れている  形は正しいが別の局  2 回とも一致');
+  TotalCorrect := 0;
+  TotalMalformed := 0;
+  TotalPlausible := 0;
+  TotalAgreedCorrect := 0;
+  TotalAgreedWrong := 0;
+  for L := 0 to High(NOISES) do
+  begin
+    Correct := 0;
+    Malformed := 0;
+    PlausibleButWrong := 0;
+    Agreed := 0;
+    AgreedCorrect := 0;
+    AgreedWrong := 0;
+    for I := 0 to High(CALLS) do
+    begin
+      Reference := NormalizeText('CQ CQ DE ' + CALLS[I] + ' ' + CALLS[I] + ' K');
+      Audio := Synthesise(Reference, Rate, TUNER_TARGET_TONE_HZ, NOISES[L], 8000 + I);
+      Decoded := Decoder.DecodeLongSamples(Audio, Rate);
+      Found := ExtractCallsigns(Decoded);
+
+      { 同じ語が 2 回出たかを見ます。FR-J.7 が求める「複数回の一致」です。
+        Whether the same word came out twice, which is the agreement FR-J.7
+        asks for. }
+      Best := '';
+      BestCount := 0;
+      SetLength(Counts, Length(Found));
+      for J := 0 to High(Found) do
+      begin
+        Counts[J] := 0;
+        for K := 0 to High(Found) do
+          if Found[K].Base = Found[J].Base then
+            Inc(Counts[J]);
+        if Counts[J] > BestCount then
+        begin
+          BestCount := Counts[J];
+          Best := Found[J].Base;
+        end;
+      end;
+      if BestCount >= 2 then
+      begin
+        Inc(Agreed);
+        { **ここが肝心である。**2 回一致したのに間違っていたなら、
+          「複数回の一致」を根拠に一覧へ載せることはできません。
+          This is the point. If agreement ever agrees on the wrong callsign,
+          it cannot be the reason a station reaches the band map. }
+        if Best = CALLS[I] then
+          Inc(AgreedCorrect)
+        else
+          Inc(AgreedWrong);
+      end;
+
+      if Best = CALLS[I] then
+        Inc(Correct)
+      else if Best = '' then
+        Inc(Malformed)
+      else
+        Inc(PlausibleButWrong);
+    end;
+    WriteLn(Format('  %4.2f   %4d  %14d  %18d  %6d (正 %d / 誤 %d)',
+      [NOISES[L], Correct, Malformed, PlausibleButWrong, Agreed,
+       AgreedCorrect, AgreedWrong]));
+    Inc(TotalCorrect, Correct);
+    Inc(TotalMalformed, Malformed);
+    Inc(TotalPlausible, PlausibleButWrong);
+    Inc(TotalAgreedCorrect, AgreedCorrect);
+    Inc(TotalAgreedWrong, AgreedWrong);
+  end;
+  WriteLn(Format('  （各行 %d 局）', [Length(CALLS)]));
+  WriteLn;
+  WriteLn(Format('  合計 %d 局: 正解 %d / 誤り %d',
+    [Length(CALLS) * Length(NOISES), TotalCorrect,
+     TotalMalformed + TotalPlausible]));
+  WriteLn(Format('  誤りの内訳: 形で弾ける %d（%.0f%%）／実在の確認が要る %d（%.0f%%）',
+    [TotalMalformed, 100 * TotalMalformed / Max(1, TotalMalformed + TotalPlausible),
+     TotalPlausible, 100 * TotalPlausible / Max(1, TotalMalformed + TotalPlausible)]));
+  WriteLn(Format('  2 回一致したもの: 正 %d / 誤 %d',
+    [TotalAgreedCorrect, TotalAgreedWrong]));
+end;
+
 var
   Index: Integer;
   Key, Value: string;
@@ -642,6 +761,8 @@ begin
       RunBandwidth;
     if Pos('stream', Tests) > 0 then
       RunStream;
+    if Pos('callsign', Tests) > 0 then
+      RunCallsign;
     if Pos('wide', Tests) > 0 then
     begin
       { 広く離れている場合と、コンテストのように詰まっている場合の両方を見ます。
