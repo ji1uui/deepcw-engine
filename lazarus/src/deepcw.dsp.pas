@@ -51,6 +51,62 @@ type
   Builds the [Frames x Bins] log1p magnitude spectrogram the model expects. }
 function ComputeSpectrogram(const Samples: TSingleArray; Meta: TDeepCWMetadata): TSpectrogram;
 
+{ 通過帯域全体を 1 度に変換し、モデルと同じ刻みのスペクトログラムを作ります。
+
+  モデルは 3200 Hz・FFT 256・ホップ 48 で聴きます。これはビン幅 12.5 Hz、窓長
+  80 ms、フレーム間隔 15 ms です。**同じ数字は 6400 Hz・FFT 512・ホップ 96 でも
+  得られます。**つまり 6400 Hz で 1 度だけ変換しておけば、その中の連続する 65
+  ビンを切り出すだけで、任意の音程の信号に対するモデルの入力がそのまま得られます。
+
+  局ごとに周波数変換とリサンプルを掛け直す必要がなくなるため、帯域内の多数の局を
+  同時に解析できます（要件 FR-I）。SampleRate は 2 倍側の周波数、すなわち
+  Meta.SampleRate * 2 を渡してください。
+
+  Transforms the whole passband once, at the same resolution the model uses.
+
+  The model listens at 3200 Hz with a 256-point FFT and a hop of 48: bins
+  12.5 Hz apart, an 80 ms window, frames 15 ms apart. **The same numbers come
+  out of 6400 Hz with a 512-point FFT and a hop of 96.** So one transform at
+  6400 Hz is enough: any 65 consecutive bins of it are exactly the input the
+  model wants for a signal at that pitch.
+
+  Nothing has to be translated or resampled per station, which is what makes
+  analysing many signals across the band at once affordable (requirement
+  FR-I). Pass the doubled rate, Meta.SampleRate * 2, as SampleRate. }
+function ComputeWideSpectrogram(const Samples: TSingleArray; SampleRate: Integer;
+  Meta: TDeepCWMetadata): TSpectrogram;
+
+{ 広帯域のスペクトログラムから、CentreBin を中心とする 65 ビンを切り出します。
+  モデルの通過帯域の中央（800 Hz）に信号が来るように並べ替えるのと同じです。
+
+  Cuts the 65 bins centred on CentreBin out of a wide spectrogram, which is
+  the same as placing the signal at the centre of the model's band. }
+function SliceSpectrogram(const Wide: TSpectrogram; CentreBin: Integer;
+  Meta: TDeepCWMetadata): TSpectrogram;
+
+{ 切り出したスペクトログラムの、中心から離れたビンを減衰させます。
+
+  モデルの入力は 800 Hz 幅あり、隣の局が ±400 Hz の中にいれば絵に入り込みます。
+  モデルは 1 局だけを聴くように学習されているため、混ざると読めません。ここで
+  中心の周りだけを残すのは、時間領域の帯域通過フィルタを掛けるのと同じ効果を、
+  変換をやり直さずに得るためです（要件 FR-I）。
+
+  値は log1p された振幅なので、利得を掛けるには一度振幅へ戻します。
+
+  Attenuates the bins away from the centre of a sliced spectrogram.
+
+  The model's input is 800 Hz wide, so a neighbour within 400 Hz is in the
+  picture, and the model was trained to hear one station at a time. Keeping
+  only what surrounds the centre has the effect of a band-pass filter without
+  redoing the transform (requirement FR-I). The values are log1p magnitudes,
+  so applying a gain means going back to magnitude first. }
+procedure MaskSpectrogram(var Spectrogram: TSpectrogram; HalfWidthHz: Double;
+  Meta: TDeepCWMetadata);
+
+{ 広帯域のスペクトログラムで、Hz がどのビンに当たるかを返します。
+  Which bin of a wide spectrogram a frequency falls in. }
+function WideBinFor(Hz: Double; SampleRate, FFTLength: Integer): Integer;
+
 { 周期型のハン窓です。numpy の np.hanning(N + 1)[:-1] と一致します。
 
   Periodic Hann window, matching numpy's np.hanning(N + 1)[:-1]. }
@@ -261,6 +317,132 @@ begin
     end;
     Result[I] := Accumulator;
   end;
+end;
+
+function WideBinFor(Hz: Double; SampleRate, FFTLength: Integer): Integer;
+begin
+  Result := Round(Hz * FFTLength / SampleRate);
+end;
+
+function ComputeWideSpectrogram(const Samples: TSingleArray; SampleRate: Integer;
+  Meta: TDeepCWMetadata): TSpectrogram;
+var
+  FFT: TRealFFT;
+  Window, Padded, Frame, Magnitudes: TDoubleArray;
+  FFTLength, HopLength, Ratio, Bins, FrameIndex, I, Offset: Integer;
+  Scale: Double;
+begin
+  if (SampleRate <= 0) or (SampleRate mod Meta.SampleRate <> 0) then
+    raise EDeepCW.CreateFmt(
+      'The wide spectrogram rate must be a multiple of %d Hz, got %d.',
+      [Meta.SampleRate, SampleRate]);
+  Ratio := SampleRate div Meta.SampleRate;
+  FFTLength := Meta.FFTLength * Ratio;
+  HopLength := Meta.HopLength * Ratio;
+  { ビン幅もフレーム間隔も窓長も、モデルのものと一致します。
+    Bin spacing, frame spacing and window length all match the model's. }
+
+  if Length(Samples) < FFTLength then
+    raise EDeepCW.CreateFmt('The audio is too short for fft_length=%d.', [FFTLength]);
+
+  Padded := ReflectPad(Samples, FFTLength div 2);
+  Window := HannWindow(FFTLength);
+  Bins := FFTLength div 2 + 1;
+
+  { 窓が長い分だけ振幅が大きく出ます。log1p は倍率に対して不変ではないため、
+    モデルが学習した大きさへ戻します。
+    A longer window scales the magnitudes up, and log1p is not invariant to a
+    scale factor, so they are brought back to the size the model was trained
+    on. }
+  Scale := 1 / Ratio;
+
+  Result.Bins := Bins;
+  Result.Frames := 1 + (Length(Padded) - FFTLength) div HopLength;
+  SetLength(Result.Data, Result.Frames * Bins);
+
+  SetLength(Frame, FFTLength);
+  SetLength(Magnitudes, Bins);
+  FFT := TRealFFT.Create(FFTLength);
+  try
+    for FrameIndex := 0 to Result.Frames - 1 do
+    begin
+      Offset := FrameIndex * HopLength;
+      for I := 0 to FFTLength - 1 do
+        Frame[I] := Padded[Offset + I] * Window[I];
+      FFT.MagnitudeSpectrum(Frame, 0, Bins, Magnitudes);
+      for I := 0 to Bins - 1 do
+        Result.Data[FrameIndex * Bins + I] := Ln(1 + Magnitudes[I] * Scale);
+    end;
+  finally
+    FFT.Free;
+  end;
+end;
+
+function SliceSpectrogram(const Wide: TSpectrogram; CentreBin: Integer;
+  Meta: TDeepCWMetadata): TSpectrogram;
+var
+  Bins, Half, First, FrameIndex, I, Source: Integer;
+begin
+  Bins := Meta.StopBin - Meta.StartBin;
+  Half := Bins div 2;
+  First := CentreBin - Half;
+  Result.Bins := Bins;
+  Result.Frames := Wide.Frames;
+  SetLength(Result.Data, Result.Frames * Bins);
+  for FrameIndex := 0 to Wide.Frames - 1 do
+    for I := 0 to Bins - 1 do
+    begin
+      Source := First + I;
+      { 帯域の外に出た分は無音として扱います。端に寄った信号でも、形を崩さずに
+        切り出せます。
+        Anything outside the band counts as silence, so a signal near the edge
+        can still be cut out without changing its shape. }
+      if (Source < 0) or (Source >= Wide.Bins) then
+        Result.Data[FrameIndex * Bins + I] := 0
+      else
+        Result.Data[FrameIndex * Bins + I] := Wide.Data[FrameIndex * Wide.Bins + Source];
+    end;
+end;
+
+procedure MaskSpectrogram(var Spectrogram: TSpectrogram; HalfWidthHz: Double;
+  Meta: TDeepCWMetadata);
+var
+  Gains: TDoubleArray;
+  BinHz, Distance, Taper, Gain: Double;
+  Centre, I, FrameIndex: Integer;
+begin
+  if (HalfWidthHz <= 0) or (Spectrogram.Bins <= 0) then
+    Exit;
+  BinHz := Meta.SampleRate / Meta.FFTLength;
+  Centre := Spectrogram.Bins div 2;
+  { 端を急に落とすと、モデルが見たことのない絵になります。通過域の外側は
+    なだらかに落とします。
+    A hard edge gives the model a picture unlike anything it saw in training,
+    so outside the passband the gain falls away gradually. }
+  Taper := Max(BinHz * 2, HalfWidthHz * 0.4);
+  SetLength(Gains, Spectrogram.Bins);
+  for I := 0 to Spectrogram.Bins - 1 do
+  begin
+    Distance := Abs(I - Centre) * BinHz;
+    if Distance <= HalfWidthHz then
+      Gains[I] := 1
+    else if Distance >= HalfWidthHz + Taper then
+      Gains[I] := 0
+    else
+      Gains[I] := 0.5 * (1 + Cos(Pi * (Distance - HalfWidthHz) / Taper));
+  end;
+
+  for FrameIndex := 0 to Spectrogram.Frames - 1 do
+    for I := 0 to Spectrogram.Bins - 1 do
+    begin
+      Gain := Gains[I];
+      if Gain >= 1 then
+        Continue;
+      { log1p を戻して利得を掛け、また log1p へ。
+        Undo log1p, apply the gain, and go back. }
+      Spectrogram.Data[FrameIndex * Spectrogram.Bins + I] :=
+        Ln(1 + (Exp(Spectrogram.Data[FrameIndex * Spectrogram.Bins + I]) - 1) * Gain);
+    end;
 end;
 
 function ComputeSpectrogram(const Samples: TSingleArray; Meta: TDeepCWMetadata): TSpectrogram;

@@ -104,6 +104,15 @@ type
     function DecodeLongSamplesTimed(const Samples: TSingleArray;
       SourceRate: Integer): TDecodedChars;
 
+    { 用意済みのスペクトログラムを復号します。広帯域の変換から切り出した 1 局分
+      を、音声へ戻さずにそのまま渡すための入口です（要件 FR-I）。
+
+      Decodes a spectrogram that has already been built. This is how one
+      station cut out of a wide transform reaches the model without being
+      turned back into audio (requirement FR-I). }
+    function DecodeSpectrogramTimed(const Spectrogram: TSpectrogram;
+      DurationSeconds: Double): TDecodedChars;
+
     { WAV ファイルを読み込んで復号します。20 秒を超える場合は窓に分割します。
 
       Reads a WAV file and decodes it, windowing if it runs past 20 seconds. }
@@ -253,6 +262,22 @@ begin
     end;
   end;
   SetLength(Result, Count);
+end;
+
+function TDeepCWDecoder.DecodeSpectrogramTimed(const Spectrogram: TSpectrogram;
+  DurationSeconds: Double): TDecodedChars;
+var
+  Output: TOnnxFloatTensor;
+begin
+  if Spectrogram.Bins <> FMetadata.StopBin - FMetadata.StartBin then
+    raise EDeepCW.CreateFmt('The spectrogram must have %d bins, got %d.',
+      [FMetadata.StopBin - FMetadata.StartBin, Spectrogram.Bins]);
+  FLastSpectrogram := Spectrogram;
+  FLastSeconds := DurationSeconds;
+  Output := FSession.RunFloat(FMetadata.InputName, Spectrogram.Data,
+    [Int64(1), Int64(FMetadata.ChannelCount), Int64(Spectrogram.Frames),
+     Int64(Spectrogram.Bins)], FMetadata.OutputName);
+  Result := GreedyCtcDecode(Output, DurationSeconds);
 end;
 
 function TDeepCWDecoder.RunWindow(const Audio: TSingleArray): TDecodedChars;

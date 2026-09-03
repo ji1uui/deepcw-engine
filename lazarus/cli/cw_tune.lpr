@@ -41,7 +41,7 @@ var
   ModelPath: string = '';
   MetadataPath: string = '';
   RuntimePath: string = '';
-  Tests: string = 'sweep,shift,image,bandwidth,stream';
+  Tests: string = 'sweep,shift,image,bandwidth,stream,wide';
   { 合成に加える白色雑音の大きさ。差が出る水準を選びます。
     White noise level for the synthesis, picked so differences show. }
   Noise: Double = 0.30;
@@ -464,6 +464,127 @@ begin
   end;
 end;
 
+{ 帯域全体を 1 度に変換し、そこから局ごとに切り出して読めるかを確かめます。
+
+  待機モードとコンテストモード（要件 FR-I）は、通過帯域にいる多数の局を同時に
+  読むことを求めます。局ごとに周波数変換とリサンプルを掛け直すなら費用は局数に
+  比例しますが、変換を 1 度で済ませられるなら話が変わります。**そこが成り立つか
+  どうかで、この機能が実用になるかが決まります。**
+
+  Checks whether the whole band can be transformed once and each station cut
+  out of the result.
+
+  The standby and contest modes (requirement FR-I) call for reading many
+  stations across the passband at the same time. Translating and resampling
+  per station makes the cost proportional to their number; sharing one
+  transform changes that entirely, and whether it works decides whether the
+  feature is practical at all. }
+procedure RunWide(const TONES: array of Double; const Title: string);
+const
+  CAPTURE_RATE = 8000;
+  WIDTHS: array[0..5] of Double = (0, 250, 175, 125, 87.5, 50);
+var
+  I, J, Station, WideRate, Total: Integer;
+  Mixed, Audio, Prepared: TSingleArray;
+  Wide, Slice: TSpectrogram;
+  Reference, Sliced, Tuned: string;
+  Seconds, Started, SharedMs, PerStationMs, TunedMs: Double;
+  Begun: TDateTime;
+begin
+  WriteLn;
+  WriteLn('wide: ', Title);
+  WideRate := Decoder.Metadata.SampleRate * 2;
+  WriteLn(Format('  録音 %d Hz を %d Hz へ変換し、FFT %d・ホップ %d で 1 度だけ解析。',
+    [CAPTURE_RATE, WideRate, Decoder.Metadata.FFTLength * 2,
+     Decoder.Metadata.HopLength * 2]));
+  Write('  同時に出ている局: ');
+  for I := 0 to High(TONES) do
+    Write(Format('%.0f Hz  ', [TONES[I]]));
+  WriteLn;
+
+  { 4 局を同時に鳴らします。/ Four stations transmitting at once. }
+  Mixed := nil;
+  for I := 0 to High(TONES) do
+  begin
+    Audio := Synthesise(NormalizeText(MESSAGES[I mod Length(MESSAGES)]),
+      CAPTURE_RATE, TONES[I], 0, 7000 + I);
+    if Length(Audio) > Length(Mixed) then
+    begin
+      J := Length(Mixed);
+      SetLength(Mixed, Length(Audio));
+      while J <= High(Mixed) do
+      begin
+        Mixed[J] := 0;
+        Inc(J);
+      end;
+    end;
+    for J := 0 to High(Audio) do
+      Mixed[J] := Mixed[J] + 0.5 * Audio[J];
+  end;
+  { 雑音は混ぜたあとに加えます。局ごとに足すと 4 倍になってしまいます。
+    Noise is added after mixing; per station it would end up four times over. }
+  RandSeed := 7777;
+  for J := 0 to High(Mixed) do
+    Mixed[J] := Mixed[J] + Noise * 0.25 * (Random + Random - 1);
+
+  Seconds := Length(Mixed) / CAPTURE_RATE;
+  WriteLn(Format('  長さ %.1f 秒。', [Seconds]));
+
+  { 広帯域の変換は 1 度だけ。/ The wide transform runs once. }
+  Begun := Now;
+  Prepared := ResampleLinear(Mixed, CAPTURE_RATE, WideRate);
+  Wide := ComputeWideSpectrogram(Prepared, WideRate, Decoder.Metadata);
+  SharedMs := MilliSecondsBetween(Now, Begun);
+
+  { 切り出したあと、中心の周りだけを残す幅を変えて比べます。隣の局を絵から
+    追い出せるかどうかが、コンテストモードが成り立つかを決めます。
+    The width kept around the centre is varied. Whether a neighbour can be
+    pushed out of the picture decides whether contest mode is possible. }
+  WriteLn('  残す幅        ' + '完全一致した局 / 例');
+  for I := 0 to High(WIDTHS) do
+  begin
+    Total := 0;
+    PerStationMs := 0;
+    Sliced := '';
+    for Station := 0 to High(TONES) do
+    begin
+      Reference := NormalizeText(MESSAGES[Station mod Length(MESSAGES)]);
+      Begun := Now;
+      Slice := SliceSpectrogram(Wide,
+        WideBinFor(TONES[Station], WideRate, Decoder.Metadata.FFTLength * 2),
+        Decoder.Metadata);
+      if WIDTHS[I] > 0 then
+        MaskSpectrogram(Slice, WIDTHS[I], Decoder.Metadata);
+      Tuned := Trim(DecodedText(Decoder.DecodeSpectrogramTimed(Slice, Seconds)));
+      PerStationMs := PerStationMs + MilliSecondsBetween(Now, Begun);
+      if Tuned = Reference then
+        Inc(Total);
+      if Station = 0 then
+        Sliced := Tuned;
+    end;
+    if WIDTHS[I] > 0 then
+      Reference := Format('±%.0f Hz', [WIDTHS[I]])
+    else
+      Reference := '制限なし';
+    WriteLn(Format('  %-12s  %d / %d   %s',
+      [Reference, Total, Length(TONES), Copy(Sliced, 1, 44)]));
+  end;
+
+  { 同調経路（時間領域のフィルタ）との比較を 1 局ぶんだけ取ります。
+    One station's worth of comparison against the tuned, time-domain path. }
+  Begun := Now;
+  Audio := ToModelRate(FrequencyShift(Mixed, CAPTURE_RATE,
+    TONES[0] - TUNER_TARGET_TONE_HZ), CAPTURE_RATE, BandwidthHalfWidth(tbAuto));
+  Tuned := Trim(Decoder.DecodeLongSamples(Audio, Decoder.Metadata.SampleRate));
+  TunedMs := MilliSecondsBetween(Now, Begun);
+  WriteLn(Format('  同調経路(±250)  %s   %s',
+    [BoolToStr(Tuned = NormalizeText(MESSAGES[0]), '一致', '不一致'),
+     Copy(Tuned, 1, 44)]));
+
+  WriteLn(Format('  共通の変換 %.0f ms / 1 局あたり 切り出し %.0f ms・同調経路 %.0f ms',
+    [SharedMs, PerStationMs / Length(TONES), TunedMs]));
+end;
+
 var
   Index: Integer;
   Key, Value: string;
@@ -521,6 +642,17 @@ begin
       RunBandwidth;
     if Pos('stream', Tests) > 0 then
       RunStream;
+    if Pos('wide', Tests) > 0 then
+    begin
+      { 広く離れている場合と、コンテストのように詰まっている場合の両方を見ます。
+        Both a well-spaced band and a contest-tight one. }
+      RunWide([700, 1150, 1600, 2050],
+        '離れた 4 局 / four well-spaced stations');
+      RunWide([700, 850, 1000, 1150],
+        'コンテスト並みに詰まった 4 局（150 Hz 間隔） / four at contest spacing');
+      RunWide([700, 800, 900, 1000],
+        'さらに詰まった 4 局（100 Hz 間隔） / four at 100 Hz spacing');
+    end;
     WriteLn;
   finally
     Decoder.Free;
