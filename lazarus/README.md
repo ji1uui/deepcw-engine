@@ -122,6 +122,17 @@ Each test prints character error rates, so a change that makes tuning worse
 shows up as a number rather than as a feeling. `--tests sweep` re-derives the
 pitch that translation aims at.
 
+Check the call sign shape rule, which transcribes ITU Radio Regulations
+Article 19 and so cannot be verified by the decode tests:
+
+```bash
+./cli/cw_tune --tests shape
+```
+
+Twenty-six examples, real prefixes of every permitted form on one side and
+malformed ones on the other. A mistranscription here either drops real
+stations from the band map or lets false ones onto it, both silently.
+
 Check the waterfall control itself, including on a machine with no display:
 
 ```bash

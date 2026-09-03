@@ -42,7 +42,7 @@ var
   ModelPath: string = '';
   MetadataPath: string = '';
   RuntimePath: string = '';
-  Tests: string = 'sweep,shift,image,bandwidth,stream,callsign,wide';
+  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,wide';
   { 合成に加える白色雑音の大きさ。差が出る水準を選びます。
     White noise level for the synthesis, picked so differences show. }
   Noise: Double = 0.30;
@@ -749,6 +749,82 @@ begin
   Known.Free;
 end;
 
+{ 呼出符号の形の検査そのものを、実在する符号の例で確かめます。
+
+  ここは標準（ITU 無線通信規則 第 19 条）を写し取った箇所であり、**写し間違いが
+  あっても復号の試験には表れません。**正しい符号を落とせば一覧から消え、
+  誤った符号を通せば嘘をつきます。どちらも静かに起きるため、例で押さえます。
+
+  Checks the call sign shape rule itself against real examples.
+
+  This is where a standard, ITU Radio Regulations Article 19, is transcribed,
+  and **a mistranscription would not show up in the decode tests.** Rejecting a
+  real call makes it vanish from the band map; accepting a false one tells a
+  lie. Both happen silently, so examples pin them down. }
+procedure RunShape;
+type
+  TCase = record
+    Token: string;
+    Expect: Boolean;
+    Why: string;
+  end;
+const
+  CASES: array[0..25] of TCase = (
+    (Token: 'JA1ABC'; Expect: True;  Why: '日本の標準形'),
+    (Token: 'JH2XYZ'; Expect: True;  Why: '日本の標準形'),
+    (Token: '7K1TUV'; Expect: True;  Why: '数字＋英字の前置符字'),
+    (Token: '8N1OLP'; Expect: True;  Why: '記念局'),
+    (Token: 'JA1A';   Expect: True;  Why: '後置符字 1 字'),
+    (Token: 'JR3KLM/1'; Expect: True; Why: '附加符号（地域）'),
+    (Token: 'JA1ABC/P'; Expect: True; Why: '附加符号（携帯）'),
+    (Token: 'W1AW';   Expect: True;  Why: '1 字の前置符字（W は割り当てあり）'),
+    (Token: 'K1ABC';  Expect: True;  Why: '1 字の前置符字'),
+    (Token: 'G0ABC';  Expect: True;  Why: '1 字の前置符字'),
+    (Token: 'R1ANF';  Expect: True;  Why: '1 字の前置符字'),
+    (Token: 'VK2ABC'; Expect: True;  Why: '英字 2 字の前置符字'),
+    (Token: '9A1ABC'; Expect: True;  Why: '数字＋英字の前置符字'),
+    (Token: '2E0ABC'; Expect: True;  Why: '数字＋英字の前置符字'),
+    (Token: 'A51ABC'; Expect: True;  Why: '英字＋数字の前置符字'),
+    (Token: 'KH6ABC'; Expect: True;  Why: '英字 2 字の前置符字'),
+    (Token: 'EA5X1A'; Expect: True;  Why: '後置符字に数字（ITU は許す。末尾が英字）'),
+    (Token: 'J1ADC';  Expect: False; Why: 'J は 1 字では割り当てが無い'),
+    (Token: '12ABC';  Expect: False; Why: '数字 2 つの前置符字は無い'),
+    (Token: 'JAABC';  Expect: False; Why: '地域番号が無い'),
+    (Token: 'JA1';    Expect: False; Why: '後置符字が無い'),
+    (Token: 'JA1ABCDE'; Expect: False; Why: '後置符字が 5 字'),
+    (Token: '7K1TTBT'; Expect: False; Why: '日本の前置符字に 4 字の後置符字'),
+    (Token: 'JA12AB'; Expect: False; Why: '日本の後置符字に数字'),
+    (Token: '599';    Expect: False; Why: 'レポート'),
+    (Token: 'CQ';     Expect: False; Why: '本文の語')
+  );
+var
+  I, Passed: Integer;
+  Call: TCallsign;
+  Got: Boolean;
+begin
+  WriteLn;
+  WriteLn('shape: 呼出符号の形の検査 / the call sign shape rule');
+  Passed := 0;
+  for I := 0 to High(CASES) do
+  begin
+    Got := ParseCallsign(CASES[I].Token, Call);
+    if Got = CASES[I].Expect then
+    begin
+      Inc(Passed);
+      if Got then
+        WriteLn(Format('  ok   %-10s → %s %s %s   %s',
+          [CASES[I].Token, Call.Prefix, Call.Area, Call.Suffix, CASES[I].Why]))
+      else
+        WriteLn(Format('  ok   %-10s → 不成立   %s', [CASES[I].Token, CASES[I].Why]));
+    end
+    else
+      WriteLn(Format('  NG   %-10s → %s（期待は %s）  %s',
+        [CASES[I].Token, BoolToStr(Got, '成立', '不成立'),
+         BoolToStr(CASES[I].Expect, '成立', '不成立'), CASES[I].Why]));
+  end;
+  WriteLn(Format('  %d / %d', [Passed, Length(CASES)]));
+end;
+
 var
   Index: Integer;
   Key, Value: string;
@@ -806,6 +882,8 @@ begin
       RunBandwidth;
     if Pos('stream', Tests) > 0 then
       RunStream;
+    if Pos('shape', Tests) > 0 then
+      RunShape;
     if Pos('callsign', Tests) > 0 then
       RunCallsign;
     if Pos('wide', Tests) > 0 then
