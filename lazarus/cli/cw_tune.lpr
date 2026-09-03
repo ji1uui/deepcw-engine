@@ -25,7 +25,7 @@ program cw_tune;
 {$mode objfpc}{$H+}
 
 uses
-  SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave,
+  SysUtils, Classes, DateUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Decoder, DeepCW.Dsp, DeepCW.Morse, DeepCW.Tuner, DeepCW.Stream,
   DeepCW.Callsign;
 
@@ -608,8 +608,21 @@ const
   CALLS: array[0..7] of string = (
     'JA1ABC', 'JH2XYZ', 'JR3KLM', 'JF6PQR', '7K1TUV', 'JE8WXY', 'JG5DEF', 'JM4GHI');
   NOISES: array[0..4] of Double = (1.50, 1.75, 2.00, 2.25, 2.50);
+  { 実在するコールサインの一覧を模したもの。JTDX などが配っている世界規模の
+    一覧に相当します。実際の割り当ては連番で固まっているため、一様に散らした
+    この模型は**危険を過小に見積もります**（付録 H.6）。
+
+    Stands in for a list of real callsigns, of the kind distributed with JTDX
+    and similar. Real allocations come in sequential blocks, so scattering
+    these uniformly **understates** the risk (appendix H.6). }
+  KNOWN_LIST_SIZE = 200000;
+  PREFIXES: array[0..16] of string = (
+    'JA', 'JE', 'JF', 'JG', 'JH', 'JI', 'JJ', 'JK', 'JL', 'JM',
+    'JN', 'JO', 'JP', 'JQ', 'JR', 'JS', '7K');
 var
   I, L, Rate: Integer;
+  Known: TStringList;
+  InList, TotalInList: Integer;
   Correct, Malformed, PlausibleButWrong, Agreed: Integer;
   AgreedCorrect, AgreedWrong: Integer;
   TotalCorrect, TotalMalformed, TotalPlausible: Integer;
@@ -621,6 +634,19 @@ var
   J, K, BestCount: Integer;
 begin
   Rate := Decoder.Metadata.SampleRate;
+
+  { 実在一覧の模型を用意します。/ Build the stand-in list of real callsigns. }
+  Known := TStringList.Create;
+  Known.Sorted := True;
+  Known.Duplicates := dupIgnore;
+  RandSeed := 31337;
+  while Known.Count < KNOWN_LIST_SIZE do
+    Known.Add(PREFIXES[Random(Length(PREFIXES))] + Chr(Ord('0') + Random(10)) +
+      Chr(Ord('A') + Random(26)) + Chr(Ord('A') + Random(26)) +
+      Chr(Ord('A') + Random(26)));
+  for I := 0 to High(CALLS) do
+    Known.Add(CALLS[I]);
+
   WriteLn;
   WriteLn('callsign: 形の検査だけでどこまで弾けるか / how far the shape check gets');
   WriteLn('  本文は「CQ CQ DE <call> <call> K」。同じ符号を 2 回送る実運用の形です。');
@@ -630,6 +656,7 @@ begin
   TotalPlausible := 0;
   TotalAgreedCorrect := 0;
   TotalAgreedWrong := 0;
+  TotalInList := 0;
   for L := 0 to High(NOISES) do
   begin
     Correct := 0;
@@ -638,6 +665,7 @@ begin
     Agreed := 0;
     AgreedCorrect := 0;
     AgreedWrong := 0;
+    InList := 0;
     for I := 0 to High(CALLS) do
     begin
       Reference := NormalizeText('CQ CQ DE ' + CALLS[I] + ' ' + CALLS[I] + ' K');
@@ -681,7 +709,20 @@ begin
       else if Best = '' then
         Inc(Malformed)
       else
+      begin
         Inc(PlausibleButWrong);
+        { 形が成立してしまった誤りが、実在一覧にも載っているか。載っていれば
+          一覧では弾けず、実在確認でも弾けません。
+          Whether a well-formed error is also in the list of real callsigns; if
+          it is, neither the list nor a lookup can reject it. }
+        if Known.IndexOf(Best) >= 0 then
+        begin
+          Inc(InList);
+          WriteLn(Format('    誤: %s → %s（実在一覧にもある）', [CALLS[I], Best]));
+        end
+        else
+          WriteLn(Format('    誤: %s → %s（実在一覧に無い＝弾ける）', [CALLS[I], Best]));
+      end;
     end;
     WriteLn(Format('  %4.2f   %4d  %14d  %18d  %6d (正 %d / 誤 %d)',
       [NOISES[L], Correct, Malformed, PlausibleButWrong, Agreed,
@@ -691,6 +732,7 @@ begin
     Inc(TotalPlausible, PlausibleButWrong);
     Inc(TotalAgreedCorrect, AgreedCorrect);
     Inc(TotalAgreedWrong, AgreedWrong);
+    Inc(TotalInList, InList);
   end;
   WriteLn(Format('  （各行 %d 局）', [Length(CALLS)]));
   WriteLn;
@@ -702,6 +744,9 @@ begin
      TotalPlausible, 100 * TotalPlausible / Max(1, TotalMalformed + TotalPlausible)]));
   WriteLn(Format('  2 回一致したもの: 正 %d / 誤 %d',
     [TotalAgreedCorrect, TotalAgreedWrong]));
+  WriteLn(Format('  形は正しいが別の局 %d 件のうち、%d 万件の実在一覧に載っていたのは %d 件',
+    [TotalPlausible, KNOWN_LIST_SIZE div 10000, TotalInList]));
+  Known.Free;
 end;
 
 var

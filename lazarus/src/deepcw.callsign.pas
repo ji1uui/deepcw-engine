@@ -167,6 +167,16 @@ begin
     Call.Suffix := Copy(Base, I + 1, Length(Base) - I);
     Call.Appended := Appended;
     Call.Japanese := IsJapanesePrefix(Call.Prefix);
+    { 日本の後置符字は 1〜3 字です。日本の前置符字に 4 字の後置符字が続く組は
+      存在しないので、形の段階で落とします。実測では、これだけで「形は正しいが
+      別の局」に分類されていた誤りの一部が消えました（付録 H.5）。
+
+      A Japanese suffix is one to three letters. No callsign pairs a Japanese
+      prefix with a four-letter suffix, so it is rejected at the shape stage.
+      In measurement this alone removed part of what had been counted as
+      well-formed but wrong (appendix H.5). }
+    if Call.Japanese and (Length(Call.Suffix) > 3) then
+      Exit(False);
     Exit(True);
   end;
 end;
