@@ -1294,6 +1294,11 @@ end;
 procedure RunReview;
 const
   RATE = 8000;
+  { モデルの 15 ms の枠が標本に割り切れない周波数。丸めの誤りは、割り切れる
+    周波数では現れません。
+    A rate at which the model's 15 ms frame does not divide into whole samples;
+    a rounding fault does not show at one where it does. }
+  ODD_RATE = 11025;
   SLICE_SECONDS = 0.5;
 var
   Stream: TStreamingDecoder;
@@ -1301,9 +1306,12 @@ var
   Audio, Piece, Got: TSingleArray;
   Reference: string;
   I, Position, Taken, Failures, Rate2: Integer;
-  From_, To_: Double;
+  From_, To_, StartAt: Double;
   Chars: TDecodedChars;
   First, Last: Double;
+  { 入れた標本の総数。時計の正解をここから計算します。
+    The total samples fed in, from which the correct clock is computed. }
+  Fed: Int64;
 
   procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
   begin
@@ -1322,12 +1330,17 @@ var
   procedure FeedAll(Rate: Integer; Analyse: Boolean);
   begin
     Position := 0;
+    Inc(Fed, Length(Audio));
     while Position < Length(Audio) do
     begin
       Taken := Min(Round(SLICE_SECONDS * Rate), Length(Audio) - Position);
       Piece := Copy(Audio, Position, Taken);
+      { 復号器の時計を先に読みます。足したあとでは 1 回ぶん先になります。
+        The decoder's clock is read first; after the append it would be one
+        buffer ahead. }
+      StartAt := Stream.ElapsedSeconds;
       Stream.Append(Piece, Rate);
-      History.Append(Piece, Rate);
+      History.Append(Piece, Rate, StartAt);
       Inc(Position, Taken);
       if Analyse and Stream.Ready then
         Stream.Step;
@@ -1436,6 +1449,94 @@ begin
         From_, To_, Rate2)) > 0, '(空で返った)');
     Verdict('引いた音は新しい周波数で返る', Rate2 = 16000,
       Format('(%d Hz)', [Rate2]));
+  finally
+    History.Free;
+    Stream.Free;
+  end;
+
+  { [5] 溜まりを抱えたまま受信を止めても、時計が戻らず、捨てた分を申告すること。
+
+        解析にかけるのは先頭の 24 秒までなので、それより多く溜まったところで
+        止めると、解析した長さだけ時刻を進めながら全部を捨てることになりかねない。
+        **時計が戻れば、以後の聴き直しはすべて別の場所を鳴らす。**
+
+        [5] Stopping with a backlog must not move the clock backwards, and must
+        report what went. Only the first 24 seconds is analysed, so stopping with
+        more than that buffered risks advancing the clock by the analysed length
+        while discarding all of it. **A clock that goes back makes every later
+        replay play the wrong place.** }
+  Stream := TStreamingDecoder.Create(Decoder);
+  History := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, RATE);
+  try
+    Audio := Synthesise(Reference, RATE, TUNER_TARGET_TONE_HZ, Noise, 6204);
+    SetLength(Piece, Round(50 * RATE));
+    for I := 0 to High(Piece) do
+      Piece[I] := Audio[I mod Length(Audio)];
+    Audio := Piece;
+    FeedAll(RATE, False);
+    First := Stream.ElapsedSeconds;
+    Stream.Finish;
+    Verdict('溜まりを抱えて止めても時計が戻らない',
+      Stream.ElapsedSeconds >= First - 0.001,
+      Format('(%.3f 秒 → %.3f 秒)', [First, Stream.ElapsedSeconds]));
+    Verdict('溜まりを抱えて止めても時計が一致する',
+      SameValue(Stream.ElapsedSeconds, History.LatestSeconds, 0.01),
+      Format('(復号 %.3f 秒 / 保管 %.3f 秒)',
+        [Stream.ElapsedSeconds, History.LatestSeconds]));
+    Verdict('解析しなかった分を捨てたと申告する', Stream.DroppedSeconds > 0,
+      Format('(%.1f 秒)', [Stream.DroppedSeconds]));
+  finally
+    History.Free;
+    Stream.Free;
+  end;
+
+  { [6] 何度も確定を繰り返しても、時計が実際の音の長さから離れていかないこと。
+
+        確定のたびに、時刻は秒で進め、捨てるのは丸めた標本数――この組み合わせは
+        1 回あたり半標本ずつ食い違う。1 回では見えないが、積もれば文字の時刻が
+        音からずれる。**長く受信するほど悪くなる種類の誤りなので、回数をかけて
+        測る。**
+
+        録音周波数は 11025 Hz で測る。8000 Hz では、モデルの 15 ms の枠がちょうど
+        120 標本に割り切れるため丸めが起きず、**誤りがあっても現れない。**
+        割り切れない周波数を選ばなければ、この試験は素通りする。
+
+        [6] Repeated commits must not let the clock drift from the actual length
+        of audio. Advancing in seconds while discarding a rounded sample count
+        disagrees by half a sample each time; invisible once, but it accumulates
+        until the character times no longer match the sound. **It is the kind of
+        error that gets worse the longer reception runs, so it is measured over
+        many commits.**
+
+        The rate used is 11025 Hz. At 8000 Hz the model's 15 ms frame is exactly
+        120 samples, so nothing rounds and **the fault would not show even if it
+        were there**; without a rate the frame does not divide, this test passes
+        vacuously. }
+  Stream := TStreamingDecoder.Create(Decoder);
+  History := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, ODD_RATE);
+  try
+    Audio := Synthesise(Reference, ODD_RATE, TUNER_TARGET_TONE_HZ, Noise, 6205);
+    Fed := 0;
+    for I := 1 to 12 do
+      FeedAll(ODD_RATE, True);
+    Stream.Finish;
+    { 2 つの時計を突き合わせるのではなく、**入れた標本数から計算した正解**と
+      突き合わせます。両方が同じ向きにずれていれば、突き合わせても気づけない
+      うえ、ずれの量は音の内容しだいで変わるため、緩い許容では素通りします。
+      Rather than comparing the two clocks, the decoder's is compared with **the
+      answer computed from the number of samples fed in**. Two clocks drifting
+      the same way would agree with each other, and the size of the drift
+      depends on the audio, so a loose tolerance lets it through. }
+    Verdict('確定を繰り返しても時計が実際の音の長さと一致する',
+      Abs(Stream.ElapsedSeconds - Fed / ODD_RATE) < 1E-6,
+      Format('(復号 %.6f 秒 / 実際 %.6f 秒、差 %.2f 標本)',
+        [Stream.ElapsedSeconds, Fed / ODD_RATE,
+         (Stream.ElapsedSeconds - Fed / ODD_RATE) * ODD_RATE]));
+    Verdict('確定を繰り返しても保管の時計が実際の音の長さと一致する',
+      Abs(History.LatestSeconds - Fed / ODD_RATE) < 1E-6,
+      Format('(保管 %.6f 秒 / 実際 %.6f 秒、差 %.2f 標本)',
+        [History.LatestSeconds, Fed / ODD_RATE,
+         (History.LatestSeconds - Fed / ODD_RATE) * ODD_RATE]));
   finally
     History.Free;
     Stream.Free;

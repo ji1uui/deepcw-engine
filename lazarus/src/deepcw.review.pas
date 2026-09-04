@@ -78,6 +78,10 @@ type
       The time, in seconds since reception began, of the oldest sample kept. }
     FBaseSeconds: Double;
     FSeconds: Double;
+    { 求めた保持時間のうち、記憶が足りずに確保できなかった秒数。0 なら要求どおり。
+      Seconds of the requested retention that memory would not allow; zero means
+      the request was met in full. }
+    FShortfall: Double;
     FLock: TRTLCriticalSection;
     procedure Resize(ARate: Integer);
     function LatestUnlocked: Double;
@@ -85,12 +89,25 @@ type
     constructor Create(ASeconds: Double; ARate: Integer);
     destructor Destroy; override;
 
-    { 受け取った音声を足します。録音周波数が変わったときは、それまでの音声を
-      手放して新しい周波数で保持し直します。時刻は続きから数えます。
+    { 受け取った音声を、それが始まる時刻とともに足します。
 
-      Adds received audio. A change of capture rate releases what was held and
-      starts again at the new rate; the clock continues from where it was. }
-    procedure Append(const Samples: TSingleArray; ASampleRate: Integer);
+      時刻は呼び出し側（復号器）が持っているものをそのまま渡してください。
+      保管庫が独自に数えると、復号器が数え直した場面――受信のやり直し、ファイルの
+      復号、録音周波数の変更――でどちらかがずれ、聴き直しが別の場所を鳴らします。
+      **渡された時刻が保持しているものの続きでなければ、中身を手放して数え直します。**
+      これにより、2 つの時計は仕組みとして食い違えません（要件 FR-E.10）。
+
+      Adds received audio together with the time at which it begins.
+
+      The time must be the caller's — the decoder's — rather than one counted
+      here. A clock of its own would disagree wherever the decoder restarts its
+      own: a fresh reception, a file decode, a change of capture rate; and a
+      replay would then play the wrong place. **When the time handed in does not
+      continue what is held, the contents are released and counting restarts
+      from it.** The two clocks therefore cannot disagree by construction
+      (requirement FR-E.10). }
+    procedure Append(const Samples: TSingleArray; ASampleRate: Integer;
+      StartSeconds: Double);
 
     procedure Clear;
 
@@ -114,6 +131,9 @@ type
     { 保持時間（秒）。変えると、はみ出した分は古いほうから消えます。
       The retention in seconds; shortening it discards the oldest audio. }
     property RetentionSeconds: Double read FSeconds;
+    { 記憶が足りずに確保できなかった秒数。診断に出します。
+      Seconds the memory would not allow, for the diagnostics. }
+    function ShortfallSeconds: Double;
     procedure SetRetention(ASeconds: Double);
   end;
 
@@ -140,12 +160,43 @@ end;
   retention or the capture rate changes, and neither change leaves the audio
   already held usable as it stands. }
 procedure TAudioHistory.Resize(ARate: Integer);
+var
+  Wanted: Int64;
 begin
   FRate := Max(1, ARate);
   FData := nil;
-  SetLength(FData, Max(1, Round(FSeconds * FRate)));
   FCount := 0;
   FHead := 0;
+  FShortfall := 0;
+  Wanted := Max(1, Round(FSeconds * FRate));
+  { 30 分を 48 kHz で保つと 345 MB を一度に確保することになります。取れない
+    ことは実際に起こり得ます（32 ビット版、混み合った機械）。取れないまま
+    例外を上げると、受信の脈動のたびに同じ失敗を繰り返します。取れるところまで
+    半分ずつ下げ、**足りなかったことを覚えておいて画面に出します**（第 10 章
+    10.9）。
+
+    Half an hour at 48 kHz means a single 345 MB allocation, and failing to get
+    it is a real possibility on a 32-bit build or a busy machine. Letting the
+    exception out would repeat the same failure on every pulse of the receive
+    loop, so the request is halved until it succeeds and **the shortfall is
+    remembered and shown** (chapter 10, rule 10.9). }
+  while Wanted >= FRate do
+  begin
+    try
+      SetLength(FData, Wanted);
+      Break;
+    except
+      on EOutOfMemory do
+      begin
+        FData := nil;
+        Wanted := Wanted div 2;
+      end;
+    end;
+  end;
+  if Length(FData) = 0 then
+    SetLength(FData, FRate);
+  if Length(FData) < Round(FSeconds * FRate) then
+    FShortfall := FSeconds - Length(FData) / FRate;
 end;
 
 function TAudioHistory.LatestUnlocked: Double;
@@ -153,24 +204,34 @@ begin
   Result := FBaseSeconds + FCount / FRate;
 end;
 
-procedure TAudioHistory.Append(const Samples: TSingleArray; ASampleRate: Integer);
+procedure TAudioHistory.Append(const Samples: TSingleArray; ASampleRate: Integer;
+  StartSeconds: Double);
 var
   Capacity, Total, Take, Start, Room, I, Tail: Integer;
-  Latest: Double;
 begin
   if (Length(Samples) = 0) or (ASampleRate <= 0) then
     Exit;
   EnterCriticalSection(FLock);
   try
     if ASampleRate <> FRate then
-    begin
-      { 周波数が変われば、標本の並びの意味が変わります。時刻だけを引き継いで
-        中身は手放します。
-        A different rate gives the samples a different meaning; the clock is
-        carried over and the contents are released. }
-      Latest := LatestUnlocked;
+      { 周波数が変われば、標本の並びの意味が変わります。中身は手放します。
+        A different rate gives the samples a different meaning, so the contents
+        are released. }
       Resize(ASampleRate);
-      FBaseSeconds := Latest;
+
+    { 渡された時刻が、保持しているものの続きになっているか。半標本より離れて
+      いれば、呼び出し側が数え直した（受信のやり直し・ファイルの復号）と見て、
+      こちらも数え直します。**黙って繋げると、以後ずっと別の場所が鳴ります。**
+      Whether the time handed in continues what is held. More than half a sample
+      apart means the caller restarted its own count — a fresh reception, a file
+      decode — so counting restarts here too. **Joining them silently would play
+      the wrong place from then on.** }
+    if (FCount = 0) or
+       (Abs(StartSeconds - LatestUnlocked) > 0.5 / FRate) then
+    begin
+      FCount := 0;
+      FHead := 0;
+      FBaseSeconds := StartSeconds;
     end;
 
     Capacity := Length(FData);
@@ -235,6 +296,16 @@ begin
       The contents go but the clock does not move, so audio received from now on
       still carries the right times. }
     FBaseSeconds := Latest;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TAudioHistory.ShortfallSeconds: Double;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FShortfall;
   finally
     LeaveCriticalSection(FLock);
   end;

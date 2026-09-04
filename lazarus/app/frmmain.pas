@@ -1538,7 +1538,7 @@ begin
     聴き直せます。保持時間より長いファイルは、後ろのぶんだけが残ります。
     The file's own audio is stored, so characters read from a file can be
     replayed too. A file longer than the retention keeps only its tail. }
-  FHistory.Append(Samples, SampleRate);
+  FHistory.Append(Samples, SampleRate, 0);
   UpdateReplayInfo;
   StartDecode(PrepareForDecoder(Samples, SampleRate),
     FDecoder.Metadata.SampleRate);
@@ -2028,6 +2028,7 @@ var
   Fresh: TSingleArray;
   Failure: string;
   Peak: Single;
+  StartAt: Double;
 begin
   if (FCapture = nil) or (FStream = nil) then
     Exit;
@@ -2082,13 +2083,17 @@ begin
       No filtering here: applying an FIR to 0.2 second pieces leaves a
       transient at every seam, so the stream applies it to one whole buffer
       just before analysis. }
+    { 保管庫には、復号器の時計を渡してから同じ音を渡します。時刻の出どころを
+      復号器ひとつに絞ることで、2 つが食い違えなくなります（要件 FR-E.10）。
+      順序が要ります。**足したあとの時刻を渡すと、音がその長さぶん先の時刻に
+      置かれます。**
+      The store is handed the decoder's clock and then the same audio. Taking
+      the time from the decoder alone is what makes the two unable to disagree
+      (requirement FR-E.10). The order matters: **the time read after the append
+      would place the audio one buffer too late.** }
+    StartAt := FStream.ElapsedSeconds;
     FStream.Append(Fresh, FCaptureRate);
-    { 保管庫にも同じものを、同じ形で渡します。復号器と同じ音を同じ順に受け取る
-      ことが、2 つの時計が一致し続ける根拠です（要件 FR-E.10）。
-      The store receives the same audio in the same pieces. Both receiving the
-      same sound in the same order is what keeps the two clocks in step
-      (requirement FR-E.10). }
-    FHistory.Append(Fresh, FCaptureRate);
+    FHistory.Append(Fresh, FCaptureRate, StartAt);
     { ウォーターフォールには、同調も帯域制限も掛ける前の音を見せます。まだ
       選んでいない信号も見えていなければ、選びようがないためです。
       The waterfall is fed the audio before any tuning or filtering: a signal

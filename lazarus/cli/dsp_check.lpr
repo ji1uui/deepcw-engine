@@ -237,8 +237,8 @@ begin
   { 60 秒 = 480000 標本を保持する。/ Sixty seconds is 480000 samples. }
   History := TAudioHistory.Create(60, RATE);
   try
-    { 10 秒ぶんを足す。/ Ten seconds in. }
-    History.Append(Ramp(0, 10 * RATE), RATE);
+    { 10 秒ぶんを 0 秒から足す。/ Ten seconds in, starting at zero. }
+    History.Append(Ramp(0, 10 * RATE), RATE, 0);
     Check('入れた長さがそのまま残る',
       SameValue(History.RetainedSeconds, 10, 1E-6),
       Format('(%.3f 秒)', [History.RetainedSeconds]));
@@ -259,7 +259,7 @@ begin
 
     { 保持を超えて足す。合計 70 秒ぶんで、古い 10 秒は消える。
       Past the retention: seventy seconds in total, so the first ten go. }
-    History.Append(Ramp(10 * RATE, 60 * RATE), RATE);
+    History.Append(Ramp(10 * RATE, 60 * RATE), RATE, 10);
     Check('保持時間を超えない',
       SameValue(History.RetainedSeconds, 60, 1E-6),
       Format('(%.3f 秒)', [History.RetainedSeconds]));
@@ -300,11 +300,41 @@ begin
     Check('まだ来ていない区間は空で返す', Length(Got) = 0,
       Format('(%d 標本)', [Length(Got)]));
 
+    { 時刻が飛んだら、繋げずに数え直す。呼び出し側が受信をやり直した合図であり、
+      **黙って繋げると、以後ずっと別の場所が鳴る。**
+      A jump in the time restarts the count rather than joining: it signals that
+      the caller restarted reception, and **joining silently would play the
+      wrong place from then on.** }
+    History.Append(Ramp(0, RATE), RATE, 500);
+    Check('時刻が飛んだら数え直す',
+      SameValue(History.EarliestSeconds, 500, 1E-6) and
+      SameValue(History.LatestSeconds, 501, 1E-6),
+      Format('(%.3f..%.3f)', [History.EarliestSeconds, History.LatestSeconds]));
+    Check('数え直したあとは前の音を返さない',
+      Length(History.Extract(60, 70, From_, To_, R)) = 0,
+      '(前の音が返った)');
+    { 時刻が戻ってもよい。受信のやり直しは 0 から始まる。
+      Time may also go back: a fresh reception starts at zero. }
+    History.Append(Ramp(0, RATE), RATE, 0);
+    Check('時刻が戻っても数え直す',
+      SameValue(History.EarliestSeconds, 0, 1E-6) and
+      SameValue(History.LatestSeconds, 1, 1E-6),
+      Format('(%.3f..%.3f)', [History.EarliestSeconds, History.LatestSeconds]));
+
+    { 半標本より小さい食い違いは、丸めの誤差として繋げる。ここで数え直すと、
+      正常な受信が 1 回ごとに中身を捨ててしまう。
+      A disagreement below half a sample is rounding and is joined: restarting
+      there would make an ordinary reception discard its contents every time. }
+    History.Append(Ramp(0, RATE), RATE, 1 + 0.4 / RATE);
+    Check('丸め程度のずれは繋げる',
+      SameValue(History.RetainedSeconds, 2, 1E-6),
+      Format('(%.3f 秒)', [History.RetainedSeconds]));
+
     { 一度に容量を超える量が来ても、末尾が残り時刻は合う。
       More than the capacity at once keeps the tail and the clock still adds
       up. }
     History.Clear;
-    History.Append(Ramp(0, 100 * RATE), RATE);
+    History.Append(Ramp(0, 100 * RATE), RATE, 0);
     Check('容量超えの一括入力でも保持時間を守る',
       SameValue(History.RetainedSeconds, 60, 1E-6),
       Format('(%.3f 秒)', [History.RetainedSeconds]));
@@ -317,9 +347,9 @@ begin
       (Length(Got) = RATE) and (Got[0] = 99 * RATE),
       Format('(%.0f)', [Got[0]]));
 
-    { 録音周波数が変わったら、中身は手放して時刻は続ける。
-      A change of rate releases the contents and continues the clock. }
-    History.Append(Ramp(0, 16000), 16000);
+    { 録音周波数が変わったら、中身は手放して渡された時刻から数え直す。
+      A change of rate releases the contents and counts from the time given. }
+    History.Append(Ramp(0, 16000), 16000, 100);
     Check('周波数が変わったら中身を手放す',
       SameValue(History.RetainedSeconds, 1, 1E-6),
       Format('(%.3f 秒)', [History.RetainedSeconds]));
@@ -327,6 +357,9 @@ begin
       SameValue(History.LatestSeconds, 101, 1E-6),
       Format('(%.3f 秒)', [History.LatestSeconds]));
     Check('新しい周波数を申告する', History.SampleRate = 16000);
+    Check('確保できた保持時間に不足がない',
+      SameValue(History.ShortfallSeconds, 0, 1E-6),
+      Format('(%.1f 秒足りない)', [History.ShortfallSeconds]));
   finally
     History.Free;
   end;

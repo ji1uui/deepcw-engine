@@ -536,7 +536,7 @@ begin
     SetLength(Audio, Round(200 * Rate));
     for X := 0 to High(Audio) do
       Audio[X] := X / Rate;
-    History.Append(Audio, Rate);
+    History.Append(Audio, Rate, 0);
     if Transcript.CharItem(PickedIndex, Picked) then
     begin
       Replay := History.Extract(Picked.Seconds, Picked.EndSeconds,

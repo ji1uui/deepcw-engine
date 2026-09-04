@@ -163,6 +163,9 @@ type
       analysis thread. When input outruns analysis, the oldest is discarded to
       stay within the limit. }
     procedure CapBuffer;
+    { 呼び出し側は FLock を保持していること。/ The caller must hold FLock. }
+    function SnapToSample(Seconds: Double; Rate: Integer;
+      out Samples: Integer): Double;
     { 解析にかけるだけの音量があるか。無ければ、溜めた分を捨てて時刻を進めます。
       Whether there is enough level to analyse; if not, the buffer is dropped
       and the time base advanced past it. }
@@ -472,6 +475,29 @@ begin
   end;
 end;
 
+{ 区切りの位置を標本の境目へ丸めます。
+
+  時刻を秒で進めながら、捨てるのは丸めた標本数、という組み合わせは、1 回あたり
+  最大で半標本ぶん食い違います。1 回では見えませんが、確定のたびに積もるため、
+  長く受信するほど文字の時刻が実際の音からずれていきます。聴き直し（FR-E.10）は
+  この時刻をそのまま音の位置として使うので、ここで両者を一致させます。
+
+  Rounds a split point to a sample boundary.
+
+  Advancing the clock in seconds while discarding a rounded number of samples
+  disagrees by up to half a sample each time. One is invisible, but it happens
+  at every commit, so the character times drift from the actual audio the longer
+  reception runs. Replay (FR-E.10) uses those times as positions in the audio,
+  so the two are made to agree here. }
+function TStreamingDecoder.SnapToSample(Seconds: Double; Rate: Integer;
+  out Samples: Integer): Double;
+begin
+  Samples := Max(0, Round(Seconds * Rate));
+  if Samples > FPendingCount then
+    Samples := FPendingCount;
+  Result := Samples / Rate;
+end;
+
 procedure TStreamingDecoder.DropLeading(Samples: Integer);
 var
   I: Integer;
@@ -667,6 +693,7 @@ var
   AnalysisSeconds, SplitSeconds: Double;
   Forced: Boolean;
   Epoch: Int64;
+  DropSamples: Integer;
 begin
   Result := False;
   { まず溜め込みの上限を掛けます。入力が解析に追いつかないときは、ここで古い
@@ -732,11 +759,12 @@ begin
           if FEpoch <> Epoch then
             Exit;
           SetProvisional(Chars);
+          SplitSeconds := SnapToSample(SplitSeconds, Rate, DropSamples);
           FConfirmedSeconds := FConfirmedSeconds + SplitSeconds;
         finally
           LeaveCriticalSection(FLock);
         end;
-        DropLeading(Round(SplitSeconds * Rate));
+        DropLeading(DropSamples);
         Exit;
       end;
     end
@@ -780,12 +808,13 @@ begin
       Exit;
     AppendConfirmed(Committed);
     FProvisional := nil;
+    SplitSeconds := SnapToSample(SplitSeconds, Rate, DropSamples);
     FConfirmedSeconds := FConfirmedSeconds + SplitSeconds;
   finally
     LeaveCriticalSection(FLock);
   end;
 
-  DropLeading(Round(SplitSeconds * Rate));
+  DropLeading(DropSamples);
   Result := Count > 0;
 end;
 
@@ -817,11 +846,30 @@ begin
       Exit;
     AppendConfirmed(Chars);
     FProvisional := nil;
-    FConfirmedSeconds := FConfirmedSeconds + Length(Audio) / Rate;
+    { 溜まっていた音声を**すべて**手放し、その全部ぶん時刻を進めます。
+
+      解析にかけるのは先頭の最大 STREAM_MAX_SECONDS 分だけなので、それより多く
+      溜まっているところで受信を止めると、解析した長さだけ時刻を進めながら
+      溜まっていた全部を捨てることになります。時刻は差の分だけ**戻り**、捨てた
+      音声はどこにも申告されません。解析しなかった分は本当に失われるので、
+      取りこぼしとして数えます（第 10 章 10.1・10.9）。
+
+      **All** of the buffer is released and the clock advanced by all of it.
+
+      Only the first STREAM_MAX_SECONDS is analysed, so stopping reception with
+      more than that buffered would advance the clock by the analysed length
+      while discarding the whole buffer: the clock would move **backwards** by
+      the difference and the discarded audio would go unreported. What was never
+      analysed is genuinely lost, so it is counted as a loss (chapter 10, rules
+      10.1 and 10.9). }
+    if FPendingCount > Length(Audio) then
+      FDroppedSeconds := FDroppedSeconds +
+        (FPendingCount - Length(Audio)) / Rate;
+    FConfirmedSeconds := FConfirmedSeconds + FPendingCount / Rate;
+    FPendingCount := 0;
   finally
     LeaveCriticalSection(FLock);
   end;
-  DropLeading(FPendingCount);
 end;
 
 function TStreamingDecoder.ConfirmedChars: TDecodedChars;
