@@ -27,7 +27,7 @@ program cw_tune;
 uses
   SysUtils, Classes, DateUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Decoder, DeepCW.Dsp, DeepCW.Morse, DeepCW.Tuner, DeepCW.Stream,
-  DeepCW.Callsign, DeepCW.Review, DeepCW.Stations;
+  DeepCW.Callsign, DeepCW.Review, DeepCW.Stations, DeepCW.Multi;
 
 const
   { 試験に使う本文。実際の交信に出てくる形をなぞっています。
@@ -42,7 +42,7 @@ var
   ModelPath: string = '';
   MetadataPath: string = '';
   RuntimePath: string = '';
-  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,correctness,overload,review,detect,track,wide';
+  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,correctness,overload,review,detect,multi,track,wide';
   { 合成に加える白色雑音の大きさ。差が出る水準を選びます。
     White noise level for the synthesis, picked so differences show. }
   Noise: Double = 0.30;
@@ -1914,6 +1914,417 @@ begin
     WriteLn(Format('  %d 件が通らなかった', [Failures]));
 end;
 
+{ 多局同時受信の、窓をまたぐ継ぎ合わせを測ります（要件 FR-I.1・FR-I.7）。
+
+  単局の復号は語間で確定してバッファを進めるが、局が複数あると語間の位置が局ごとに
+  違うため、共有のバッファをどれか 1 局の確定点で進められない。そこで決まった長さの
+  窓を重なりを持たせて進め、局ごとの受信文へは文字の時刻を見て継ぎ足す。
+
+  **この継ぎ合わせが狂うと、症状は「文字が二重になる」か「文字が消える」である。**
+  どちらも受信文をぼんやり眺めているだけでは気づきにくい。そこで各局に**通し番号を
+  送らせる。**1, 2, 3 … と並ぶはずのものが、二重なら同じ番号が続き、抜ければ番号が
+  飛ぶ。狂いがそのまま目に見える。
+
+  Measures the stitching across windows in multi-station reception (requirements
+  FR-I.1 and FR-I.7).
+
+  Single-station decoding confirms at a word gap and advances the buffer by that
+  much; with several stations the gaps fall at different times, so the shared
+  buffer cannot be advanced by any one station's split. A window of fixed length
+  is advanced with an overlap instead, and each station's transcript is extended
+  by looking at the character times.
+
+  **When that stitching goes wrong the symptom is either a doubled character or a
+  missing one** — neither easy to notice by reading the transcript. So each
+  station **sends a running number.** What should read 1, 2, 3 … repeats a number
+  when something is doubled and skips one when something is lost. The fault
+  becomes directly visible. }
+procedure RunMulti;
+const
+  RATE = 8000;
+  CHUNK_SECONDS = 0.5;
+  { 局の数と、それぞれが送る通し番号の個数。窓（10 秒）を何枚もまたぐ長さに
+    なるようにします。
+    How many stations and how many numbered transmissions each sends, long
+    enough to cross several of the ten-second windows. }
+  STATIONS = 3;
+  ROUNDS_SENT = 8;
+var
+  Multi: TMultiStationDecoder;
+  Tones: array[0..STATIONS - 1] of Double;
+  Mixed, Piece: TSingleArray;
+  Logs: TStationLogs;
+  I, J, K, Position, Taken, Failures, Seen, Doubled, Missing, Steps: Integer;
+  Station: Integer;
+  Sent, Text: string;
+  Fed: Int64;
+  Numbers: array of Integer;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
+  { 局 A が送る本文。通し番号を含めます。
+    What station A sends, with a running number in it. }
+  function Sentence(Station, Number: Integer): string;
+  begin
+    Result := Format('DE JH%dABC %d K ', [Station + 1, Number]);
+  end;
+
+  { 全局を同時に鳴らします。各局は自分の通し番号を順に送ります。
+    Sounds every station at once, each sending its numbers in order. }
+  procedure Build(NoiseLevel: Double);
+  var
+    A, B: Integer;
+    Body: string;
+    Audio: TSingleArray;
+  begin
+    Mixed := nil;
+    for A := 0 to STATIONS - 1 do
+    begin
+      Body := '';
+      for B := 1 to ROUNDS_SENT do
+        Body := Body + Sentence(A, B);
+      Audio := Synthesise(NormalizeText(Body), RATE, Tones[A], 0, 7200 + A);
+      if Length(Audio) > Length(Mixed) then
+      begin
+        B := Length(Mixed);
+        SetLength(Mixed, Length(Audio));
+        while B <= High(Mixed) do
+        begin
+          Mixed[B] := 0;
+          Inc(B);
+        end;
+      end;
+      for B := 0 to High(Audio) do
+        Mixed[B] := Mixed[B] + 0.5 * Audio[B];
+    end;
+    RandSeed := 7300;
+    for A := 0 to High(Mixed) do
+      Mixed[A] := Mixed[A] + NoiseLevel * 0.25 * (Random + Random - 1);
+  end;
+
+  { 取り込みの経路をなぞって流し込みます。
+    Feeds it the way the capture path would. }
+  procedure FeedAll;
+  begin
+    Position := 0;
+    Steps := 0;
+    Fed := 0;
+    while Position < Length(Mixed) do
+    begin
+      Taken := Min(Round(CHUNK_SECONDS * RATE), Length(Mixed) - Position);
+      Piece := Copy(Mixed, Position, Taken);
+      Multi.Append(Piece, RATE);
+      Inc(Fed, Taken);
+      Inc(Position, Taken);
+      while Multi.Ready do
+      begin
+        Multi.Step;
+        Inc(Steps);
+      end;
+    end;
+  end;
+
+  { 受信文から通し番号だけを拾います。
+    Picks the running numbers out of a transcript. }
+  procedure NumbersIn(const Body: string);
+  var
+    A, Value: Integer;
+    Digits: string;
+  begin
+    Numbers := nil;
+    Digits := '';
+    for A := 1 to Length(Body) do
+      if (Body[A] >= '0') and (Body[A] <= '9') then
+        Digits := Digits + Body[A]
+      else
+      begin
+        if Digits <> '' then
+        begin
+          Value := StrToIntDef(Digits, -1);
+          { 呼出符号の中の数字は拾いません。通し番号は 1 桁で、直前が空白です。
+            The digit inside a call sign is not picked up: the running number is a
+            single digit preceded by a space. }
+          if (Value >= 1) and (Value <= ROUNDS_SENT) and (Length(Digits) = 1) and
+             (A - 2 >= 1) and (Body[A - 2] = ' ') then
+          begin
+            SetLength(Numbers, Length(Numbers) + 1);
+            Numbers[High(Numbers)] := Value;
+          end;
+          Digits := '';
+        end;
+      end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('multi: 多局同時受信の継ぎ合わせ / stitching across windows');
+  Failures := 0;
+  for I := 0 to STATIONS - 1 do
+    Tones[I] := 800 + I * 400;
+
+  { [1] 継ぎ合わせそのもの。雑音なしで、復号の誤りと継ぎ合わせの誤りを分けます。
+        [1] The stitching itself. Without noise, a decode error cannot be mistaken
+        for a stitching error. }
+  Multi := TMultiStationDecoder.Create(Decoder);
+  try
+    { 雑音を 0 にはしません。雑音のまったく無い帯域は受信機として存在せず、
+      そこでは雑音面の見積もりが意味を失って、符号の側波帯が局に見えます。
+      復号を狂わせない程度の小さな雑音を置いて、継ぎ合わせだけを見ます。
+      The noise is not set to zero: a band with no noise at all does not exist in
+      a receiver, and there the noise-floor estimate becomes meaningless and a
+      signal's own keying sidebands look like stations. A little noise, too
+      little to disturb decoding, isolates the stitching. }
+    Build(0.3);
+    FeedAll;
+    Multi.Finish;
+    WriteLn(Format('  %.0f 秒を %d 窓で解析。1 局 1 窓あたり %.0f ms。',
+      [Length(Mixed) / RATE, Steps, Multi.CostSeconds * 1000]));
+    Logs := Multi.Logs;
+    Verdict('局の数だけ記録がある', Length(Logs) = STATIONS,
+      Format('(%d 件)', [Length(Logs)]));
+
+    Doubled := 0;
+    Missing := 0;
+    Seen := 0;
+    for I := 0 to High(Logs) do
+    begin
+      Station := -1;
+      for J := 0 to STATIONS - 1 do
+        if Abs(Logs[I].Hz - Tones[J]) <= 20 then
+          Station := J;
+      if Station < 0 then
+        Continue;
+      Text := DecodedText(Logs[I].Chars);
+      NumbersIn(Text);
+      Inc(Seen, Length(Numbers));
+      for J := 1 to High(Numbers) do
+      begin
+        if Numbers[J] = Numbers[J - 1] then
+          Inc(Doubled)
+        else if Numbers[J] <> Numbers[J - 1] + 1 then
+          Inc(Missing);
+      end;
+      Write(Format('    %.0f Hz（±%.0f）: 番号 ', [Logs[I].Hz, Logs[I].HalfWidthHz]));
+      for J := 0 to High(Numbers) do
+        Write(Numbers[J], ' ');
+      WriteLn;
+    end;
+    { 送った番号がすべて、1 度ずつ、順に出ていること。
+      Every number sent must appear once each, in order. }
+    Verdict('窓の継ぎ目で文字が二重にならない', Doubled = 0,
+      Format('(%d 箇所)', [Doubled]));
+    Verdict('窓の継ぎ目で文字が消えない', Missing = 0,
+      Format('(%d 箇所)', [Missing]));
+    Verdict('送った回数ぶんの番号が出る', Seen = STATIONS * ROUNDS_SENT,
+      Format('(%d / %d)', [Seen, STATIONS * ROUNDS_SENT]));
+
+    { [2] 局ごとの受信文が混ざらないこと。**混ざると、別の局のコールサインが
+          自分の局の欄に出る。**待機モードでは誤報になる。
+          [2] Transcripts must not mix. **Mixed, another station's call sign
+          appears under this one** — a false alarm in the waiting mode. }
+    { 記録は音程の昇順で、局の番号順ではありません。**並び順を局番号と取り違えると、
+      正しく動いていても「混ざった」と報告します。**音程から局を引きます。
+      The records are in pitch order, not station order. **Mistaking one for the
+      other reports mixing where there is none.** The station is looked up by
+      pitch. }
+    K := 0;
+    for I := 0 to High(Logs) do
+    begin
+      Text := DecodedText(Logs[I].Chars);
+      Station := -1;
+      for J := 0 to STATIONS - 1 do
+        if Abs(Logs[I].Hz - Tones[J]) <= 20 then
+          Station := J;
+      if Station < 0 then
+        Continue;
+      if Pos(Format('JH%dABC', [Station + 1]), Text) > 0 then
+        Inc(K);
+      for J := 0 to STATIONS - 1 do
+        if (J <> Station) and (Pos(Format('JH%dABC', [J + 1]), Text) > 0) then
+          Verdict(Format('%.0f Hz に他局の符号が混ざらない', [Logs[I].Hz]),
+            False, Format('(JH%dABC が出た)', [J + 1]));
+    end;
+    Verdict('各局が自分の呼出符号を出す', K = STATIONS,
+      Format('(%d / %d 局)', [K, STATIONS]));
+
+    { [3] 時計が、入れた標本の長さとちょうど一致すること。聴き直し（FR-E.10）は
+          この時刻を音の位置として使います。
+          [3] The clock must equal exactly the audio fed in; replay (FR-E.10) uses
+          these times as positions in the audio. }
+    Verdict('時計が入れた音の長さと一致する',
+      Abs(Multi.ElapsedSeconds - Fed / RATE) < 1E-6,
+      Format('(%.6f 秒 / 実際 %.6f 秒)', [Multi.ElapsedSeconds, Fed / RATE]));
+    Verdict('正常な受信で「捨てた」と申告しない', Multi.DroppedSeconds = 0,
+      Format('(%.1f 秒)', [Multi.DroppedSeconds]));
+  finally
+    Multi.Free;
+  end;
+
+  { [4] 雑音のある実運用に近い条件で、局が見つかり本文が読めること。
+        [4] Under conditions closer to the air, the stations must still be found
+        and read. }
+  Multi := TMultiStationDecoder.Create(Decoder);
+  try
+    Build(Noise);
+    FeedAll;
+    Logs := Multi.Logs;
+    K := 0;
+    for I := 0 to High(Logs) do
+    begin
+      Text := DecodedText(Logs[I].Chars);
+      if Pos('JH', Text) > 0 then
+        Inc(K);
+      WriteLn(Format('    雑音あり %.0f Hz: %s', [Logs[I].Hz, Copy(Text, 1, 52)]));
+    end;
+    Verdict('雑音があっても各局を読める', K = STATIONS,
+      Format('(%d / %d 局)', [K, Length(Logs)]));
+  finally
+    Multi.Free;
+  end;
+
+  { [4b] 能力を超えたときに、強い局から順に残し、切り捨てた数を申告すること
+         （要件 FR-I.7）。**黙って減らすと、運用者には局が消えたのか切り捨てられた
+         のか分かりません。**
+
+         この機械では、局が 3 つでも 12 でも実測の費用が上限に届かないため、
+         切り捨ては起こりません。**起こらないものは試験できないので、上限そのものを
+         下げて経路を通します。**費用から決まる数も、この上限も、同じ選び方と同じ
+         申告を通ります。
+
+         [4b] Past capacity, the strongest must be kept and the number cut
+         declared (requirement FR-I.7). **Reducing them silently would leave the
+         operator unable to tell a station that stopped from one that was cut.**
+
+         On this machine the measured cost never reaches the limit, with three
+         stations or twelve, so no cut occurs. **What does not occur cannot be
+         tested, so the ceiling itself is lowered to exercise the path.** The
+         number derived from cost and this ceiling go through the same selection
+         and the same reporting. }
+  Multi := TMultiStationDecoder.Create(Decoder);
+  try
+    Multi.MaxStations := 2;
+    Build(0.3);
+    FeedAll;
+    Multi.Finish;
+    Verdict('上限まで解析する', Multi.AnalysedCount = 2,
+      Format('(%d 局)', [Multi.AnalysedCount]));
+    Verdict('切り捨てた局数を申告する', Multi.DroppedCount = STATIONS - 2,
+      Format('(%d 局)', [Multi.DroppedCount]));
+    Logs := Multi.Summaries;
+    Verdict('切り捨てた局も一覧からは消さない', Length(Logs) = STATIONS,
+      Format('(%d 件)', [Length(Logs)]));
+    { 残すのは強い順。切り捨てられた局には印が付き、本文は伸びない。
+      The strongest are kept; a station that was cut is marked and its transcript
+      does not grow. }
+    { 保証しているのは「厳密に強い順」ではありません。いま解析している局には
+      下駄（MULTI_KEEP_MARGIN_DB）が履かせてあり、わずかに強いだけの局には
+      席を譲りません。顔ぶれを窓ごとに入れ替えないためです。**したがって
+      「切り捨てた局が残した局より強いことは一度もない」と主張すると、より良い
+      振る舞いのほうを不合格にします。**実際の保証は、その差が下駄を超えないこと。
+
+      What is guaranteed is not a strict order by strength. A station already
+      being analysed carries a margin (MULTI_KEEP_MARGIN_DB) and does not give up
+      its place to one that is only slightly stronger, so that the set does not
+      change from window to window. **Asserting that a cut station is never
+      stronger than a kept one would therefore fail the better behaviour.** The
+      real guarantee is that it is never stronger by more than the margin. }
+    K := 0;
+    for I := 0 to High(Logs) do
+      if Logs[I].Analysed then
+      begin
+        Inc(K);
+        for J := 0 to High(Logs) do
+          if not Logs[J].Analysed and
+             (Logs[J].LevelDb > Logs[I].LevelDb + MULTI_KEEP_MARGIN_DB) then
+            Verdict('明らかに強い局を切り捨てない', False,
+              Format('(%.1f dB を切り捨てて %.1f dB を残した)',
+                [Logs[J].LevelDb, Logs[I].LevelDb]));
+      end;
+    Verdict('印の付いた局が上限と一致する', K = 2, Format('(%d 局)', [K]));
+    for I := 0 to High(Logs) do
+      WriteLn(Format('    %.0f Hz: %.1f dB  %s  %d 文字',
+        [Logs[I].Hz, Logs[I].LevelDb,
+         BoolToStr(Logs[I].Analysed, '解析中', '切り捨て'),
+         Length(Multi.TextOf(Logs[I].Id))]));
+    { 顔ぶれが窓ごとに入れ替わらないこと。入れ替わると、どの局の受信文にも
+      時刻の飛びとしてしか現れない穴が空きます。切り捨てた局は最初から最後まで
+      切り捨てられているべきです。
+      The chosen set must not change between windows. When it does, every
+      transcript acquires holes that show only as jumps in the timestamps. A
+      station that was cut should have been cut throughout. }
+    for I := 0 to High(Logs) do
+      if not Logs[I].Analysed then
+        Verdict('切り捨てた局は窓をまたいで切り捨てられ続ける',
+          Length(Multi.TextOf(Logs[I].Id)) = 0,
+          Format('(%d 文字あり＝途中まで解析されていた)',
+            [Length(Multi.TextOf(Logs[I].Id))]));
+  finally
+    Multi.Free;
+  end;
+
+  { [5] 解析が入力に追いつかないとき、溜め込みが止まり、捨てた量を申告すること
+        （第 10 章 10.1）。解析を一度も回さずに流し込みます。
+        [5] When analysis cannot keep up, the buffer must stop growing and the
+        loss be declared (chapter 10, rule 10.1). Nothing is analysed here. }
+  Multi := TMultiStationDecoder.Create(Decoder);
+  try
+    Build(0.3);
+    Position := 0;
+    while Position < Length(Mixed) do
+    begin
+      Taken := Min(Round(CHUNK_SECONDS * RATE), Length(Mixed) - Position);
+      Multi.Append(Copy(Mixed, Position, Taken), RATE);
+      Inc(Position, Taken);
+    end;
+    { 上限は解析（Step）の先頭で掛かります。取り込みの側では掛けません。両方が
+      バッファの先頭を動かすと、解析中に先頭がずれて時刻と取りこぼしの帳簿が
+      狂うためで、DeepCW.Stream と同じ決めごとです。**したがって「Step を呼ばずに
+      上限が掛かる」ことを期待するのは誤りです。**
+      The cap is applied at the start of analysis, not on the capture side: both
+      moving the front would desync the timing and the loss accounting during an
+      analysis, the same rule DeepCW.Stream follows. **Expecting the cap to apply
+      without calling Step is therefore wrong.** }
+    Multi.Step;
+    Verdict('解析すれば上限で溜め込みが止まる',
+      Multi.PendingSeconds <= MULTI_MAX_BUFFER_SECONDS + 0.01,
+      Format('(%.1f 秒)', [Multi.PendingSeconds]));
+    Verdict('追いつけずに捨てた量を申告する', Multi.DroppedSeconds > 0,
+      Format('(%.1f 秒)', [Multi.DroppedSeconds]));
+  finally
+    Multi.Free;
+  end;
+
+  { [6] やり直したら、前の受信の文字が残らないこと。
+        [6] A fresh start must leave nothing of the previous reception. }
+  Multi := TMultiStationDecoder.Create(Decoder);
+  try
+    Build(0.3);
+    FeedAll;
+    Verdict('やり直す前に記録がある', Length(Multi.Logs) > 0, '');
+    Multi.Reset;
+    Verdict('やり直すと記録が消える', Length(Multi.Logs) = 0,
+      Format('(%d 件)', [Length(Multi.Logs)]));
+    Verdict('やり直すと時計が 0 に戻る', Multi.ElapsedSeconds = 0,
+      Format('(%.1f 秒)', [Multi.ElapsedSeconds]));
+  finally
+    Multi.Free;
+  end;
+
+  if Failures = 0 then
+    WriteLn('  すべて通った')
+  else
+    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+end;
+
 var
   Index: Integer;
   Key, Value: string;
@@ -1983,6 +2394,8 @@ begin
       RunReview;
     if Pos('detect', Tests) > 0 then
       RunDetect;
+    if Pos('multi', Tests) > 0 then
+      RunMulti;
     if Pos('track', Tests) > 0 then
       RunTrack;
     if Pos('wide', Tests) > 0 then

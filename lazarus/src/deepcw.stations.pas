@@ -173,6 +173,20 @@ type
   { 追跡している 1 局。見つかった回数と消えた回数を持ちます。
     A station being tracked, with how many rounds it has been seen and missed. }
   TTrackedStation = record
+    { 局を一意に指す番号。現れたときに振り、消えるまで変わりません。
+
+      音程で指すことはできません。局はわずかに動き、動いた先が別の局の番号と
+      重なることもあります。**上の層は局ごとに受信文を貯めるので、指し違えれば
+      別の局の文が混ざります。**番号で指せば、動いても混ざりません。
+
+      A number that identifies the station, assigned when it appears and
+      unchanged until it goes.
+
+      Pitch cannot serve as the identifier: stations drift, and a drifted pitch
+      can land where another's was. **The layer above accumulates a transcript
+      per station, so confusing two of them mixes their text.** A number cannot
+      be confused by drift. }
+    Id: Int64;
     Station: TStation;
     { 続けて見つかった回数と、続けて消えた回数。片方が進めば他方は 0 に戻ります。
       Consecutive rounds seen and missed; advancing one resets the other. }
@@ -213,6 +227,7 @@ type
   TStationTracker = class
   private
     FStations: TTrackedStations;
+    FNextId: Int64;
     FConfirmRounds: Integer;
     FDropRounds: Integer;
     function IndexOfNearest(const Used: array of Boolean;
@@ -229,6 +244,30 @@ type
     { 局と認めたものだけを、音程の昇順で返します。
       The confirmed stations only, in ascending pitch order. }
     function Confirmed: TStations;
+    { 今この回に聞こえている局を、強い順に返します。解析する局を選ぶための
+      順序です（要件 FR-I.7）。
+
+      **認めたかどうかで絞りません。**認めるまで待つと、受信を始めてから最初の
+      1 窓ぶん、どの局も解析されません。呼ばれるのを待つ運用（要件 FR-I.4）では、
+      呼んできた局を読み始めるのがまるごと 1 窓ぶん遅れることになります。
+      1 回だけ現れた雑音を解析してしまう費用は 1 窓ぶんで、そちらのほうが安い。
+
+      認める・忘れるの決まりは、**一覧の落ち着きのため**にあります。解析の可否では
+      なく、画面に出すかどうかに効かせます。
+
+      The stations heard in this round, strongest first: the order in which
+      stations are chosen for analysis (requirement FR-I.7).
+
+      **This is not filtered by whether a station is confirmed.** Waiting for
+      confirmation would leave the first window of a reception with nothing
+      analysed at all, and would delay reading a station that has just started
+      calling by a whole window — which is precisely what the waiting mode
+      (requirement FR-I.4) must not do. Analysing a one-round burst of noise
+      costs one window, which is the cheaper mistake.
+
+      The confirm and drop rules exist **to settle the list**, so they govern what
+      is shown rather than what is analysed. }
+    function Loudest: TTrackedStations;
     { 追跡中のすべて。認める前のものも含みます。診断と試験のためです。
       Everything being tracked, unconfirmed included, for diagnostics and
       tests. }
@@ -486,6 +525,7 @@ end;
 constructor TStationTracker.Create;
 begin
   inherited Create;
+  FNextId := 1;
   FConfirmRounds := DETECT_CONFIRM_ROUNDS;
   FDropRounds := DETECT_DROP_ROUNDS;
 end;
@@ -574,6 +614,8 @@ begin
   begin
     if Used[I] then
       Continue;
+    Kept[Total].Id := FNextId;
+    Inc(FNextId);
     Kept[Total].Station := Found[I];
     Kept[Total].Hits := 1;
     Kept[Total].Misses := 0;
@@ -638,6 +680,36 @@ begin
       Inc(Total);
     end;
   SetLength(Result, Total);
+end;
+
+function TStationTracker.Loudest: TTrackedStations;
+var
+  I, Total, Position: Integer;
+  Moving: TTrackedStation;
+begin
+  Total := 0;
+  SetLength(Result, Length(FStations));
+  for I := 0 to High(FStations) do
+    if FStations[I].Misses = 0 then
+    begin
+      Result[Total] := FStations[I];
+      Inc(Total);
+    end;
+  SetLength(Result, Total);
+  { 強い順。数が少ないので単純な挿入で足ります。
+    Strongest first; the numbers are small enough for a plain insertion. }
+  for I := 1 to High(Result) do
+  begin
+    Moving := Result[I];
+    Position := I;
+    while (Position > 0) and
+          (Result[Position - 1].Station.LevelDb < Moving.Station.LevelDb) do
+    begin
+      Result[Position] := Result[Position - 1];
+      Dec(Position);
+    end;
+    Result[Position] := Moving;
+  end;
 end;
 
 function TStationTracker.All: TTrackedStations;
