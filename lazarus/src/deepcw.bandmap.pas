@@ -99,11 +99,19 @@ type
       Whether the station is calling CQ (requirement FR-J.2), on the evidence of a
       CQ in its transcript. }
     Calling: Boolean;
-    { いま解析の対象になっているか（要件 FR-I.7）。False の行は、局が消えたのでは
-      なく能力の都合で読んでいません。
-      Whether it is being analysed (requirement FR-I.7). A row that is false is
-      not a station that stopped but one there was no capacity to read. }
+    { いま聞こえているか。/ Whether it is audible now. }
+    Heard: Boolean;
+    { いま解析の対象になっているか（要件 FR-I.7）。
+      Whether it is being analysed (requirement FR-I.7). }
     Analysed: Boolean;
+    { 能力の都合で読んでいない局か。**聞こえているのに読んでいない**場合だけ
+      真です。送信を止めただけの局と混同しないための区別で、混同すると、
+      止めただけの局を「切り捨てた」と見せることになります（要件 FR-I.7）。
+      Whether it was cut for want of capacity: true only when it is **audible and
+      not being read.** The distinction keeps it apart from a station that simply
+      stopped, which would otherwise be shown as one that was cut
+      (requirement FR-I.7). }
+    Cut: Boolean;
     { この音程に畳み込まれた別の峰の数（要件 FR-J.6）。0 より大きい行は、
       1 局として読んだふりをせず「密集」と示してください。
       How many peaks were folded into this pitch (requirement FR-J.6). A row
@@ -308,7 +316,9 @@ begin
     Result[I].HalfWidthHz := Logs[I].HalfWidthHz;
     Result[I].FirstSeconds := Logs[I].FirstSeconds;
     Result[I].LastSeconds := Logs[I].LastSeconds;
+    Result[I].Heard := Logs[I].Heard;
     Result[I].Analysed := Logs[I].Analysed;
+    Result[I].Cut := Logs[I].Heard and not Logs[I].Analysed;
     Result[I].Crowded := Logs[I].Crowded;
 
     Words := SplitWords(Logs[I].Chars);

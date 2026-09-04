@@ -194,17 +194,24 @@ type
     { この局から読み取った文字。時刻は受信開始からの通算です。
       The characters read from this station, timed from the start of reception. }
     Chars: TDecodedChars;
-    { いま解析の対象になっているか。能力を超えて切り捨てられた局は False です
-      （要件 FR-I.7）。
-      Whether it is currently being analysed; a station cut for want of capacity
-      is False (requirement FR-I.7). }
+    { いま聞こえているか。直前の窓でこの局の信号があったかどうかです。
+      Whether it is audible now: whether its signal was there in the last
+      window. }
+    Heard: Boolean;
+    { いま解析の対象になっているか（要件 FR-I.7）。
+
+      **Heard と組にして初めて意味が決まります。**聞こえていて解析していないなら
+      能力の都合で切り捨てた局、聞こえていないなら単に送信を止めた局です。
+      どちらも Analysed だけを見ると同じに見えてしまい、送信を止めただけの局を
+      「切り捨てた」と見せることになります。
+
+      Whether it is being analysed (requirement FR-I.7).
+
+      **It only means something paired with Heard.** Audible but not analysed is a
+      station cut for want of capacity; not audible is a station that simply
+      stopped transmitting. On Analysed alone the two look identical, and a
+      station that merely stopped would be shown as one that was cut. }
     Analysed: Boolean;
-    { 局として落ち着いたか。1 回だけ現れたものは False です。解析は最初の 1 回から
-      行いますが、画面に並べるかどうかはこれで決めます（要件 FR-J）。
-      Whether the station has settled; something seen only once is False. Analysis
-      starts from the first round, but whether it belongs on the display is
-      decided by this (requirement FR-J). }
-    Confirmed: Boolean;
     { 上限を超えて捨てた文字の数。0 でなければ、この局の受信文は途中から
       始まっています。
       How many characters were dropped at the limit; anything but zero means this
@@ -786,7 +793,10 @@ var
   I, Index: Integer;
 begin
   for I := 0 to High(FLogs) do
+  begin
+    FLogs[I].Heard := False;
     FLogs[I].Analysed := False;
+  end;
   for I := 0 to High(Present) do
   begin
     Index := LogIndexOf(Present[I].Id);
@@ -808,7 +818,7 @@ begin
     FLogs[Index].HalfWidthHz := Present[I].Station.HalfWidthHz;
     FLogs[Index].Crowded := Present[I].Station.Crowded;
     FLogs[Index].LastSeconds := Present[I].LastSeconds;
-    FLogs[Index].Confirmed := Present[I].Confirmed;
+    FLogs[Index].Heard := True;
     FLogs[Index].Analysed := I < Limit;
   end;
   FAnalysed := Limit;

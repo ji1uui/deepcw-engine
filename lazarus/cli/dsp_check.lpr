@@ -704,13 +704,35 @@ begin
     (Length(Entries[0].Recent) <= BANDMAP_RECENT_CHARS),
     Format('("%s")', [Entries[0].Recent]));
 
-  { 密集と、切り捨ての印がそのまま伝わること（要件 FR-J.6・FR-I.7）。 }
+  { 密集がそのまま伝わること（要件 FR-J.6）。 }
+  SetLength(Logs, 1);
   Logs[0] := LogOf('CQ DE JH2XYZ ', 1000, 0.99);
   Logs[0].Crowded := 2;
-  Logs[0].Analysed := False;
   Entries := BuildBandEntries(Logs, 10);
   Check('密集が伝わる', Entries[0].Crowded = 2);
-  Check('切り捨ての印が伝わる', not Entries[0].Analysed);
+
+  { **「能力の都合で読んでいない」と「送信を止めた」を取り違えないこと**
+    （要件 FR-I.7）。取り違えると、止めただけの局を「切り捨てた」と見せます。
+    **Not being read for want of capacity must not be confused with having
+    stopped** (requirement FR-I.7); confusing them shows a station that merely
+    stopped as one that was cut. }
+  Logs[0] := LogOf('CQ DE JH2XYZ ', 1000, 0.99);
+  Logs[0].Heard := True;
+  Logs[0].Analysed := False;
+  Entries := BuildBandEntries(Logs, 10);
+  Check('聞こえていて読んでいなければ切り捨て', Entries[0].Cut);
+
+  Logs[0] := LogOf('CQ DE JH2XYZ ', 1000, 0.99);
+  Logs[0].Heard := False;
+  Logs[0].Analysed := False;
+  Entries := BuildBandEntries(Logs, 10);
+  Check('聞こえていなければ切り捨てではない', not Entries[0].Cut);
+
+  Logs[0] := LogOf('CQ DE JH2XYZ ', 1000, 0.99);
+  Logs[0].Heard := True;
+  Logs[0].Analysed := True;
+  Entries := BuildBandEntries(Logs, 10);
+  Check('読んでいれば切り捨てではない', not Entries[0].Cut);
 
   { 24 局 × 4000 文字でも、翻訳が目に見える遅れにならないこと。一覧は毎秒
     作り直します。

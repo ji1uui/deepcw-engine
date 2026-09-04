@@ -742,6 +742,7 @@ begin
     Logs[X].Hz := 600 + X * 100;
     Logs[X].LevelDb := 30 - X * 0.5;
     Logs[X].LastSeconds := 300 - X;
+    Logs[X].Heard := X < 22;
     Logs[X].Analysed := X < 20;
     Logs[X].Chars := nil;
   end;
@@ -774,6 +775,14 @@ begin
   { いつ聞こえたかが読めること。 }
   Check('いつ聞こえたかを言葉で出す', BandMap.AgeCaption(0) <> '',
     Format('("%s")', [BandMap.AgeCaption(0)]));
+  { 切り捨てた局と、送信を止めただけの局を、同じ見え方にしないこと（要件 FR-I.7）。
+    A station that was cut and one that merely stopped must not look the same
+    (requirement FR-I.7). }
+  Check('聞こえていて読んでいない局だけが切り捨て',
+    Entries[20].Cut and Entries[21].Cut and not Entries[22].Cut and
+    not Entries[19].Cut,
+    Format('(20:%s 21:%s 22:%s)', [BoolToStr(Entries[20].Cut, True),
+      BoolToStr(Entries[21].Cut, True), BoolToStr(Entries[22].Cut, True)]));
 
   { 行を押すと、その局が選ばれて通知される（要件 FR-J.3）。 }
   Chooser := TStationWatcher.Create;

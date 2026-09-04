@@ -304,15 +304,16 @@ begin
   else
   begin
     Canvas.Brush.Style := bsClear;
-    { 解析していない行は薄く描きます。局が消えたのではなく、能力の都合で読んで
-      いないだけであることが、色の濃さで分かります（要件 FR-I.7）。
-      A row not being analysed is drawn faintly, so that the shade says the
-      station did not stop but that there was no capacity to read it
-      (requirement FR-I.7). }
-    if FEntries[Index].Analysed then
-      Canvas.Font.Color := Font.Color
+    { 薄く描くのは、**聞こえているのに読んでいない**行だけです。送信を止めた
+      だけの局まで薄くすると、能力が足りていないように見えます。止めた局は
+      「いつ聞こえたか」の欄で分かります（要件 FR-I.7）。
+      Only a row that is **audible and not being read** is drawn faintly. Fading a
+      station that merely stopped would suggest the machine could not keep up;
+      that it stopped is what the age column says (requirement FR-I.7). }
+    if FEntries[Index].Cut then
+      Canvas.Font.Color := BlendColor(Color, Font.Color, 0.45)
     else
-      Canvas.Font.Color := BlendColor(Color, Font.Color, 0.45);
+      Canvas.Font.Color := Font.Color;
   end;
 
   X := 4;
@@ -330,7 +331,14 @@ begin
   Canvas.Font.Style := Canvas.Font.Style - [fsBold];
   Inc(X, Round(COLUMN_NAME * FUnit));
 
-  if FEntries[Index].Calling then
+  { 呼べる状態か、読めていないかを 1 語で示します。両方は起こりません。切り捨てた
+    局は解析していないので、CQ を出しているかどうかも分からないためです。
+    One word for whether a station can be called or is not being read; both cannot
+    apply, since a station that was cut is not analysed and so it is not known
+    whether it is calling. }
+  if FEntries[Index].Cut then
+    Canvas.TextOut(X, AtY + 3, '休止')
+  else if FEntries[Index].Calling then
     Canvas.TextOut(X, AtY + 3, 'CQ');
   Inc(X, Round(COLUMN_STATE * FUnit));
 

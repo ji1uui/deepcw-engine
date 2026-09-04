@@ -32,10 +32,42 @@ uses
   LCLType,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
-  DeepCW.Review, DeepCW.Journal,
-  TranscriptView, WaterfallView;
+  DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap,
+  TranscriptView, WaterfallView, BandMapView;
 
 type
+  { 受信のしかた（要件 FR-I.6）。
+
+    「いま何をしているか」を運用者が選びます。**機械の都合ではなく、運用者の
+    状況そのものです。**CQ を待っているのか、いま交信しているのかは、運用者が
+    自分で分かっています。
+
+    要件は 3 つのモードを挙げていますが、コンテストモードは「得点になる局／
+    交信済みの局を区別して並べる」（FR-I.5）が実装されるまで待機モードと
+    同じ振る舞いにしかなりません。**同じ振る舞いのものを別の名前で 2 つ並べる
+    のは、選ばせる意味がないうえに嘘に近いので、置いていません。**
+
+    How reception is being used (requirement FR-I.6).
+
+    The operator chooses what they are doing. **This is their own situation, not
+    the machine's internals**: whether they are waiting for a call or in a
+    contact is something they already know.
+
+    The requirement lists three modes, but the contest mode cannot behave
+    differently from the waiting mode until scoring and worked-before stations
+    are distinguished (FR-I.5). **Two names for one behaviour gives the operator
+    nothing to choose between and comes close to a lie, so it is not offered
+    yet.** }
+  TReceiveMode = (
+    { 1 局に絞って精度を上げる。従来の受信です（要件 FR-I ③）。
+      Narrowed to one station for accuracy; reception as it was
+      (requirement FR-I, third mode). }
+    rmContact,
+    { 帯域内の全局を同時に読み、一覧に出す（要件 FR-I ①）。
+      Reads every station in the band at once and lists them
+      (requirement FR-I, first mode). }
+    rmWatch);
+
   { 復号 1 件を UI スレッドの外で実行し、結果を Synchronize で返します。
     デコーダはフォームが所有したままですが、生きているスレッドは常に 1 つだけ
     であるため安全に共有できます。
@@ -47,6 +79,7 @@ type
   private
     FDecoder: TDeepCWDecoder;
     FStream: TStreamingDecoder;
+    FMulti: TMultiStationDecoder;
     FSamples: TSingleArray;
     FSampleRate: Integer;
     FChars: TDecodedChars;
@@ -61,6 +94,17 @@ type
     { 流し込み受信では、溜まった音声を 1 回だけ解析します。
       For streaming reception, analyse the buffered audio once. }
     constructor CreateStreaming(AStream: TStreamingDecoder; AOnDone: TNotifyEvent);
+    { 帯域内の多局を 1 回ぶん解析します（要件 FR-I）。
+      Analyses one window of the many stations in the band (requirement FR-I). }
+    constructor CreateMulti(AMulti: TMultiStationDecoder; AOnDone: TNotifyEvent);
+    { 録音全体を、待機モードの経路で読み切ります。取り込みと同じように少しずつ
+      流し込むのは、一度に入れると溜め込みの上限で大半が捨てられるためです。
+      Reads a whole recording through the waiting mode's path. It is fed in
+      pieces, as capture would, because all at once most of it would fall off the
+      buffer's limit. }
+    constructor CreateMultiFile(AMulti: TMultiStationDecoder;
+      const ASamples: TSingleArray; ASampleRate: Integer;
+      AOnDone: TNotifyEvent);
     property Chars: TDecodedChars read FChars;
     property Error: string read FError;
   end;
@@ -143,7 +187,17 @@ type
     { 受信の状態 / receive state }
     FLiveChars: TDecodedChars;
     FStream: TStreamingDecoder;
+    { 帯域内の多局を同時に読む機械。交信モードでは動かしません。両方を同時に
+      走らせると、要らないほうにも同じだけの計算を払うことになります。
+      The machine that reads many stations at once; it does not run in the
+      contact mode. Running both would pay the full cost of the one not
+      wanted. }
+    FMulti: TMultiStationDecoder;
     FRingPosition: Int64;
+    FMode: TReceiveMode;
+    { バンドマップを最後に作り直した時刻。一覧は毎秒 1 回で足ります。
+      When the band map was last rebuilt; once a second is enough for a list. }
+    FBandMapAt: TDateTime;
 
     { 画面の骨組み / layout }
     FPages: TPageControl;
@@ -186,6 +240,8 @@ type
     FRxDevice: TComboBox;
     FRxDeviceRefresh: TButton;
     FRxWaterfall: TWaterfallView;
+    FRxBandMap: TBandMapView;
+    FRxMode: TComboBox;
     FRxTuneInfo: TLabel;
     FRxTuneClear: TButton;
     FRxTrack: TCheckBox;
@@ -239,6 +295,17 @@ type
     procedure TxStopClick(Sender: TObject);
     procedure TxSaveClick(Sender: TObject);
     procedure TxVerifyClick(Sender: TObject);
+
+    { 受信のしかた（要件 FR-I.6・FR-J） / how reception is used }
+    procedure RxModeChanged(Sender: TObject);
+    procedure RxStationChosen(Sender: TObject; Id: Int64; Hz: Double);
+    procedure ApplyMode;
+    procedure RefreshBandMap;
+    { いま動いている機械の時計。受信開始からの通算秒です。聴き直しも記録も
+      これを原点にします。
+      The clock of whichever machine is running: seconds since reception began.
+      Replay and the journal both take their origin from it. }
+    function ActiveElapsedSeconds: Double;
 
     { 検索（要件 FR-B.5） / search (requirement FR-B.5) }
     procedure RxFindChanged(Sender: TObject);
@@ -324,10 +391,52 @@ begin
   inherited Create(False);
 end;
 
+constructor TDecodeThread.CreateMulti(AMulti: TMultiStationDecoder;
+  AOnDone: TNotifyEvent);
+begin
+  FMulti := AMulti;
+  FOnDone := AOnDone;
+  FreeOnTerminate := False;
+  inherited Create(False);
+end;
+
+constructor TDecodeThread.CreateMultiFile(AMulti: TMultiStationDecoder;
+  const ASamples: TSingleArray; ASampleRate: Integer; AOnDone: TNotifyEvent);
+begin
+  FMulti := AMulti;
+  FSamples := ASamples;
+  FSampleRate := ASampleRate;
+  FOnDone := AOnDone;
+  FreeOnTerminate := False;
+  inherited Create(False);
+end;
+
 procedure TDecodeThread.Execute;
+const
+  { 流し込む刻み。取り込みの脈動と同じ程度にします。
+    The size of each piece, about what a pulse of capture delivers. }
+  FILE_CHUNK_SECONDS = 1.0;
+var
+  Position, Taken: Integer;
 begin
   try
-    if FStream <> nil then
+    if (FMulti <> nil) and (Length(FSamples) > 0) then
+    begin
+      Position := 0;
+      while (Position < Length(FSamples)) and not Terminated do
+      begin
+        Taken := Min(Round(FILE_CHUNK_SECONDS * FSampleRate),
+          Length(FSamples) - Position);
+        FMulti.Append(Copy(FSamples, Position, Taken), FSampleRate);
+        Inc(Position, Taken);
+        while FMulti.Ready and not Terminated do
+          FMulti.Step;
+      end;
+      FMulti.Finish;
+    end
+    else if FMulti <> nil then
+      FMulti.Step
+    else if FStream <> nil then
       FStream.Step
     else
       FChars := FDecoder.DecodeLongSamplesTimed(FSamples, FSampleRate);
@@ -371,6 +480,7 @@ begin
   FReviewPlay := TAudioPlayback.Create;
   FHistory := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, FCaptureRate);
   FJournal := TTranscriptJournal.Create(JournalDirectory);
+  FMode := rmContact;
 
   BuildUI;
   LoadSettings;
@@ -382,6 +492,7 @@ begin
   { 読み込んだ表示設定を実際に反映します。設定は代入だけでは効きません。
     Apply the loaded display settings; assigning the controls is not enough. }
   RxDisplayChanged(nil);
+  FRxMode.OnChange := @RxModeChanged;
   { 読み込んだ保持時間を保管庫へ反映します。設定を読むだけでは効きません。
     Apply the retention that was loaded; reading the setting is not enough. }
   FHistory.SetRetention(SelectedRetention);
@@ -390,6 +501,13 @@ begin
     Apply the loaded setting to the journal too; holding it in a control is not
     enough. }
   FJournal.Enabled := FSetJournal.Checked;
+  { 読み込んだモードを画面へ反映します。控えるだけでは効きません。
+    Apply the mode that was loaded; holding it in a control is not enough. }
+  if FRxMode.ItemIndex = 1 then
+    FMode := rmWatch
+  else
+    FMode := rmContact;
+  ApplyMode;
   UpdateFindInfo;
   { 設定に装置名が無かった場合でも一覧は用意します。
     The list is built even when the settings held no device name. }
@@ -736,6 +854,31 @@ begin
   FRxConfirmSpeed.ItemIndex := 1;
   FRxConfirmSpeed.OnChange := @RxConfirmSpeedChanged;
 
+  { 受信のしかたを選びます。**いま何モードかが常に見えていること**が要件です
+    （FR-I.6）ので、選択そのものを操作列に置き、説明を隣に添えます。
+    How reception is used. The requirement is that the mode **is always visible**
+    (FR-I.6), so the choice itself sits in the control row with a word of
+    explanation beside it. }
+  AddLabel(LiveControls, '受信のしかた', 556, 56);
+  FRxMode := TComboBox.Create(LiveControls);
+  FRxMode.Parent := LiveControls;
+  FRxMode.SetBounds(646, 52, 150, 28);
+  FRxMode.Style := csDropDownList;
+  { 表記は短くします。長い説明を選択肢に入れると、狭い窓で切れて**どちらを
+    選んでいるのかが読めなくなります。**モードが常に見えていることが要件です
+    （FR-I.6）。説明は状態表示に出します。
+    The captions are short. A long explanation inside the choice is cut off in a
+    narrow window and **then which mode is set cannot be read** — and the
+    requirement is that it always can (FR-I.6). The explanation goes to the status
+    line instead. }
+  FRxMode.Items.Add('交信モード');
+  FRxMode.Items.Add('待機モード');
+  FRxMode.ItemIndex := 0;
+  { 通知は設定を読み終えてから繋ぎます。読み込みの代入で通知が走ると、起動した
+    だけで「モードにしました」という身に覚えのない案内が出ます。
+    The notification is attached after the settings are read: assigning during the
+    load would announce a mode change the operator never made. }
+
   FRxAntiAlias := TCheckBox.Create(LiveControls);
   FRxAntiAlias.Parent := LiveControls;
   FRxAntiAlias.SetBounds(556, 26, 190, 24);
@@ -875,6 +1018,16 @@ begin
   FRxTranscript.OnCharChosen := @RxCharChosen;
   FRxTranscript.Font.Size := 14;
   Stretch(FRxTranscript, alClient);
+
+  { バンドマップは受信テキストと同じ場所に置き、モードで入れ替えます。並べて
+    出すと、どちらも狭くなって両方読めなくなります。
+    The band map occupies the same place as the transcript and the mode swaps
+    them. Side by side, both would be too narrow to read. }
+  FRxBandMap := TBandMapView.Create(TextPanel);
+  FRxBandMap.Parent := TextPanel;
+  FRxBandMap.OnStationChosen := @RxStationChosen;
+  FRxBandMap.Visible := False;
+  Stretch(FRxBandMap, alClient);
 end;
 
 function TMainForm.BuildSettingsTab: TTabSheet;
@@ -1044,6 +1197,7 @@ begin
     FRxFontSize.Value := ClampInt(Ini.ReadInteger('receive', 'font_size', 14), 9, 32);
     FSetRetention.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'retention', 1), 0, 3);
     FSetJournal.Checked := Ini.ReadBool('receive', 'journal', True);
+    FRxMode.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'mode', 0), 0, 1);
     FSetBandwidth.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'bandwidth', 0),
       0, FSetBandwidth.Items.Count - 1);
     { 前回の同調先は覚えておきます。同じ設備なら音程は同じであることが多く、
@@ -1102,6 +1256,7 @@ begin
       Ini.WriteInteger('receive', 'bandwidth', FSetBandwidth.ItemIndex);
       Ini.WriteInteger('receive', 'retention', FSetRetention.ItemIndex);
       Ini.WriteBool('receive', 'journal', FSetJournal.Checked);
+      Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('audio', 'input_device', SelectedDeviceName);
       Ini.WriteBool('receive', 'track_signal', FRxTrack.Checked);
     finally
@@ -1130,6 +1285,7 @@ begin
   end;
   FreeAndNil(FCompletedThread);
   FreeAndNil(FStream);
+  FreeAndNil(FMulti);
   FreeAndNil(FDecoder);
   FEngineError := '';
   UnloadOnnxRuntime;
@@ -1354,6 +1510,10 @@ begin
     LogDiagnostic('デコード', Thread.Error);
     SetStatus('', '', StatusLine(Thread.Error));
   end
+  else if FMode = rmWatch then
+    { 待機モードでは、局ごとの受信文ではなく一覧を出します。
+      In the waiting mode the list is shown, not a per-station transcript. }
+    RefreshBandMap
   else
   begin
     if FAppendMode then
@@ -1372,10 +1532,24 @@ begin
   { 受信を止めたあとに解析が終わったなら、ここで残りを確定させます。
     If reception was stopped while this analysis ran, the tail is committed
     now. }
-  if FFinishPending and (FCapture = nil) and (FStream <> nil) then
+  if FFinishPending and (FCapture = nil) then
   begin
     FFinishPending := False;
     try
+      { どちらの機械が動いていたかで、残りを読み切る相手が違います。動いて
+        いないほうを触ると、何も無いところを確定させることになります。
+        Which machine was running decides which one reads out the remainder;
+        touching the other would commit from nothing. }
+      if FMode = rmWatch then
+      begin
+        if FMulti <> nil then
+        begin
+          FMulti.Finish;
+          FBandMapAt := 0;
+          RefreshBandMap;
+        end;
+        Exit;
+      end;
       FStream.Finish;
       { ShowStreamText の中で、確定した末尾が記録へ回ります。そのあとで書き残しを
         出さないと、最後の語が待ったまま残ります（要件 FR-B.6）。
@@ -1640,6 +1814,9 @@ begin
     wrong place (requirement FR-E.10). }
   if FStream <> nil then
     FStream.Reset;
+  if FMulti <> nil then
+    FMulti.Reset;
+  FRxBandMap.Clear;
   FReviewPlay.Stop;
   { ファイルの復号は実時刻を持ちません。記録は実時刻の記録なので、ここでは
     書き残しを出すだけで、以後は書きません（要件 FR-B.6）。
@@ -1657,6 +1834,20 @@ begin
     replayed too. A file longer than the retention keeps only its tail. }
   FHistory.Append(Samples, SampleRate, 0);
   UpdateReplayInfo;
+  { 待機モードでは、録音も帯域として読みます。混み合ったバンドを録った音から
+    一覧を作れますし、**音声装置の無い機械でもこの経路を確かめられます。**
+    In the waiting mode a recording is read as a band: a list can be built from a
+    recording of a crowded band, and **the path can be checked on a machine with
+    no sound hardware.** }
+  if FMode = rmWatch then
+  begin
+    if FMulti = nil then
+      FMulti := TMultiStationDecoder.Create(FDecoder);
+    FRxBusy.Caption := 'デコード中...';
+    FDecodeThread := TDecodeThread.CreateMultiFile(FMulti, Samples, SampleRate,
+      @DecodeFinished);
+    Exit;
+  end;
   StartDecode(PrepareForDecoder(Samples, SampleRate),
     FDecoder.Metadata.SampleRate);
 end;
@@ -1684,6 +1875,8 @@ begin
       appeared. }
     if FStream = nil then
       FStream := TStreamingDecoder.Create(FDecoder);
+    if (FMode = rmWatch) and (FMulti = nil) then
+      FMulti := TMultiStationDecoder.Create(FDecoder);
     ApplyStreamSettings;
     { 輪バッファを作り直したので、読み出し位置も先頭へ戻します。
       The ring was recreated, so the read position goes back to its start. }
@@ -1740,6 +1933,20 @@ begin
     The waiting line is written out: the last word of a contact usually does not
     end on a word space, so without this it would be missing from the record
     (requirement FR-B.6). }
+  { 待機モードでは、窓 1 枚に満たない残りをここで読み切ります。読まないと、
+    最後の 10 秒がどの局からも落ちます（要件 FR-I.1）。
+    In the waiting mode the remainder shorter than a window is read out here;
+    without it the last ten seconds would be missing from every station
+    (requirement FR-I.1). }
+  if (FMode = rmWatch) and (FMulti <> nil) and not DecoderBusy then
+    try
+      FMulti.Finish;
+      FBandMapAt := 0;
+      RefreshBandMap;
+    except
+      on E: Exception do
+        LogDiagnostic('受信の終了', E.Message);
+    end;
   if FJournal <> nil then
     FJournal.Flush;
   SetStatus('', '待機中', '受信を停止しました。');
@@ -1750,6 +1957,9 @@ begin
   FLiveChars := nil;
   if FStream <> nil then
     FStream.Reset;
+  if FMulti <> nil then
+    FMulti.Reset;
+  FRxBandMap.Clear;
   { 受信テキストを消したら、そこを指していた音も手放します。残しておくと、
     次の受信の時刻と噛み合わない音が保管庫に居座ります（要件 FR-E.10）。
     Clearing the transcript releases the audio it pointed at; keeping it would
@@ -1778,6 +1988,116 @@ begin
   Clipboard.AsText := FRxTranscript.AsText;
   SetStatus('', '', Format('受信テキスト %d 文字をコピーしました。',
     [FRxTranscript.CharCount]));
+end;
+
+{ ---- 受信のしかた（要件 FR-I.6・FR-J） ---- }
+
+function TMainForm.ActiveElapsedSeconds: Double;
+begin
+  if (FMode = rmWatch) and (FMulti <> nil) then
+    Result := FMulti.ElapsedSeconds
+  else if FStream <> nil then
+    Result := FStream.ElapsedSeconds
+  else
+    Result := 0;
+end;
+
+{ モードに合わせて画面を組み替えます。
+
+  受信を**やり直します。**動かす機械が変わると時計の出どころも変わり、聴き直し
+  （FR-E.10）が指す先が食い違うためです。運用上、モードを変えるのは局面が
+  変わるときなので、そこで受信文が改まるのは自然です。バンドマップの記録は
+  それぞれの機械が持っているので、切り替えで失われるのは画面の続きだけです。
+
+  Rearranges the window for the mode.
+
+  Reception **starts afresh.** A different machine means a different clock, and
+  replay (requirement FR-E.10) would otherwise point somewhere else. Changing
+  mode happens when the situation changes, so a fresh transcript there is
+  natural; each machine keeps its own records, so what a switch costs is only the
+  continuity on screen. }
+procedure TMainForm.ApplyMode;
+begin
+  if FMode = rmWatch then
+  begin
+    if (FMulti = nil) and (FDecoder <> nil) then
+      FMulti := TMultiStationDecoder.Create(FDecoder);
+    if FMulti <> nil then
+      FMulti.Reset;
+  end
+  else
+  begin
+    if FStream <> nil then
+      FStream.Reset;
+  end;
+
+  { どちらのモードでも、時計の出どころが変わったので保管庫と記録を改めます。
+    Either way the clock has a new origin, so the store and the journal start
+    again. }
+  FReviewPlay.Stop;
+  if FHistory <> nil then
+    FHistory.Clear;
+  if FJournal <> nil then
+    FJournal.Flush;
+  FJournalled := 0;
+  FClockOrigin := 0;
+  FLiveChars := nil;
+  FRxTranscript.Clear;
+  FRxBandMap.Clear;
+
+  FRxTranscript.Visible := FMode = rmContact;
+  FRxBandMap.Visible := FMode = rmWatch;
+  UpdateReplayInfo;
+  UpdateFindInfo;
+end;
+
+procedure TMainForm.RxModeChanged(Sender: TObject);
+begin
+  if FRxMode.ItemIndex = 1 then
+    FMode := rmWatch
+  else
+    FMode := rmContact;
+  ApplyMode;
+  MarkSettingsDirty;
+  if FMode = rmWatch then
+    SetStatus('', '', '待機モードにしました。帯域内の局を一覧に出します。' +
+      '受信文は改めて取り直します。')
+  else
+    SetStatus('', '', '交信モードにしました。選んだ 1 局を読みます。' +
+      '受信文は改めて取り直します。');
+end;
+
+{ 一覧の行を選んだら、その局へ同調して交信モードへ移ります（要件 FR-J.3）。
+  操作は 1 回です。
+  Choosing a row tunes to that station and moves to the contact mode
+  (requirement FR-J.3), in one gesture. }
+procedure TMainForm.RxStationChosen(Sender: TObject; Id: Int64; Hz: Double);
+begin
+  FRxWaterfall.TuneHz := Hz;
+  FRxMode.ItemIndex := 0;
+  FMode := rmContact;
+  ApplyMode;
+  if FStream <> nil then
+    FStream.TuneHz := FRxWaterfall.TuneHz;
+  UpdateTuneInfo;
+  SetStatus('', '', Format('%.0f Hz の局に同調し、交信モードへ移りました。',
+    [FRxWaterfall.TuneHz]));
+end;
+
+{ 一覧を作り直します。毎秒 1 回で足ります。局の並びが 0.2 秒ごとに変わる必要は
+  なく、そのたびに全局の受信文を複製するのは無駄です。
+  Rebuilds the list, once a second. The order of stations need not change five
+  times a second, and copying every transcript that often would be waste. }
+procedure TMainForm.RefreshBandMap;
+begin
+  if (FMulti = nil) or (FMode <> rmWatch) then
+    Exit;
+  if MilliSecondsBetween(Now, FBandMapAt) < 1000 then
+    Exit;
+  FBandMapAt := Now;
+  FRxBandMap.SetEntries(
+    BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds),
+    FMulti.ElapsedSeconds);
 end;
 
 { ---- 検索（要件 FR-B.5） / search (requirement FR-B.5) ---- }
@@ -2296,7 +2616,11 @@ var
   Peak: Single;
   StartAt: Double;
 begin
-  if (FCapture = nil) or (FStream = nil) then
+  if FCapture = nil then
+    Exit;
+  if (FMode = rmWatch) and (FMulti = nil) then
+    Exit;
+  if (FMode = rmContact) and (FStream = nil) then
     Exit;
 
   if FCapture.LastError <> '' then
@@ -2357,7 +2681,7 @@ begin
       the time from the decoder alone is what makes the two unable to disagree
       (requirement FR-E.10). The order matters: **the time read after the append
       would place the audio one buffer too late.** }
-    StartAt := FStream.ElapsedSeconds;
+    StartAt := ActiveElapsedSeconds;
     { 経過秒 0 に対応する実時刻は、最初の音が届いた瞬間です。受信を押した瞬間
       ではありません。装置が開くまでの間があるためです（要件 FR-B.6）。
       Elapsed second zero is the moment the first audio arrives, not the moment
@@ -2368,7 +2692,10 @@ begin
       FClockOrigin := Now;
       FJournal.StartSession(FClockOrigin);
     end;
-    FStream.Append(Fresh, FCaptureRate);
+    if FMode = rmWatch then
+      FMulti.Append(Fresh, FCaptureRate)
+    else
+      FStream.Append(Fresh, FCaptureRate);
     FHistory.Append(Fresh, FCaptureRate, StartAt);
     { ウォーターフォールには、同調も帯域制限も掛ける前の音を見せます。まだ
       選んでいない信号も見えていなければ、選びようがないためです。
@@ -2377,9 +2704,20 @@ begin
     FRxWaterfall.PushSamples(Fresh, FCaptureRate);
   end;
 
-  if DecoderBusy or not FStream.Ready then
+  if DecoderBusy then
     Exit;
+  if FMode = rmWatch then
+  begin
+    RefreshBandMap;
+    if not FMulti.Ready then
+      Exit;
+    FRxBusy.Caption := 'デコード中...';
+    FDecodeThread := TDecodeThread.CreateMulti(FMulti, @DecodeFinished);
+    Exit;
+  end;
 
+  if not FStream.Ready then
+    Exit;
   FAppendMode := True;
   FRxBusy.Caption := 'デコード中...';
   FDecodeThread := TDecodeThread.CreateStreaming(FStream, @DecodeFinished);
