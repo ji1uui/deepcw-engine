@@ -120,6 +120,32 @@ const
     stronger. }
   MULTI_KEEP_MARGIN_DB = 3.0;
 
+  { 同じ文字が、これより近い間隔で 2 つ続いたら、同じ 1 文字の二度読みと見なします。
+
+    CTC が出す文字には**幅がありません。**実測すると、文字も空白も 0〜15 ms
+    （1 フレーム）です。したがって「既に取った分より後に始まったか」で二重を
+    避けようとしても、重なった区間で同じ文字がわずかにずれて出れば通ってしまい
+    ます。実際、境界 8.750 秒に対して 8.748 と 8.752 に出た同じ X が二度取られ、
+    `JH2XYZ` が `JH2XXYZ` になりました（付録 P.1）。
+
+    ずれの実測は 4 ms、フレームは 15 ms。一方、本当に同じ文字が 2 つ続く最短は、
+    50 WPM でも短点 4 つぶん＝約 96 ms あります。50 ms はその中間に取ってあります。
+
+    Two identical characters closer together than this are taken to be one
+    character read twice.
+
+    The characters CTC produces **have no width**: measured, both letters and
+    spaces span 0 to 15 ms, one frame. Avoiding duplicates by asking whether a
+    character starts after what was already taken therefore lets one through
+    whenever the same character comes out slightly shifted in the overlap. It
+    did: the same X at 8.748 and 8.752 against a boundary of 8.750 was taken
+    twice, turning `JH2XYZ` into `JH2XXYZ` (appendix P.1).
+
+    The measured shift is 4 ms and a frame is 15 ms, while two genuinely repeated
+    characters are at least four dit lengths apart — about 96 ms even at 50 WPM.
+    Fifty milliseconds sits between the two. }
+  MULTI_SAME_CHAR_SECONDS = 0.05;
+
   { 聞こえなくなった局の記録を残す時間。バンドマップは「いつ出ていたか」を
     見せるので、消えた瞬間に記録まで消しては用をなしません（要件 FR-J）。
     How long a station's record outlives its signal. The band map shows when a
@@ -155,6 +181,11 @@ type
       heard. }
     FirstSeconds: Double;
     LastSeconds: Double;
+    { ここまでの時刻の文字は受け取り済み、という境界。窓ごとに決まった時刻へ
+      進むので、区間が重ならず、隙間も空きません。
+      The boundary up to which characters have been taken. It advances to a fixed
+      time each window, so the intervals neither overlap nor leave gaps. }
+    AcceptedUntil: Double;
     { この局から読み取った文字。時刻は受信開始からの通算です。
       The characters read from this station, timed from the start of reception. }
     Chars: TDecodedChars;
@@ -235,6 +266,18 @@ type
     procedure PreferAnalysed(var Items: TTrackedStations);
     procedure Prune(NowSeconds: Double);
     procedure CapBuffer;
+    function BeginWindow(WholeTail: Boolean; out Audio: TSingleArray;
+      out Rate: Integer; out StartSeconds: Double; out Epoch: Int64): Boolean;
+    function HasSignal(const Audio: TSingleArray): Boolean;
+    function ChooseLimit(Present: Integer): Integer;
+    { 呼び出し側は FLock を保持していること。/ The caller must hold FLock. }
+    procedure SyncLogs(const Present: TTrackedStations; Limit: Integer;
+      StartSeconds: Double);
+    procedure AdvanceWindow(Samples, Rate: Integer; WholeTail: Boolean;
+      Epoch: Int64);
+    function ReadStations(const Wide: TSpectrogram;
+      const Present: TTrackedStations; Limit: Integer;
+      StartSeconds, AcceptUntil, Span: Double; Epoch: Int64): Boolean;
     function Analyse(WholeTail: Boolean): Boolean;
     { 読み取った文字を、その局の受信文へ継ぎ足します。既に持っている分より後に
       始まった文字だけを受け取ります。
@@ -521,15 +564,23 @@ procedure TMultiStationDecoder.Extend(Index: Integer; const Chars: TDecodedChars
   StartSeconds, AcceptUntil: Double);
 var
   I, Total, Held: Integer;
-  Horizon, Begins, Ends: Double;
+  Taken, At_, Begins, Ends: Double;
+  LastText: string;
   Fresh: TDecodedChars;
 begin
-  { 既に持っている最後の文字の終わりが、受け取りの境目です。
-    The end of the last character already held is the boundary for taking
-    more. }
-  Horizon := -1;
+  { 受け取りの境界は、**窓ごとに決まる時刻**です。最後に取った文字の終わりでは
+    ありません。文字に幅が無いため、後者では同じ文字の二度読みを止められません。
+    The boundary is **a time fixed by the window**, not the end of the last
+    character taken: characters have no width, so the latter cannot stop the same
+    character being read twice. }
+  Taken := FLogs[Index].AcceptedUntil;
+  LastText := '';
+  At_ := -1;
   if Length(FLogs[Index].Chars) > 0 then
-    Horizon := FLogs[Index].Chars[High(FLogs[Index].Chars)].EndSeconds;
+  begin
+    LastText := FLogs[Index].Chars[High(FLogs[Index].Chars)].Text;
+    At_ := FLogs[Index].Chars[High(FLogs[Index].Chars)].Seconds;
+  end;
 
   Total := 0;
   SetLength(Fresh, Length(Chars));
@@ -538,34 +589,38 @@ begin
     Begins := StartSeconds + Chars[I].Seconds;
     Ends := StartSeconds + Chars[I].EndSeconds;
     { 窓の末尾は受け取りません。次の符号が続くかどうかがまだ分からないためです。
-      重なりのほうが長いので、ここで見送った文字は次の窓で完全な形になります。
+      重なりのほうが長いので、ここで見送った文字は次の窓で拾われます。
       The end of the window is not taken: whether more code follows is not yet
-      known. The overlap is longer, so a character passed over here arrives
-      complete in the next window. }
-    if Ends > AcceptUntil then
+      known. The overlap is longer, so a character passed over here is picked up
+      in the next window. }
+    if Begins > AcceptUntil then
       Break;
-    { 既に持っている分と重なるものは受け取りません。重なった区間を二度読むので、
-      これが無ければ同じ文字が二重に入ります。
-
-      判定は**文字の中点**で行います。「始まりが境目より後」で判定すると、前の
-      文字の終わりちょうどから始まる文字――符号では普通に起こります――を取り
-      こぼします。中点なら、二重の文字は必ず境目より前、続きの文字は必ず後ろに
-      来ます。
-
-      Anything overlapping what is held is not taken; the overlap is read twice,
-      so without this the same characters would go in twice.
-
-      The test is on the character's **midpoint.** Testing that it begins after
-      the boundary would lose a character starting exactly where the previous one
-      ended, which is ordinary in code. By midpoint, a duplicate always falls
-      before the boundary and a continuation always after it. }
-    if (Begins + Ends) / 2 <= Horizon then
+    { 既に取った区間のものは受け取りません。
+      Nothing from the stretch already taken. }
+    if Begins <= Taken then
+      Continue;
+    { 境界のすぐ両側に、同じ文字が二度出ることがあります。文字に幅が無いので、
+      時刻の比較だけでは止まりません。直前に取った文字と同じ字で、ごく近い
+      時刻にあれば、同じ 1 文字を二度読んだものと見なします。
+      The same character can come out on either side of the boundary, and with no
+      width to compare, times alone do not stop it. A character matching the one
+      just taken, at very nearly the same time, is taken to be that same
+      character read twice. }
+    if (Begins - At_ < MULTI_SAME_CHAR_SECONDS) and (Chars[I].Text = LastText) then
       Continue;
     Fresh[Total] := Chars[I];
     Fresh[Total].Seconds := Begins;
     Fresh[Total].EndSeconds := Ends;
+    LastText := Chars[I].Text;
+    At_ := Begins;
     Inc(Total);
   end;
+
+  { 境界は、文字が取れたかどうかに関わらず進めます。無音の窓で据え置くと、
+    次の窓が同じ区間をもう一度受け取れてしまいます。
+    The boundary advances whether or not anything was taken; left behind on a
+    silent window, the next window could take the same stretch again. }
+  FLogs[Index].AcceptedUntil := AcceptUntil;
   if Total = 0 then
     Exit;
 
@@ -651,21 +706,18 @@ end;
   The work of analysing one window, or all that is left. Step and Finish differ
   only in whether they wait for a full window and whether they hold back the
   tail, so two copies of the body would one day be fixed in only one of them. }
-function TMultiStationDecoder.Analyse(WholeTail: Boolean): Boolean;
-var
-  Audio, Prepared: TSingleArray;
-  Wide, Slice: TSpectrogram;
-  Found: TStations;
-  Present: TTrackedStations;
-  Chars: TDecodedChars;
-  Rate, Advance, I, Index, Limit, Bins, Wanted: Integer;
-  StartSeconds, AcceptUntil, Peak, Elapsed, Span: Double;
-  Begun: TDateTime;
-  Epoch: Int64;
-begin
-  Result := False;
-  CapBuffer;
+{ 窓の音声を取り出します。取り出せたら True。同時に、そのときの録音周波数・
+  先頭の時刻・世代も返します。3 つを別々に読むと、その隙間に変わり得ます。
 
+  Takes the window's audio, returning True when there was enough, along with the
+  capture rate, the time of its first sample and the generation. Reading them
+  separately would leave a gap in which they could change. }
+function TMultiStationDecoder.BeginWindow(WholeTail: Boolean;
+  out Audio: TSingleArray; out Rate: Integer; out StartSeconds: Double;
+  out Epoch: Int64): Boolean;
+var
+  Wanted: Integer;
+begin
   EnterCriticalSection(FLock);
   try
     Rate := Max(1, FSourceRate);
@@ -675,146 +727,98 @@ begin
       Wanted := FPendingCount
     else
       Wanted := Round(MULTI_WINDOW_SECONDS * Rate);
-    if (Wanted > FPendingCount) or
-       (Wanted < Round(MULTI_MIN_WINDOW_SECONDS * Rate)) then
-      Exit;
-    Audio := Copy(FPending, 0, Wanted);
+    Result := (Wanted <= FPendingCount) and
+              (Wanted >= Round(MULTI_MIN_WINDOW_SECONDS * Rate));
+    if Result then
+      Audio := Copy(FPending, 0, Wanted)
+    else
+      Audio := nil;
   finally
     LeaveCriticalSection(FLock);
   end;
+end;
 
-  Span := Length(Audio) / Rate;
-  if WholeTail then
-    { 残りを読むときは末尾を保留しません。続きが来ないと分かっています。
-      Reading the remainder holds nothing back: no more is coming. }
-    AcceptUntil := StartSeconds + Span
-  else
-    AcceptUntil := StartSeconds + Span - MULTI_TAIL_GUARD_SECONDS;
-
-  { 窓のあいだに音が無ければ、解析せずに進めます。文字も湧かず、時間も使いません。
-    A silent window is stepped over without analysis: no characters appear out of
-    nowhere and no time is spent. }
+{ 解析にかけるだけの音量があるか。無ければ、文字も湧かず、時間も使いません。
+  Whether there is enough level to analyse; without it no characters appear out
+  of nowhere and no time is spent. }
+function TMultiStationDecoder.HasSignal(const Audio: TSingleArray): Boolean;
+var
+  I: Integer;
+  Peak: Double;
+begin
   Peak := 0;
   for I := 0 to High(Audio) do
     Peak := Max(Peak, Abs(Audio[I]));
+  Result := Peak >= STREAM_SQUELCH_LEVEL;
+end;
 
-  if Peak >= STREAM_SQUELCH_LEVEL then
+{ 何局まで解析できるかを、実測した費用から決めます。見積もりではなく、直前までに
+  実際にかかった時間を使います（要件 FR-I.7）。
+  How many stations can be analysed, decided from the measured cost — what it
+  actually took up to now, not an estimate (requirement FR-I.7). }
+function TMultiStationDecoder.ChooseLimit(Present: Integer): Integer;
+begin
+  if FCostSeconds > 0 then
+    Result := Trunc(MULTI_ADVANCE_SECONDS * MULTI_TIME_BUDGET / FCostSeconds)
+  else
+    Result := FMaxStations;
+  Result := EnsureRange(Result, 1, Max(1, FMaxStations));
+  if Result > Present then
+    Result := Present;
+end;
+
+{ 記録の側を、いま聞こえている局に合わせます。切り捨てた局も記録には残し、
+  「いま解析していない」と印を付けます。**黙って消えると、運用者には局が消えたのか
+  切り捨てられたのか分かりません**（要件 FR-I.7）。
+
+  Brings the records in line with the stations now audible. A station cut from the
+  analysis stays in the records, marked as not being analysed: **vanishing
+  silently would leave the operator unable to tell a station that stopped from one
+  that was cut** (requirement FR-I.7). }
+procedure TMultiStationDecoder.SyncLogs(const Present: TTrackedStations;
+  Limit: Integer; StartSeconds: Double);
+var
+  I, Index: Integer;
+begin
+  for I := 0 to High(FLogs) do
+    FLogs[I].Analysed := False;
+  for I := 0 to High(Present) do
   begin
-    { 変換は 1 回だけ。ここから先は、局ごとにビンを切り出すだけです
-      （要件 FR-I.1）。
-      The transform runs once; from here on it is only a matter of cutting bins
-      out per station (requirement FR-I.1). }
-    Prepared := ResampleBandLimited(Audio, Rate, WideRate);
-    Wide := ComputeWideSpectrogram(Prepared, WideRate, FDecoder.Metadata);
-    Found := DetectStations(Wide, WideRate);
-
-    EnterCriticalSection(FLock);
-    try
-      { 取り出してから変換と検出を終えるまでに、バッファが捨てられていないか
-        確かめます。捨てられていれば、この結果は既に無い音声のものです。
-        Check that the buffer was not discarded between taking the window and
-        finishing the transform; if it was, this describes audio that no longer
-        exists. }
-      if FEpoch <> Epoch then
-        Exit;
-      FTracker.Update(Found, StartSeconds + Span);
-      Present := FTracker.Loudest;
-    finally
-      LeaveCriticalSection(FLock);
-    end;
-
-    { 解析できる局数を、実測した費用から決めます。見積もりではなく、直前までに
-      実際にかかった時間を使います（要件 FR-I.7）。
-      How many stations can be analysed is decided from the measured cost — what
-      it actually took up to now, not an estimate (requirement FR-I.7). }
-    if FCostSeconds > 0 then
-      Limit := Trunc(MULTI_ADVANCE_SECONDS * MULTI_TIME_BUDGET / FCostSeconds)
-    else
-      Limit := FMaxStations;
-    Limit := EnsureRange(Limit, 1, Max(1, FMaxStations));
-    if Limit > Length(Present) then
-      Limit := Length(Present);
-    Bins := (Wide.Bins - 1) * 2;
-
-    EnterCriticalSection(FLock);
-    try
-      if FEpoch <> Epoch then
-        Exit;
-      { いま解析している局に下駄を履かせて並べ直します。**記録の印を消す前に**
-        行わなければなりません。印はこの直後に上書きされます。
-        Re-order with the margin for stations already being analysed. It has to
-        happen **before the marks are cleared**, since they are overwritten
-        immediately below. }
-      PreferAnalysed(Present);
-      { 記録の側を、追跡している局に合わせます。切り捨てた局も記録には残し、
-        「いま解析していない」と印を付けます。**黙って消えると、運用者には局が
-        消えたのか切り捨てられたのか分かりません**（要件 FR-I.7）。
-        The records are brought in line with the tracked stations. A station cut
-        from the analysis stays in the records, marked as not being analysed:
-        **vanishing silently would leave the operator unable to tell a station
-        that stopped from one that was cut** (requirement FR-I.7). }
-      for I := 0 to High(FLogs) do
-        FLogs[I].Analysed := False;
-      for I := 0 to High(Present) do
-      begin
-        Index := LogIndexOf(Present[I].Id);
-        if Index < 0 then
-        begin
-          Index := Length(FLogs);
-          SetLength(FLogs, Index + 1);
-          FLogs[Index].Id := Present[I].Id;
-          FLogs[Index].FirstSeconds := Present[I].FirstSeconds;
-          FLogs[Index].Chars := nil;
-          FLogs[Index].DroppedChars := 0;
-        end;
-        FLogs[Index].Hz := Present[I].Station.Hz;
-        FLogs[Index].LevelDb := Present[I].Station.LevelDb;
-        FLogs[Index].HalfWidthHz := Present[I].Station.HalfWidthHz;
-        FLogs[Index].LastSeconds := Present[I].LastSeconds;
-        FLogs[Index].Confirmed := Present[I].Confirmed;
-        FLogs[Index].Analysed := I < Limit;
-      end;
-      FAnalysed := Limit;
-      FDropped := Length(Present) - Limit;
-    finally
-      LeaveCriticalSection(FLock);
-    end;
-
-    for I := 0 to Limit - 1 do
+    Index := LogIndexOf(Present[I].Id);
+    if Index < 0 then
     begin
-      Begun := Now;
-      Slice := SliceSpectrogram(Wide,
-        WideBinFor(Present[I].Station.Hz, WideRate, Bins), FDecoder.Metadata);
-      MaskSpectrogram(Slice, Present[I].Station.HalfWidthHz, FDecoder.Metadata);
-      Chars := FDecoder.DecodeSpectrogramTimed(Slice, Span);
-      Elapsed := (Now - Begun) * SecsPerDay;
-
-      EnterCriticalSection(FLock);
-      try
-        if FEpoch <> Epoch then
-          Exit;
-        Index := LogIndexOf(Present[I].Id);
-        if Index >= 0 then
-          Extend(Index, Chars, StartSeconds, AcceptUntil);
-        { 費用は指数移動平均で追います。1 回の外れ値で局数が跳ねないためです。
-          The cost is followed as an exponential moving average, so that one
-          outlier does not make the number of stations jump. }
-        if FCostSeconds <= 0 then
-          FCostSeconds := Elapsed
-        else
-          FCostSeconds := FCostSeconds * 0.8 + Elapsed * 0.2;
-      finally
-        LeaveCriticalSection(FLock);
-      end;
-      Result := True;
+      Index := Length(FLogs);
+      SetLength(FLogs, Index + 1);
+      FLogs[Index].Id := Present[I].Id;
+      FLogs[Index].FirstSeconds := Present[I].FirstSeconds;
+      FLogs[Index].Chars := nil;
+      FLogs[Index].DroppedChars := 0;
+      { 初めて見る局は、この窓の頭から受け取ります。
+        A station seen for the first time is taken from the head of this
+        window. }
+      FLogs[Index].AcceptedUntil := StartSeconds - 1;
     end;
+    FLogs[Index].Hz := Present[I].Station.Hz;
+    FLogs[Index].LevelDb := Present[I].Station.LevelDb;
+    FLogs[Index].HalfWidthHz := Present[I].Station.HalfWidthHz;
+    FLogs[Index].LastSeconds := Present[I].LastSeconds;
+    FLogs[Index].Confirmed := Present[I].Confirmed;
+    FLogs[Index].Analysed := I < Limit;
   end;
+  FAnalysed := Limit;
+  FDropped := Length(Present) - Limit;
+end;
 
-  { 窓を進めます。標本の整数で進めるので、時刻が実際の音からずれません。
-    The window steps on by a whole number of samples, so the clock cannot drift
-    from the audio. }
+{ 窓を進めます。標本の整数で進めるので、時刻が実際の音からずれません。
+  The window steps on by a whole number of samples, so the clock cannot drift from
+  the audio. }
+procedure TMultiStationDecoder.AdvanceWindow(Samples, Rate: Integer;
+  WholeTail: Boolean; Epoch: Int64);
+var
+  Advance, I: Integer;
+begin
   if WholeTail then
-    Advance := Length(Audio)
+    Advance := Samples
   else
     Advance := Round(MULTI_ADVANCE_SECONDS * Rate);
   EnterCriticalSection(FLock);
@@ -835,6 +839,119 @@ begin
   finally
     LeaveCriticalSection(FLock);
   end;
+end;
+
+{ 選ばれた局を順に読み、それぞれの受信文へ継ぎ足します。
+  Reads the chosen stations in turn and extends each transcript. }
+function TMultiStationDecoder.ReadStations(const Wide: TSpectrogram;
+  const Present: TTrackedStations; Limit: Integer;
+  StartSeconds, AcceptUntil, Span: Double; Epoch: Int64): Boolean;
+var
+  Slice: TSpectrogram;
+  Chars: TDecodedChars;
+  I, Index, Bins: Integer;
+  Elapsed: Double;
+  Begun: TDateTime;
+begin
+  Result := False;
+  Bins := (Wide.Bins - 1) * 2;
+  for I := 0 to Limit - 1 do
+  begin
+    Begun := Now;
+    Slice := SliceSpectrogram(Wide,
+      WideBinFor(Present[I].Station.Hz, WideRate, Bins), FDecoder.Metadata);
+    MaskSpectrogram(Slice, Present[I].Station.HalfWidthHz, FDecoder.Metadata);
+    Chars := FDecoder.DecodeSpectrogramTimed(Slice, Span);
+    Elapsed := (Now - Begun) * SecsPerDay;
+
+    EnterCriticalSection(FLock);
+    try
+      if FEpoch <> Epoch then
+        Exit;
+      Index := LogIndexOf(Present[I].Id);
+      if Index >= 0 then
+        Extend(Index, Chars, StartSeconds, AcceptUntil);
+      { 費用は指数移動平均で追います。1 回の外れ値で局数が跳ねないためです。
+        The cost is followed as an exponential moving average, so that one outlier
+        does not make the number of stations jump. }
+      if FCostSeconds <= 0 then
+        FCostSeconds := Elapsed
+      else
+        FCostSeconds := FCostSeconds * 0.8 + Elapsed * 0.2;
+    finally
+      LeaveCriticalSection(FLock);
+    end;
+    Result := True;
+  end;
+end;
+
+{ 窓 1 枚ぶん、あるいは残り全部を解析します。Step と Finish の違いは、窓が満ちるのを
+  待つかどうかと、末尾を保留するかどうかだけなので、中身は 1 つにしてあります。
+
+  Analyses one window, or all that is left. Step and Finish differ only in whether
+  they wait for a full window and whether they hold back the tail, so there is one
+  body rather than two. }
+function TMultiStationDecoder.Analyse(WholeTail: Boolean): Boolean;
+var
+  Audio, Prepared: TSingleArray;
+  Wide: TSpectrogram;
+  Found: TStations;
+  Present: TTrackedStations;
+  Rate, Limit: Integer;
+  StartSeconds, AcceptUntil, Span: Double;
+  Epoch: Int64;
+begin
+  Result := False;
+  CapBuffer;
+  if not BeginWindow(WholeTail, Audio, Rate, StartSeconds, Epoch) then
+    Exit;
+
+  Span := Length(Audio) / Rate;
+  if WholeTail then
+    { 残りを読むときは末尾を保留しません。続きが来ないと分かっています。
+      Reading the remainder holds nothing back: no more is coming. }
+    AcceptUntil := StartSeconds + Span
+  else
+    AcceptUntil := StartSeconds + Span - MULTI_TAIL_GUARD_SECONDS;
+
+  if HasSignal(Audio) then
+  begin
+    { 変換は 1 回だけ。ここから先は、局ごとにビンを切り出すだけです
+      （要件 FR-I.1）。
+      The transform runs once; from here on it is only a matter of cutting bins
+      out per station (requirement FR-I.1). }
+    Prepared := ResampleBandLimited(Audio, Rate, WideRate);
+    Wide := ComputeWideSpectrogram(Prepared, WideRate, FDecoder.Metadata);
+    Found := DetectStations(Wide, WideRate);
+
+    EnterCriticalSection(FLock);
+    try
+      { 取り出してから変換と検出を終えるまでに、バッファが捨てられていないか
+        確かめます。捨てられていれば、この結果は既に無い音声のものです。
+        Check that the buffer was not discarded between taking the window and
+        finishing the transform; if it was, this describes audio that no longer
+        exists. }
+      if FEpoch <> Epoch then
+        Exit;
+      FTracker.Update(Found, StartSeconds + Span);
+      Present := FTracker.Loudest;
+      { いま解析している局に下駄を履かせて並べ直します。**記録の印を消す前に**
+        行わなければなりません。印はこの直後に上書きされます。
+        Re-order with the margin for stations already being analysed. It has to
+        happen **before the marks are cleared**, since they are overwritten
+        immediately below. }
+      PreferAnalysed(Present);
+      Limit := ChooseLimit(Length(Present));
+      SyncLogs(Present, Limit, StartSeconds);
+    finally
+      LeaveCriticalSection(FLock);
+    end;
+
+    Result := ReadStations(Wide, Present, Limit, StartSeconds, AcceptUntil,
+      Span, Epoch);
+  end;
+
+  AdvanceWindow(Length(Audio), Rate, WholeTail, Epoch);
 end;
 
 function TMultiStationDecoder.Step: Boolean;

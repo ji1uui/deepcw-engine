@@ -1975,7 +1975,11 @@ var
     What station A sends, with a running number in it. }
   function Sentence(Station, Number: Integer): string;
   begin
-    Result := Format('DE JH%dABC %d K ', [Station + 1, Number]);
+    { 同じ文字を 2 つ続けて送らせます。窓の継ぎ目で同じ文字の二度読みを弾く
+      規則が、**本物の連続した同じ文字まで食べていないか**を見るためです。
+      A doubled letter is sent deliberately, to see whether the rule that rejects
+      the same character read twice at a seam **also eats a genuine repeat.** }
+    Result := Format('DE JH%dABC %d EE K ', [Station + 1, Number]);
   end;
 
   { 全局を同時に鳴らします。各局は自分の通し番号を順に送ります。
@@ -2156,6 +2160,27 @@ begin
     Verdict('各局が自分の呼出符号を出す', K = STATIONS,
       Format('(%d / %d 局)', [K, STATIONS]));
 
+    { 送った EE がそのまま EE で出ること。二重を弾く規則が厳しすぎれば E に
+      なり、緩すぎれば別のところで EEE になります。
+      The EE sent must come out as EE: too strict a duplicate rule makes it E,
+      too loose a one makes EEE elsewhere. }
+    K := 0;
+    for I := 0 to High(Logs) do
+    begin
+      Text := DecodedText(Logs[I].Chars);
+      J := 0;
+      Position := Pos('EE', Text);
+      while Position > 0 do
+      begin
+        Inc(J);
+        Text := Copy(Text, Position + 2, Length(Text));
+        Position := Pos('EE', Text);
+      end;
+      Inc(K, J);
+    end;
+    Verdict('本物の連続した同じ文字は残る', K >= STATIONS * ROUNDS_SENT - 2,
+      Format('(EE が %d 組 / 送った %d 組)', [K, STATIONS * ROUNDS_SENT]));
+
     { [3] 時計が、入れた標本の長さとちょうど一致すること。聴き直し（FR-E.10）は
           この時刻を音の位置として使います。
           [3] The clock must equal exactly the audio fed in; replay (FR-E.10) uses
@@ -2325,6 +2350,328 @@ begin
     WriteLn(Format('  %d 件が通らなかった', [Failures]));
 end;
 
+{$IFDEF LINUX}
+{ 実メモリ（kB）。長く走らせて増え続けないことを見るために使います。
+  Resident memory in kilobytes, for checking that a long run does not keep
+  growing. }
+function ResidentKb: Int64;
+var
+  Lines: TStringList;
+  I: Integer;
+  Line: string;
+begin
+  Result := 0;
+  Lines := TStringList.Create;
+  try
+    try
+      Lines.LoadFromFile('/proc/self/status');
+    except
+      Exit;
+    end;
+    for I := 0 to Lines.Count - 1 do
+    begin
+      Line := Lines[I];
+      if Copy(Line, 1, 6) = 'VmRSS:' then
+      begin
+        Line := Trim(Copy(Line, 7, Length(Line)));
+        Result := StrToInt64Def(Copy(Line, 1, Pos(' ', Line + ' ') - 1), 0);
+        Exit;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+{$ELSE}
+function ResidentKb: Int64;
+begin
+  Result := 0;
+end;
+{$ENDIF}
+
+{ 多局同時受信を、局数を増やして測ります（要件 FR-I.7 の根拠）。
+
+  「1 コアで 40 局前後」は付録 G.1 の 1 局あたりの費用からの外挿であって、
+  実際に多数の局を同時に流して測ったものではない。**外挿と実測は別物である。**
+  ここでは帯域いっぱいに局を並べ、1 窓を回すのに実際に何秒かかるか、進み
+  （7.5 秒）に収まるか、そして局数が増えても読めるかを測る。
+
+  Measures multi-station reception as the number of stations grows (the evidence
+  behind requirement FR-I.7).
+
+  "About forty per core" was extrapolated from the per-station cost in appendix
+  G.1, not measured with many stations actually running at once. **An
+  extrapolation is not a measurement.** Here the band is filled with stations and
+  what is measured is how long a window actually takes, whether it fits inside
+  the step of 7.5 seconds, and whether the stations still read. }
+procedure RunScale;
+const
+  RATE = 8000;
+  CHUNK_SECONDS = 0.5;
+  COUNTS: array[0..2] of Integer = (8, 12, 24);
+  SPACINGS: array[0..2] of Double = (300, 200, 100);
+var
+  Multi: TMultiStationDecoder;
+  Mixed, Audio: TSingleArray;
+  Logs: TStationLogs;
+  Case_, I, J, Position, Taken, Count, Matched, Readable, Steps: Integer;
+  Spacing, Low_, RoundMs, Total, Cer, WholeCer: Double;
+  Begun: TDateTime;
+  Text, Reference, Sample: string;
+  Prepared: TSingleArray;
+  Wide, Slice: TSpectrogram;
+begin
+  WriteLn;
+  WriteLn('scale: 局数を増やしたときの費用と精度 / cost and accuracy as stations grow');
+  WriteLn('  局数  間隔   検出   読めた  誤り率   1局あたり   1窓あたり   進み 7.5 秒に対して');
+
+  for Case_ := 0 to High(COUNTS) do
+  begin
+    Count := COUNTS[Case_];
+    Spacing := SPACINGS[Case_];
+    { 帯域の中央に寄せて並べます。探索範囲は 200〜2900 Hz です。
+      Centred in the band; the search runs from 200 to 2900 Hz. }
+    Low_ := 1550 - (Count - 1) * Spacing / 2;
+
+    Mixed := nil;
+    for I := 0 to Count - 1 do
+    begin
+      Audio := Synthesise(NormalizeText(MESSAGES[I mod Length(MESSAGES)]),
+        RATE, Low_ + I * Spacing, 0, 7400 + I);
+      if Length(Audio) > Length(Mixed) then
+      begin
+        J := Length(Mixed);
+        SetLength(Mixed, Length(Audio));
+        while J <= High(Mixed) do
+        begin
+          Mixed[J] := 0;
+          Inc(J);
+        end;
+      end;
+      for J := 0 to High(Audio) do
+        Mixed[J] := Mixed[J] + 0.5 * Audio[J];
+    end;
+    RandSeed := 7500;
+    for I := 0 to High(Mixed) do
+      Mixed[I] := Mixed[I] + Noise * 0.25 * (Random + Random - 1);
+
+    Multi := TMultiStationDecoder.Create(Decoder);
+    try
+      Position := 0;
+      Steps := 0;
+      Total := 0;
+      while Position < Length(Mixed) do
+      begin
+        Taken := Min(Round(CHUNK_SECONDS * RATE), Length(Mixed) - Position);
+        Multi.Append(Copy(Mixed, Position, Taken), RATE);
+        Inc(Position, Taken);
+        while Multi.Ready do
+        begin
+          Begun := Now;
+          Multi.Step;
+          Total := Total + (Now - Begun) * SecsPerDay;
+          Inc(Steps);
+        end;
+      end;
+      Multi.Finish;
+
+      Logs := Multi.Logs;
+      Matched := 0;
+      Readable := 0;
+      Cer := 0;
+      Sample := '';
+      for I := 0 to Count - 1 do
+        for J := 0 to High(Logs) do
+          if Abs(Logs[J].Hz - (Low_ + I * Spacing)) <= 20 then
+          begin
+            Inc(Matched);
+            Text := Trim(DecodedText(Logs[J].Chars));
+            Reference := NormalizeText(MESSAGES[I mod Length(MESSAGES)]);
+            { 「読めた／読めない」の 2 値では、惜しいのか全く駄目なのかが分か
+              りません。文字誤り率で測り、代表を 1 つ書き出します。
+              A pass/fail says nothing about whether it was close or hopeless. The
+              character error rate is measured and one example printed. }
+            Cer := Cer + CharErrorRate(Reference, Text);
+            if Pos('JH2XYZ', Text) > 0 then
+              Inc(Readable);
+            if I = Count div 2 then
+              Sample := Format('%.0f Hz(±%.0f) %s', [Logs[J].Hz,
+                Logs[J].HalfWidthHz, Copy(Text, 1, 46)]);
+            Break;
+          end;
+
+      if Steps > 0 then
+        RoundMs := Total / Steps * 1000
+      else
+        RoundMs := 0;
+      WriteLn(Format('  %4d  %4.0f Hz  %3d 局  %3d 局  %6.2f  %7.0f ms  %7.0f ms   %5.1f %%',
+        [Count, Spacing, Matched, Readable, Cer / Max(1, Matched),
+         Multi.CostSeconds * 1000, RoundMs,
+         RoundMs / 10 / MULTI_ADVANCE_SECONDS]));
+      WriteLn('        例: ', Sample);
+      { 同じ音声を、継ぎ合わせずに 1 回で読みます。**継ぎ合わせの誤りと復号の
+        誤りは、こうしないと区別できません。**一括で読んで同じ誤りが出るなら
+        原因は復号側、出ないなら継ぎ合わせ側です。
+        The same audio is read in one go, without stitching. **Otherwise a
+        stitching error cannot be told from a decoding error.** The same fault in
+        the one-shot read means the decode, its absence means the stitching. }
+      Prepared := ResampleBandLimited(Mixed, RATE, Decoder.Metadata.SampleRate * 2);
+      Wide := ComputeWideSpectrogram(Prepared, Decoder.Metadata.SampleRate * 2,
+        Decoder.Metadata);
+      WholeCer := 0;
+      for I := 0 to Count - 1 do
+        for J := 0 to High(Logs) do
+          if Abs(Logs[J].Hz - (Low_ + I * Spacing)) <= 20 then
+          begin
+            Slice := SliceSpectrogram(Wide, WideBinFor(Logs[J].Hz,
+              Decoder.Metadata.SampleRate * 2, (Wide.Bins - 1) * 2),
+              Decoder.Metadata);
+            MaskSpectrogram(Slice, Logs[J].HalfWidthHz, Decoder.Metadata);
+            Text := Trim(DecodedText(Decoder.DecodeSpectrogramTimed(Slice,
+              Length(Mixed) / RATE)));
+            WholeCer := WholeCer +
+              CharErrorRate(NormalizeText(MESSAGES[I mod Length(MESSAGES)]), Text);
+            Break;
+          end;
+      { 一括で読んだときの誤り率。窓に分けたときとの差が、**窓の短さと継ぎ目に
+        由来する分**です。混信そのものの影響は一括にも同じだけ乗ります。
+        The error rate reading in one go. The difference from the windowed figure
+        is **what the shorter window and its seams cost**; interference itself
+        weighs on both equally. }
+      WriteLn(Format('        一括で読んだ場合の誤り率 %.2f（窓に分けた分の差 %.2f）',
+        [WholeCer / Max(1, Matched),
+         Cer / Max(1, Matched) - WholeCer / Max(1, Matched)]));
+    finally
+      Multi.Free;
+    end;
+  end;
+  WriteLn('  「1窓あたり」が「進み 7.5 秒」を超えると、解析が入力に追いつきません。');
+end;
+
+{ 長く走らせても、記憶も帳簿も増え続けないことを確かめます（第 10 章 10.8）。
+
+  常設シャックは何時間も動かしたままになる。**増え続けるなら、いつか止まる。**
+  局の記録は 10 分で古いものから落とし、局ごとの文字にも上限を置いてあるが、
+  それが本当に効いているかは、走らせて実メモリを測るまで分からない。
+
+  Checks that neither memory nor the books keep growing over a long run (chapter
+  10, rule 10.8).
+
+  A shack leaves this running for hours. **If it grows without bound it
+  eventually stops.** Station records age out after ten minutes and each
+  station's characters are capped, but whether that actually holds is not known
+  until it is run and the resident memory measured. }
+procedure RunSoak;
+const
+  RATE = 8000;
+  CHUNK_SECONDS = 0.5;
+  MINUTES = 12;
+var
+  Multi: TMultiStationDecoder;
+  Mixed, Audio: TSingleArray;
+  I, J, Position, Taken, Failures: Integer;
+  BeforeKb, AfterKb: Int64;
+  Fed: Int64;
+  Chars: Integer;
+  Logs: TStationLogs;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('soak: 長時間の受信 / a long run');
+  Failures := 0;
+
+  { 3 局が休みなく送り続ける、いちばん重い条件を作ります。
+    The heaviest case: three stations transmitting without pause. }
+  Mixed := nil;
+  for I := 0 to 2 do
+  begin
+    Audio := Synthesise(NormalizeText(MESSAGES[I]), RATE, 800 + I * 400, 0, 7600 + I);
+    if Length(Audio) > Length(Mixed) then
+    begin
+      J := Length(Mixed);
+      SetLength(Mixed, Length(Audio));
+      while J <= High(Mixed) do
+      begin
+        Mixed[J] := 0;
+        Inc(J);
+      end;
+    end;
+    for J := 0 to High(Audio) do
+      Mixed[J] := Mixed[J] + 0.5 * Audio[J];
+  end;
+  RandSeed := 7700;
+  for I := 0 to High(Mixed) do
+    Mixed[I] := Mixed[I] + Noise * 0.25 * (Random + Random - 1);
+
+  Multi := TMultiStationDecoder.Create(Decoder);
+  try
+    Fed := 0;
+    Position := 0;
+    BeforeKb := 0;
+    for I := 1 to Round(MINUTES * 60 / (Length(Mixed) / RATE)) do
+    begin
+      Position := 0;
+      while Position < Length(Mixed) do
+      begin
+        Taken := Min(Round(CHUNK_SECONDS * RATE), Length(Mixed) - Position);
+        Multi.Append(Copy(Mixed, Position, Taken), RATE);
+        Inc(Fed, Taken);
+        Inc(Position, Taken);
+        while Multi.Ready do
+          Multi.Step;
+      end;
+      { 最初の 1 分ぶんは暖機として測りません。最初の確保を増加と数えないためです。
+        The first minute is a warm-up, so that the initial allocations are not
+        counted as growth. }
+      if (BeforeKb = 0) and (Fed > 60 * RATE) then
+        BeforeKb := ResidentKb;
+    end;
+    AfterKb := ResidentKb;
+
+    Logs := Multi.Logs;
+    Chars := 0;
+    for I := 0 to High(Logs) do
+      Chars := Max(Chars, Length(Logs[I].Chars));
+
+    WriteLn(Format('  %d 分 / %d 窓 / 記録 %d 件 / 最長の受信文 %d 文字 / メモリ %d → %d kB（差 %d）',
+      [MINUTES, Multi.Rounds, Length(Logs), Chars, BeforeKb, AfterKb,
+       AfterKb - BeforeKb]));
+
+    Verdict('局ごとの文字数が上限を超えない', Chars <= MULTI_MAX_CHARS,
+      Format('(%d 文字)', [Chars]));
+    Verdict('記録の件数が増え続けない', Length(Logs) <= 8,
+      Format('(%d 件)', [Length(Logs)]));
+    { 12 分で 50 MB 増えるなら、1 日で 6 GB になります。
+      Fifty megabytes over twelve minutes is six gigabytes in a day. }
+    Verdict('長く走らせてもメモリが増え続けない',
+      (BeforeKb = 0) or (AfterKb - BeforeKb < 50000),
+      Format('(差 %d kB)', [AfterKb - BeforeKb]));
+    Verdict('時計が入れた音の長さと一致し続ける',
+      Abs(Multi.ElapsedSeconds - Fed / RATE) < 1E-6,
+      Format('(%.6f 秒 / 実際 %.6f 秒)', [Multi.ElapsedSeconds, Fed / RATE]));
+    Verdict('正常な受信で「捨てた」と申告しない', Multi.DroppedSeconds = 0,
+      Format('(%.1f 秒)', [Multi.DroppedSeconds]));
+  finally
+    Multi.Free;
+  end;
+
+  if Failures = 0 then
+    WriteLn('  すべて通った')
+  else
+    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+end;
+
 var
   Index: Integer;
   Key, Value: string;
@@ -2396,6 +2743,10 @@ begin
       RunDetect;
     if Pos('multi', Tests) > 0 then
       RunMulti;
+    if Pos('scale', Tests) > 0 then
+      RunScale;
+    if Pos('soak', Tests) > 0 then
+      RunSoak;
     if Pos('track', Tests) > 0 then
       RunTrack;
     if Pos('wide', Tests) > 0 then
