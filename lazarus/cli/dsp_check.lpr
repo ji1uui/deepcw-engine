@@ -53,6 +53,42 @@ begin
   Result := Sqrt(S / Length(A));
 end;
 
+{ 全体を平均したスペクトル。像がどこに立っているかを見るために使います。
+  The spectrum averaged over the whole signal, for seeing where an image
+  stands. }
+function AverageSpectrum(const Samples: TSingleArray; FFTLength: Integer): TDoubleArray;
+var
+  FFT: TRealFFT;
+  Window, Frame, Magnitudes: TDoubleArray;
+  Bins, Frames, FrameIndex, I: Integer;
+begin
+  Bins := FFTLength div 2 + 1;
+  SetLength(Result, Bins);
+  for I := 0 to Bins - 1 do
+    Result[I] := 0;
+  if Length(Samples) < FFTLength then
+    Exit;
+  Frames := 1 + (Length(Samples) - FFTLength) div (FFTLength div 2);
+  Window := HannWindow(FFTLength);
+  SetLength(Frame, FFTLength);
+  SetLength(Magnitudes, Bins);
+  FFT := TRealFFT.Create(FFTLength);
+  try
+    for FrameIndex := 0 to Frames - 1 do
+    begin
+      for I := 0 to FFTLength - 1 do
+        Frame[I] := Samples[FrameIndex * (FFTLength div 2) + I] * Window[I];
+      FFT.MagnitudeSpectrum(Frame, 0, Bins, Magnitudes);
+      for I := 0 to Bins - 1 do
+        Result[I] := Result[I] + Magnitudes[I];
+    end;
+  finally
+    FFT.Free;
+  end;
+  for I := 0 to Bins - 1 do
+    Result[I] := Result[I] / Frames;
+end;
+
 { スペクトルで最も強いビンの番号。/ The strongest bin of a spectrum. }
 function PeakBin(const A: TDoubleArray): Integer;
 var I: Integer; P: Double;
@@ -221,6 +257,82 @@ begin
   SetLength(Result, Count);
   for I := 0 to Count - 1 do
     Result[I] := First + I;
+end;
+
+{ スペクトルの中で、指定した周波数のビンの大きさを返します。
+  The magnitude of the bin at a given frequency. }
+function BinLevel(const Spec: TDoubleArray; Hz: Double; Rate, FFTLength: Integer): Double;
+var
+  Bin: Integer;
+begin
+  Bin := Round(Hz * FFTLength / Rate);
+  if (Bin < 0) or (Bin > High(Spec)) then
+    Exit(0);
+  Result := Spec[Bin];
+end;
+
+procedure TestResampleBandLimited;
+const
+  RATE = 8000;
+  TARGET = 6400;
+var
+  A, B: TSingleArray;
+  Spec: TDoubleArray;
+  I: Integer;
+  Signal_, Image: Double;
+begin
+  WriteLn('ResampleBandLimited');
+
+  { 長さが比のとおりになること。
+    The length must follow the ratio. }
+  A := Tone(800, RATE, RATE);
+  B := ResampleBandLimited(A, RATE, TARGET);
+  Check('長さが比のとおりになる', Abs(Length(B) - TARGET) <= 1,
+    Format('(%d)', [Length(B)]));
+
+  { 通過帯域の実効値が保たれること。
+    The passband's RMS must survive. }
+  Check('通過帯域の実効値が保たれる', Abs(Rms(B) - Rms(A)) < 0.05 * Rms(A),
+    Format('(%.4f vs %.4f)', [Rms(B), Rms(A)]));
+
+  { 同じ周波数なら素通し。
+    The same rate passes through untouched. }
+  B := ResampleBandLimited(A, RATE, RATE);
+  Check('同じ周波数なら素通し', Length(B) = Length(A));
+
+  { **本題。**2 つの強い音を同時に落としたとき、変換が作る像が十分に低いこと。
+    線形補間では f ± 1600 Hz に本物と同じ高さの像が立ち、多局同時受信の検出が
+    偽の局を作りました（付録 N.2）。ここでは 2050 Hz の像が立つ 450 Hz を見ます。
+
+    **The point of this test.** Two strong tones taken down together must not
+    leave the images the conversion can create. Linear interpolation raises them
+    at f +/- 1600 Hz as tall as the real tones, and multi-station detection then
+    reports stations that are not there (appendix N.2). The image of 2050 Hz,
+    at 450 Hz, is what is measured. }
+  SetLength(A, 2 * RATE);
+  for I := 0 to High(A) do
+    A[I] := 0.5 * Sin(2 * Pi * 700 * I / RATE) + 0.5 * Sin(2 * Pi * 2050 * I / RATE);
+
+  B := ResampleLinear(A, RATE, TARGET);
+  Spec := AverageSpectrum(B, 1024);
+  Signal_ := BinLevel(Spec, 700, TARGET, 1024);
+  Image := BinLevel(Spec, 450, TARGET, 1024);
+  WriteLn(Format('    線形補間    : 700 Hz に対する 450 Hz の像 %.1f dB',
+    [20 * Log10(Max(1E-12, Image) / Max(1E-12, Signal_))]));
+
+  B := ResampleBandLimited(A, RATE, TARGET);
+  Spec := AverageSpectrum(B, 1024);
+  Signal_ := BinLevel(Spec, 700, TARGET, 1024);
+  Image := BinLevel(Spec, 450, TARGET, 1024);
+  WriteLn(Format('    帯域制限    : 700 Hz に対する 450 Hz の像 %.1f dB',
+    [20 * Log10(Max(1E-12, Image) / Max(1E-12, Signal_))]));
+  { 局の検出は雑音面から 6 dB で局と認めます。像がそれより十分下、すなわち
+    -40 dB より下にいれば、像が局になることはありません。
+    Detection calls a peak a station at 6 dB above the noise floor, so an image
+    below -40 dB can never become one. }
+  Check('変換が作る像が -40 dB より下',
+    20 * Log10(Max(1E-12, Image) / Max(1E-12, Signal_)) < -40,
+    Format('(%.1f dB)', [20 * Log10(Max(1E-12, Image) / Max(1E-12, Signal_))]));
 end;
 
 procedure TestHistory;
@@ -577,6 +689,7 @@ begin
     TestWideSlice;
     TestTrackTone;
     TestBandPass;
+    TestResampleBandLimited;
     TestHistory;
     TestJournal;
   finally

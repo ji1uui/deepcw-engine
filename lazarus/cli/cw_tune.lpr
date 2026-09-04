@@ -27,7 +27,7 @@ program cw_tune;
 uses
   SysUtils, Classes, DateUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Decoder, DeepCW.Dsp, DeepCW.Morse, DeepCW.Tuner, DeepCW.Stream,
-  DeepCW.Callsign, DeepCW.Review;
+  DeepCW.Callsign, DeepCW.Review, DeepCW.Stations;
 
 const
   { 試験に使う本文。実際の交信に出てくる形をなぞっています。
@@ -42,7 +42,7 @@ var
   ModelPath: string = '';
   MetadataPath: string = '';
   RuntimePath: string = '';
-  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,correctness,overload,review,track,wide';
+  Tests: string = 'sweep,shift,image,bandwidth,stream,shape,callsign,correctness,overload,review,detect,track,wide';
   { 合成に加える白色雑音の大きさ。差が出る水準を選びます。
     White noise level for the synthesis, picked so differences show. }
   Noise: Double = 0.30;
@@ -533,7 +533,7 @@ begin
 
   { 広帯域の変換は 1 度だけ。/ The wide transform runs once. }
   Begun := Now;
-  Prepared := ResampleLinear(Mixed, CAPTURE_RATE, WideRate);
+  Prepared := ResampleBandLimited(Mixed, CAPTURE_RATE, WideRate);
   Wide := ComputeWideSpectrogram(Prepared, WideRate, Decoder.Metadata);
   SharedMs := MilliSecondsBetween(Now, Begun);
 
@@ -1548,6 +1548,372 @@ begin
     WriteLn(Format('  %d 件が通らなかった', [Failures]));
 end;
 
+{ 局の自動検出を測ります（要件 FR-I.2・FR-I.3）。
+
+  多局同時受信は、この層が出す音程と幅の上に載る。**上を作ってから測ると、
+  読めない原因が検出なのか切り出しなのか復号なのか分からなくなる。**ここだけで
+  完結して測れるように、狙った音程で局を鳴らし、返ってきた音程と数を突き合わせる。
+
+  見るのは 4 つ。
+    見つけた数     多すぎれば雑音を局と言っており、少なければ取り逃している
+    音程の誤差     切り出しの中心になるので、ここがずれると全部ずれる
+    分離できる間隔 付録 G.2 が「読める」と言った 100 Hz を、検出できるか
+    幅の決め方     隣までの距離の半分になっているか
+
+  Measures automatic station detection (requirements FR-I.2 and FR-I.3).
+
+  Multi-station reception sits on the pitches and widths this layer produces.
+  **Measured only after the layers above exist, a failure to read could be the
+  detection, the slicing or the decode.** So stations are synthesised at known
+  pitches and what comes back is compared against them, here and nowhere else.
+
+  Four things are looked at:
+    how many were found  too many means noise is being called a station, too few
+                         means stations are being missed
+    the pitch error      it becomes the centre of the slice, so an error here
+                         moves everything
+    the spacing resolved whether the 100 Hz that appendix G.2 called readable can
+                         actually be detected
+    the widths           whether they come out as half the distance to the
+                         nearest neighbour }
+procedure RunDetect;
+const
+  CAPTURE_RATE = 8000;
+  { 間隔を変えて、どこまで 2 局と見分けられるかを見ます。
+    Spacings varied to see how close two stations can be told apart. }
+  SPACINGS: array[0..4] of Double = (450, 200, 150, 100, 75);
+  { 弱い局をどこまで拾えるか。上へ行くほど雑音が強くなります。
+    How weak a station can be and still be picked up; noise rises along this. }
+  NOISES: array[0..7] of Double = (0.3, 1.0, 2.0, 3.0, 4.0, 6.0, 9.0, 14.0);
+var
+  WideRate, I, J, K, Failures, Matched, Spurious: Integer;
+  Mixed, Audio, Prepared: TSingleArray;
+  Wide: TSpectrogram;
+  Found: TStations;
+  Wanted: array of Double;
+  Error, Worst, Spacing: Double;
+  Tracker: TStationTracker;
+  Slice: TSpectrogram;
+  Line, Text: string;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
+  { 指定した音程の局を同時に鳴らし、雑音を加えます。
+    Sounds stations at the given pitches at once and adds noise. }
+  procedure Mix(const Tones: array of Double; NoiseLevel: Double; Seed: Integer);
+  var
+    A, B: Integer;
+  begin
+    Mixed := nil;
+    for A := 0 to High(Tones) do
+    begin
+      Audio := Synthesise(NormalizeText(MESSAGES[A mod Length(MESSAGES)]),
+        CAPTURE_RATE, Tones[A], 0, Seed + A);
+      if Length(Audio) > Length(Mixed) then
+      begin
+        B := Length(Mixed);
+        SetLength(Mixed, Length(Audio));
+        while B <= High(Mixed) do
+        begin
+          Mixed[B] := 0;
+          Inc(B);
+        end;
+      end;
+      for B := 0 to High(Audio) do
+        Mixed[B] := Mixed[B] + 0.5 * Audio[B];
+    end;
+    RandSeed := Seed;
+    for A := 0 to High(Mixed) do
+      Mixed[A] := Mixed[A] + NoiseLevel * 0.25 * (Random + Random - 1);
+  end;
+
+  procedure Detect;
+  begin
+    { 帯域全体を扱う経路では、線形補間は使えません。複数の強い信号があるとき、
+      f ± 1600 Hz に本物と同じ高さの像を作ります（付録 N.2）。
+      The whole-passband path cannot use linear interpolation: with several
+      strong signals it raises images as tall as the real ones at f +/- 1600 Hz
+      (appendix N.2). }
+    Prepared := ResampleBandLimited(Mixed, CAPTURE_RATE, WideRate);
+    Wide := ComputeWideSpectrogram(Prepared, WideRate, Decoder.Metadata);
+    Found := DetectStations(Wide, WideRate);
+  end;
+
+  { 見つけたものを、音程と高さで並べて出します。数が合わないときに、どこに何が
+    出ているのかを見るためです。
+    Prints what was found, pitch and level, so that a disagreement in the count
+    can be looked at rather than guessed at. }
+  procedure ShowFound;
+  var
+    A: Integer;
+  begin
+    Write('      →');
+    for A := 0 to High(Found) do
+      Write(Format(' %.0f Hz(%.1f dB)', [Found[A].Hz, Found[A].LevelDb]));
+    WriteLn;
+  end;
+
+  { 狙った音程それぞれに、いちばん近い検出を割り当てます。割り当たらなかった
+    検出は、いなかったはずの局です。
+    Each wanted pitch is matched to its nearest detection; anything left over is
+    a station that was not there. }
+  procedure Score(out Hit, Extra: Integer; out WorstError: Double);
+  var
+    A, B, Best: Integer;
+    D, BestD: Double;
+    Taken: array of Boolean;
+  begin
+    Hit := 0;
+    WorstError := 0;
+    SetLength(Taken, Length(Found));
+    for A := 0 to High(Taken) do
+      Taken[A] := False;
+    for A := 0 to High(Wanted) do
+    begin
+      Best := -1;
+      BestD := 40;
+      for B := 0 to High(Found) do
+      begin
+        if Taken[B] then
+          Continue;
+        D := Abs(Found[B].Hz - Wanted[A]);
+        if D < BestD then
+        begin
+          BestD := D;
+          Best := B;
+        end;
+      end;
+      if Best >= 0 then
+      begin
+        Taken[Best] := True;
+        Inc(Hit);
+        if BestD > WorstError then
+          WorstError := BestD;
+      end;
+    end;
+    Extra := Length(Found) - Hit;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('detect: 局の自動検出 / automatic station detection');
+  Failures := 0;
+  WideRate := Decoder.Metadata.SampleRate * 2;
+
+  { [1] 離れた 4 局を、数も音程も当てられること。
+        [1] Four well-separated stations, right in number and in pitch. }
+  SetLength(Wanted, 4);
+  Wanted[0] := 700; Wanted[1] := 1150; Wanted[2] := 1600; Wanted[3] := 2050;
+  Mix([700, 1150, 1600, 2050], Noise, 7100);
+  Detect;
+  Score(Matched, Spurious, Worst);
+  WriteLn(Format('  離れた 4 局: 見つけた %d 局（当たり %d / 余分 %d）、音程の誤差 最大 %.1f Hz',
+    [Length(Found), Matched, Spurious, Worst]));
+  Verdict('離れた 4 局をすべて見つける', Matched = 4,
+    Format('(%d 局)', [Matched]));
+  ShowFound;
+  Verdict('いなかった局を作らない', Spurious = 0,
+    Format('(%d 局余分)', [Spurious]));
+  { 誤差の上限はビン幅の半分。切り出しの中心がビンの中心に来るので、原理的に
+    これ以上は詰められない。
+    The error cannot beat half a bin: the slice centres on a bin centre. }
+  Verdict('音程の誤差がビン幅の半分に収まる', Worst <= 6.26,
+    Format('(%.1f Hz)', [Worst]));
+
+  { [2] 無信号では 1 局も見つけないこと。**雑音を局と言えば、そのぶん解析を
+        食い、一覧が汚れる。** }
+  Mixed := nil;
+  SetLength(Mixed, CAPTURE_RATE * 12);
+  RandSeed := 7101;
+  for I := 0 to High(Mixed) do
+    Mixed[I] := Noise * 0.25 * (Random + Random - 1);
+  Detect;
+  WriteLn(Format('  雑音のみ 12 秒: 見つけた %d 局', [Length(Found)]));
+  Verdict('雑音だけでは局を作らない', Length(Found) = 0,
+    Format('(%d 局)', [Length(Found)]));
+
+  { [3] 間隔を詰めていったとき、どこまで 2 局と見分けられるか。
+        100 Hz は付録 G.2 が「読める」と言った間隔なので、検出できなければ
+        その測定を活かせない。 }
+  WriteLn('  2 局の間隔ごと:');
+  for K := 0 to High(SPACINGS) do
+  begin
+    Spacing := SPACINGS[K];
+    SetLength(Wanted, 2);
+    Wanted[0] := 1000;
+    Wanted[1] := 1000 + Spacing;
+    Mix([1000, 1000 + Spacing], Noise, 7110 + K);
+    Detect;
+    Score(Matched, Spurious, Worst);
+    Line := Format('    %4.0f Hz 間隔: 見つけた %d 局（当たり %d / 余分 %d）',
+      [Spacing, Length(Found), Matched, Spurious]);
+    WriteLn(Line);
+    ShowFound;
+    if Spacing >= DETECT_MIN_SEPARATION_HZ then
+      Verdict(Format('%.0f Hz 間隔を 2 局と見分ける', [Spacing]),
+        (Matched = 2) and (Spurious = 0), Line)
+    else
+      { 下限より近いものは 1 局に畳む。測っていない間隔を「2 局です」と
+        言わないための決めごと。 }
+      Verdict(Format('%.0f Hz 間隔は 1 局に畳む', [Spacing]),
+        Length(Found) = 1, Line);
+  end;
+
+  { [4] 幅が、隣までの距離の半分になっていること（要件 FR-I.3）。 }
+  SetLength(Wanted, 3);
+  Wanted[0] := 800; Wanted[1] := 1000; Wanted[2] := 1800;
+  Mix([800, 1000, 1800], Noise, 7120);
+  Detect;
+  Score(Matched, Spurious, Worst);
+  if Length(Found) = 3 then
+  begin
+    WriteLn(Format('  幅: %.0f Hz → ±%.0f、%.0f Hz → ±%.0f、%.0f Hz → ±%.0f',
+      [Found[0].Hz, Found[0].HalfWidthHz, Found[1].Hz, Found[1].HalfWidthHz,
+       Found[2].Hz, Found[2].HalfWidthHz]));
+    Verdict('隣に近い局は狭い幅になる',
+      SameValue(Found[0].HalfWidthHz, 100, 1) and
+      SameValue(Found[1].HalfWidthHz, 100, 1),
+      Format('(±%.0f, ±%.0f)', [Found[0].HalfWidthHz, Found[1].HalfWidthHz]));
+    Verdict('離れた局は 1 局のみのときと同じ幅になる',
+      SameValue(Found[2].HalfWidthHz, DETECT_MAX_HALF_WIDTH_HZ, 1),
+      Format('(±%.0f)', [Found[2].HalfWidthHz]));
+  end
+  else
+    Verdict('幅を測るための 3 局が見つかる', False,
+      Format('(%d 局)', [Length(Found)]));
+
+  { [5] 1 局だけのときは、単局受信と同じ幅になること。切り替えても挙動が
+        変わらないことが、モードを分ける前提になる（要件 FR-I.6）。 }
+  SetLength(Wanted, 1);
+  Wanted[0] := 1000;
+  Mix([1000], Noise, 7130);
+  Detect;
+  Verdict('1 局だけなら単局受信と同じ幅',
+    (Length(Found) = 1) and
+    SameValue(Found[0].HalfWidthHz, DETECT_MAX_HALF_WIDTH_HZ, 1),
+    Format('(%d 局)', [Length(Found)]));
+
+  { [6] 回をまたいでも一覧が落ち着くこと。1 回の検出では局は現れたり消えたり
+        する。**回ごとに作り直すと、局ごとの受信文がそのたびに途切れる。** }
+  Tracker := TStationTracker.Create;
+  try
+    SetLength(Wanted, 2);
+    Wanted[0] := 900; Wanted[1] := 1400;
+    for I := 1 to 5 do
+    begin
+      Mix([900, 1400], Noise, 7140 + I);
+      Detect;
+      Tracker.Update(Found, I * 3.0);
+    end;
+    Found := Tracker.Confirmed;
+    Score(Matched, Spurious, Worst);
+    Verdict('回を重ねても局が増えも減りもしない',
+      (Length(Found) = 2) and (Matched = 2),
+      Format('(%d 局)', [Length(Found)]));
+
+    { 局が止まっても、すぐには忘れない。語間の休みで消えては困る。 }
+    for I := 1 to 2 do
+      Tracker.Update(nil, 20.0 + I);
+    Verdict('少し消えただけでは忘れない', Tracker.Count > 0,
+      Format('(%d 局)', [Tracker.Count]));
+    { 続けて消えれば忘れる。 }
+    for I := 1 to 4 do
+      Tracker.Update(nil, 30.0 + I);
+    Verdict('続けて消えれば忘れる', Tracker.Count = 0,
+      Format('(%d 局)', [Tracker.Count]));
+  finally
+    Tracker.Free;
+  end;
+
+  { [7] どれだけ弱い局まで見つかるか。**検出が復号より厳しければ、読める局を
+        取り逃す。緩ければ、読めない局に解析を割く。**両方を同じ音声で測って
+        突き合わせる。
+
+        [7] How weak a station is still found. **Detection stricter than decoding
+        loses stations that could have been read; looser than decoding spends
+        analysis on stations that cannot be.** Both are measured on the same
+        audio and compared. }
+  WriteLn('  雑音ごとの検出と復号:');
+  for K := 0 to High(NOISES) do
+  begin
+    SetLength(Wanted, 1);
+    Wanted[0] := 1000;
+    Mix([1000], NOISES[K], 7150 + K);
+    Detect;
+    Score(Matched, Spurious, Worst);
+    if Length(Found) > 0 then
+      Error := Found[0].LevelDb
+    else
+      Error := 0;
+    { 同じ音声を、見つけた音程と幅で切り出して読む。
+      The same audio is sliced at the pitch and width found, and read. }
+    Text := '';
+    if Matched = 1 then
+    begin
+      Slice := SliceSpectrogram(Wide,
+        WideBinFor(Found[0].Hz, WideRate, (Wide.Bins - 1) * 2), Decoder.Metadata);
+      MaskSpectrogram(Slice, Found[0].HalfWidthHz, Decoder.Metadata);
+      Text := Trim(DecodedText(Decoder.DecodeSpectrogramTimed(Slice, Length(Mixed) / CAPTURE_RATE)));
+    end;
+    WriteLn(Format('    雑音 %.1f: 見つけた %d 局（%.1f dB）、誤り率 %.2f',
+      [NOISES[K], Length(Found), Error,
+       CharErrorRate(NormalizeText(MESSAGES[0]), Text)]));
+    { 読める（誤り率 0.2 未満）のに見つけられない、という組み合わせが無いこと。
+      There must be no case that reads (error rate under 0.2) yet is not found. }
+    if (Matched = 0) and (Text <> '') then
+      Verdict(Format('雑音 %.1f で読めるのに見つけられない、が起きない',
+        [NOISES[K]]), False, '');
+  end;
+
+  { [8] **この層の主張そのもの。**自動で見つけた音程と、自動で決めた幅だけで、
+        混み合った 4 局が読めること。付録 G.2 は音程を人が与えて測った。ここは
+        人が何も与えない。
+
+        [8] **The claim this layer makes.** Four crowded stations must read using
+        only the pitches found and the widths decided automatically. Appendix G.2
+        measured this with the pitches given by hand; here nothing is given. }
+  SetLength(Wanted, 4);
+  for I := 0 to 3 do
+    Wanted[I] := 1000 + I * 150;
+  Mix([1000, 1150, 1300, 1450], Noise, 7160);
+  Detect;
+  Score(Matched, Spurious, Worst);
+  WriteLn(Format('  150 Hz 間隔の 4 局: 見つけた %d 局（当たり %d / 余分 %d）',
+    [Length(Found), Matched, Spurious]));
+  Verdict('混み合った 4 局をすべて見つける', (Matched = 4) and (Spurious = 0),
+    Format('(当たり %d / 余分 %d)', [Matched, Spurious]));
+  J := 0;
+  for I := 0 to High(Found) do
+  begin
+    Slice := SliceSpectrogram(Wide,
+      WideBinFor(Found[I].Hz, WideRate, (Wide.Bins - 1) * 2), Decoder.Metadata);
+    MaskSpectrogram(Slice, Found[I].HalfWidthHz, Decoder.Metadata);
+    Text := Trim(DecodedText(Decoder.DecodeSpectrogramTimed(Slice, Length(Mixed) / CAPTURE_RATE)));
+    Error := CharErrorRate(
+      NormalizeText(MESSAGES[I mod Length(MESSAGES)]), Text);
+    WriteLn(Format('    %.0f Hz（±%.0f）: 誤り率 %.2f  %s',
+      [Found[I].Hz, Found[I].HalfWidthHz, Error, Text]));
+    if Error = 0 then
+      Inc(J);
+  end;
+  Verdict('見つけた音程と決めた幅だけで 4 局とも完全に読める', J = 4,
+    Format('(%d / %d 局)', [J, Length(Found)]));
+
+  if Failures = 0 then
+    WriteLn('  すべて通った')
+  else
+    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+end;
+
 var
   Index: Integer;
   Key, Value: string;
@@ -1615,6 +1981,8 @@ begin
       RunOverload;
     if Pos('review', Tests) > 0 then
       RunReview;
+    if Pos('detect', Tests) > 0 then
+      RunDetect;
     if Pos('track', Tests) > 0 then
       RunTrack;
     if Pos('wide', Tests) > 0 then

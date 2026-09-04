@@ -329,18 +329,43 @@ function ComputeWideSpectrogram(const Samples: TSingleArray; SampleRate: Integer
 var
   FFT: TRealFFT;
   Window, Padded, Frame, Magnitudes: TDoubleArray;
-  FFTLength, HopLength, Ratio, Bins, FrameIndex, I, Offset: Integer;
+  FFTLength, HopLength, Bins, FrameIndex, I, Offset: Integer;
   Scale: Double;
 begin
-  if (SampleRate <= 0) or (SampleRate mod Meta.SampleRate <> 0) then
+  { 要るのは「ビン幅・フレーム間隔・窓長がモデルと一致すること」だけで、
+    録音周波数がモデルの周波数の整数倍である必要はありません。窓長とホップが
+    標本の整数になりさえすればよく、8000・16000・48000 Hz はいずれも条件を
+    満たします。
+
+    **ここを整数倍に限ると、8000 Hz の録音を 6400 Hz へ落とす必要が生じます。**
+    線形補間でそれをやると、複数の強い信号があるとき f ± 1600 Hz に像が立ち、
+    本物の局と同じ高さ（実測 31〜36 dB）で見えます。単局では信号が 1 つなので
+    現れず、多局にして初めて出る種類の誤りです（付録 N.2）。
+
+    All that is required is that the bin spacing, frame spacing and window length
+    match the model's; the capture rate need not be an integer multiple of the
+    model's. The window and hop only have to come out as whole samples, which
+    8000, 16000 and 48000 Hz all do.
+
+    **Restricting this to integer multiples would force 8000 Hz capture down to
+    6400 Hz.** Done by linear interpolation, that raises images at f +/- 1600 Hz
+    which, with several strong signals present, stand as tall as real stations
+    (31-36 dB measured). One signal never shows it; it appears only with many
+    (appendix N.2). }
+  if SampleRate <= 0 then
+    raise EDeepCW.CreateFmt('Invalid wide spectrogram rate %d.', [SampleRate]);
+  if (Int64(SampleRate) * Meta.FFTLength) mod Meta.SampleRate <> 0 then
     raise EDeepCW.CreateFmt(
-      'The wide spectrogram rate must be a multiple of %d Hz, got %d.',
-      [Meta.SampleRate, SampleRate]);
-  Ratio := SampleRate div Meta.SampleRate;
-  FFTLength := Meta.FFTLength * Ratio;
-  HopLength := Meta.HopLength * Ratio;
-  { ビン幅もフレーム間隔も窓長も、モデルのものと一致します。
-    Bin spacing, frame spacing and window length all match the model's. }
+      'A wide spectrogram at %d Hz would need a window of %.3f samples; ' +
+      'it must come out whole.',
+      [SampleRate, SampleRate * Meta.FFTLength / Meta.SampleRate]);
+  if (Int64(SampleRate) * Meta.HopLength) mod Meta.SampleRate <> 0 then
+    raise EDeepCW.CreateFmt(
+      'A wide spectrogram at %d Hz would need a hop of %.3f samples; ' +
+      'it must come out whole.',
+      [SampleRate, SampleRate * Meta.HopLength / Meta.SampleRate]);
+  FFTLength := (SampleRate * Meta.FFTLength) div Meta.SampleRate;
+  HopLength := (SampleRate * Meta.HopLength) div Meta.SampleRate;
 
   if Length(Samples) < FFTLength then
     raise EDeepCW.CreateFmt('The audio is too short for fft_length=%d.', [FFTLength]);
@@ -354,7 +379,7 @@ begin
     A longer window scales the magnitudes up, and log1p is not invariant to a
     scale factor, so they are brought back to the size the model was trained
     on. }
-  Scale := 1 / Ratio;
+  Scale := Meta.FFTLength / FFTLength;
 
   Result.Bins := Bins;
   Result.Frames := 1 + (Length(Padded) - FFTLength) div HopLength;

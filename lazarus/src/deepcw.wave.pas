@@ -46,6 +46,39 @@ procedure SaveWavMono(const FileName: string; const Samples: TSingleArray;
   the Python and Node.js examples so all three produce the same input tensor. }
 function ResampleLinear(const Samples: TSingleArray; SourceRate, TargetRate: Integer): TSingleArray;
 
+{ 帯域制限した補間で標本化周波数を変えます。
+
+  線形補間は、標本と標本のあいだを直線で結ぶことで**信号そのものを歪ませます。**
+  歪みは信号の周波数の 2 乗で増え、変換の繰り返し周期に対応する像として現れます。
+  8000 Hz を 6400 Hz へ落とす場合、像は f ± 1600 Hz に立ちます。
+
+  1 局だけを聴いているうちは、これは表に出ません。信号が 1 つで、しかも同調の
+  経路では帯域制限で高い成分を先に落としているためです。**帯域全体をそのまま
+  扱う多局同時受信で初めて出ます。**実測では、4 局を鳴らしたときの像が本物の局と
+  同じ高さ（31〜36 dB）で立ち、検出が偽の局を作りました（付録 N.2）。
+
+  ここでは窓関数付き sinc を使います。標本化周波数の比は有理数なので、位相の
+  種類は有限です。位相ごとに核をあらかじめ作っておけば、あとは積和だけで済みます。
+
+  Changes the sample rate with band-limited interpolation.
+
+  Linear interpolation joins samples with straight lines, which **distorts the
+  signal itself.** The distortion grows with the square of the signal's
+  frequency and appears as images at the repeat period of the conversion: taking
+  8000 Hz down to 6400 Hz puts them at f +/- 1600 Hz.
+
+  Listening to one station never shows this: there is a single signal, and the
+  tuned path band-limits away the high content first. **It appears only when the
+  whole passband is kept, as multi-station reception keeps it.** Measured with
+  four stations transmitting, the images stood as tall as the real ones
+  (31-36 dB) and the detector reported them as stations (appendix N.2).
+
+  A windowed sinc is used here. The ratio of the rates is rational, so there are
+  finitely many phases; building the kernel for each in advance leaves only
+  multiply and accumulate. }
+function ResampleBandLimited(const Samples: TSingleArray;
+  SourceRate, TargetRate: Integer): TSingleArray;
+
 implementation
 
 type
@@ -272,6 +305,108 @@ begin
   end;
 end;
 
+{ 核の広がり（ゼロ交差の数）。多いほど阻止域が深くなり、費用は比例して増えます。
+  The kernel's reach in zero crossings: more of them deepens the stop band and
+  costs proportionally more. }
+const
+  RESAMPLE_ZERO_CROSSINGS = 16;
+
+function ResampleBandLimited(const Samples: TSingleArray;
+  SourceRate, TargetRate: Integer): TSingleArray;
+var
+  Kernels: array of TDoubleArray;
+  Cutoff, Position, Offset, Argument, Accumulator, Weight, Total: Double;
+  Phases, HalfTaps, Taps, Divisor, Phase, Index_, Tap, Source, Count: Integer;
+
+  function GreatestCommonDivisor(A, B: Integer): Integer;
+  var
+    Remainder: Integer;
+  begin
+    while B <> 0 do
+    begin
+      Remainder := A mod B;
+      A := B;
+      B := Remainder;
+    end;
+    Result := A;
+  end;
+
+begin
+  if (Length(Samples) = 0) or (SourceRate <= 0) or (TargetRate <= 0) then
+    Exit(Samples);
+  if SourceRate = TargetRate then
+    Exit(Samples);
+
+  { 遮断は、変換の前後で低いほうのナイキストに置きます。落とすときは折り返しを
+    防ぐため、上げるときは像を作らないためです。元の標本の単位で表します。
+    The cutoff sits at the lower of the two Nyquist frequencies: going down it
+    prevents aliasing, going up it avoids creating images. It is expressed in
+    units of the source sample rate. }
+  Cutoff := 0.5 * Min(1.0, TargetRate / SourceRate);
+  HalfTaps := Max(4, Ceil(RESAMPLE_ZERO_CROSSINGS / (2 * Cutoff)));
+  Taps := 2 * HalfTaps + 1;
+
+  { 位相の種類は、比を約分した分母の数だけあります。8000→6400 なら 4 種類です。
+    There are as many phases as the reduced denominator of the ratio: four for
+    8000 to 6400. }
+  Divisor := GreatestCommonDivisor(SourceRate, TargetRate);
+  Phases := Max(1, TargetRate div Divisor);
+
+  SetLength(Kernels, Phases);
+  for Phase := 0 to Phases - 1 do
+  begin
+    SetLength(Kernels[Phase], Taps);
+    Total := 0;
+    { この位相での、出力標本から見た直前の元標本までのずれ。
+      How far this phase's output sits past the source sample below it. }
+    Offset := Frac(Phase * (SourceRate / TargetRate));
+    for Tap := 0 to Taps - 1 do
+    begin
+      Position := (Tap - HalfTaps) - Offset;
+      if Abs(Position) < 1E-9 then
+        Weight := 2 * Cutoff
+      else
+      begin
+        Argument := 2 * Pi * Cutoff * Position;
+        Weight := Sin(Argument) / (Pi * Position);
+      end;
+      { ブラックマン窓。ハミングより阻止域が深く、像を残さないために要ります。
+        A Blackman window: its stop band is deeper than a Hamming's, which is
+        what keeps the images out. }
+      Argument := Pi * (Position + HalfTaps) / HalfTaps;
+      Weight := Weight * (0.42 - 0.5 * Cos(Argument) + 0.08 * Cos(2 * Argument));
+      Kernels[Phase][Tap] := Weight;
+      Total := Total + Weight;
+    end;
+    { 直流の利得を 1 に揃えます。位相ごとに揃えないと、出力に位相の周期で
+      うねりが乗ります。
+      The direct-current gain is normalised to one. Left unequal between phases,
+      the output would ripple at the phase period. }
+    if Total <> 0 then
+      for Tap := 0 to Taps - 1 do
+        Kernels[Phase][Tap] := Kernels[Phase][Tap] / Total;
+  end;
+
+  Count := Max(1, Round(Int64(Length(Samples)) * TargetRate / SourceRate));
+  SetLength(Result, Count);
+  for Index_ := 0 to Count - 1 do
+  begin
+    Position := Index_ * (SourceRate / TargetRate);
+    Phase := Index_ mod Phases;
+    Accumulator := 0;
+    for Tap := 0 to Taps - 1 do
+    begin
+      { 両端は値を保持します。LowPassFilter と同じ扱いで、CW の帯域では差が
+        出ません。
+        The edges hold their value, as LowPassFilter does; it makes no difference
+        across a CW passband. }
+      Source := ClampInt(Trunc(Position) + Tap - HalfTaps, 0, High(Samples));
+      Accumulator := Accumulator + Kernels[Phase][Tap] * Samples[Source];
+    end;
+    Result[Index_] := Accumulator;
+  end;
+end;
+
 function ResampleLinear(const Samples: TSingleArray; SourceRate, TargetRate: Integer): TSingleArray;
 var
   TargetLength, I, Left, Right: Integer;
@@ -282,11 +417,18 @@ begin
   if (SourceRate = TargetRate) or (Length(Samples) = 0) then
     Exit(Samples);
 
-  TargetLength := Round(Length(Samples) * TargetRate / SourceRate);
+  { 掛け算を Int64 で行わせます。64 ビットの対象では既にそうなりますが、
+    32 ビットの対象では 1152000 × 6400 が桁あふれし、長さが黙って化けます。
+    演算の順序は変えていないので、参照実装との一致は保たれます。
+    The multiplication is forced into 64 bits. A 64-bit target already does this,
+    but on a 32-bit one 1152000 x 6400 overflows and the length silently becomes
+    nonsense. The order of operations is unchanged, so parity with the reference
+    implementation is preserved. }
+  TargetLength := Round(Int64(Length(Samples)) * TargetRate / SourceRate);
   SetLength(Result, TargetLength);
   for I := 0 to TargetLength - 1 do
   begin
-    Position := I * SourceRate / TargetRate;
+    Position := Int64(I) * SourceRate / TargetRate;
     Left := Trunc(Position);
     if Left > High(Samples) then
       Left := High(Samples);
