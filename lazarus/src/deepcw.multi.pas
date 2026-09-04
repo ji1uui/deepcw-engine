@@ -176,6 +176,11 @@ type
     Hz: Double;
     LevelDb: Double;
     HalfWidthHz: Double;
+    { この音程に畳み込まれた別の峰の数。0 なら 1 局です。密集した範囲を
+      「密集している」と示すために要ります（要件 FR-J.6）。
+      How many other peaks were folded into this pitch; zero means one station.
+      Needed to show a crowded stretch as crowded (requirement FR-J.6). }
+    Crowded: Integer;
     { 受信開始からの秒で、最初に現れた時刻と、最後に聞こえた時刻。
       Seconds since reception began: when it first appeared and when it was last
       heard. }
@@ -801,6 +806,7 @@ begin
     FLogs[Index].Hz := Present[I].Station.Hz;
     FLogs[Index].LevelDb := Present[I].Station.LevelDb;
     FLogs[Index].HalfWidthHz := Present[I].Station.HalfWidthHz;
+    FLogs[Index].Crowded := Present[I].Station.Crowded;
     FLogs[Index].LastSeconds := Present[I].LastSeconds;
     FLogs[Index].Confirmed := Present[I].Confirmed;
     FLogs[Index].Analysed := I < Limit;

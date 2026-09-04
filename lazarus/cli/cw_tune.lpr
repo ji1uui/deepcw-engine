@@ -1768,6 +1768,28 @@ begin
         Length(Found) = 1, Line);
   end;
 
+  { [3b] 分離の下限より近い山を畳んだとき、畳んだことが残ること（要件 FR-J.6）。
+         **残さないと、上の層からは「1 局」と見分けが付きません。**密集した範囲を
+         「密集している」と示すのに要ります。
+         [3b] When peaks closer than the separation limit are folded, the fact
+         must survive (requirement FR-J.6). **Without it the layers above cannot
+         tell the result from a single station**, and a crowded stretch could not
+         be shown as crowded. }
+  SetLength(Wanted, 1);
+  Wanted[0] := 1000;
+  Mix([1000], Noise, 7180);
+  Detect;
+  Verdict('1 局だけなら畳んでいないと分かる',
+    (Length(Found) = 1) and (Found[0].Crowded = 0),
+    Format('(%d 局、畳んだ %d)', [Length(Found),
+      Ord(Length(Found) > 0) * Found[0].Crowded]));
+  Mix([1000, 1060], Noise, 7181);
+  Detect;
+  Verdict('近すぎる 2 局は 1 つに畳み、畳んだと分かる',
+    (Length(Found) = 1) and (Found[0].Crowded >= 1),
+    Format('(%d 局、畳んだ %d)', [Length(Found),
+      Ord(Length(Found) > 0) * Found[0].Crowded]));
+
   { [4] 幅が、隣までの距離の半分になっていること（要件 FR-I.3）。 }
   SetLength(Wanted, 3);
   Wanted[0] := 800; Wanted[1] := 1000; Wanted[2] := 1800;

@@ -19,8 +19,8 @@ program gui_probe;
 uses
   SysUtils, DateUtils, Math, Classes, Interfaces, Forms, Controls, Graphics, LCLType,
   DeepCW.Types, DeepCW.Morse, DeepCW.Tuner, DeepCW.Decoder,
-  DeepCW.Review,
-  WaterfallView, TranscriptView;
+  DeepCW.Review, DeepCW.Multi, DeepCW.BandMap,
+  WaterfallView, TranscriptView, BandMapView;
 
 type
   { 部品の保護された入力処理は、そのままでは外から呼べません。派生させて
@@ -38,6 +38,21 @@ type
       Forces the image to be rebuilt on every paint, matching what a newly
       arrived row costs. }
     procedure Touch;
+  end;
+
+  { バンドマップの押下も、そのままでは外から呼べません。
+    The band map's press handler is protected too. }
+  TProbeBandMap = class(TBandMapView)
+  public
+    procedure Tap(Y: Integer);
+  end;
+
+  { 選ばれた局を控えます。/ Records the station that was chosen. }
+  TStationWatcher = class
+    Id: Int64;
+    Hz: Double;
+    Count: Integer;
+    procedure Choose(Sender: TObject; AId: Int64; AHz: Double);
   end;
 
   { 受信テキストの押下も、そのままでは外から呼べません。
@@ -84,6 +99,18 @@ end;
 procedure TProbeTranscript.Tap(X, Y: Integer);
 begin
   MouseDown(mbLeft, [], X, Y);
+end;
+
+procedure TProbeBandMap.Tap(Y: Integer);
+begin
+  MouseDown(mbLeft, [], 10, Y);
+end;
+
+procedure TStationWatcher.Choose(Sender: TObject; AId: Int64; AHz: Double);
+begin
+  Id := AId;
+  Hz := AHz;
+  Inc(Count);
 end;
 
 constructor TChoiceWatcher.Create;
@@ -219,6 +246,22 @@ end;
 { 復号済みの文字を並べたものを作ります。長時間の受信で溜まった状態を模します。
   Builds a run of decoded characters, standing in for what accumulates over a
   long session. }
+{ 文字列から、時刻と確からしさの付いた文字の並びを作ります。
+  Builds timed, confident characters from a string. }
+function CharsOf(const Text: string): TDecodedChars;
+var
+  I: Integer;
+begin
+  SetLength(Result, Length(Text));
+  for I := 1 to Length(Text) do
+  begin
+    Result[I - 1].Text := Text[I];
+    Result[I - 1].Seconds := 300 + (I - 1) * 0.2;
+    Result[I - 1].EndSeconds := Result[I - 1].Seconds;
+    Result[I - 1].Confidence := 0.99;
+  end;
+end;
+
 function BuildChars(Count: Integer): TDecodedChars;
 const
   ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ';
@@ -281,6 +324,10 @@ var
   Started: TDateTime;
   Elapsed: Double;
   Choice: TChoiceWatcher;
+  Chooser: TStationWatcher;
+  BandMap: TProbeBandMap;
+  Logs: TStationLogs;
+  Entries: TBandEntries;
   History: TAudioHistory;
   Picked: TDecodedChar;
   Replay: TSingleArray;
@@ -667,6 +714,104 @@ begin
   end;
   Choice.Free;
   Transcript.OnCharChosen := nil;
+
+  { ── バンドマップ（要件 FR-J）──
+    20 局を 1 画面で見渡せること、行を選べること、そして**確かでないものを確か
+    そうに見せていないこと。**呼出符号は 1 文字違えば別人なので、一覧に出た時点で
+    運用者はそれを事実として扱う。ここは嘘をつきやすい場所である。
+
+    The band map (requirement FR-J). Twenty stations must fit on one screen, a row
+    must be selectable, and **nothing uncertain may be shown as if it were
+    certain.** A call sign one letter out is a different person, and the moment it
+    appears in a list the operator treats it as fact. This is where it is easiest
+    to lie. }
+  WriteLn;
+  WriteLn('バンドマップの検証 / band map checks');
+  BandMap := TProbeBandMap.Create(Form);
+  BandMap.Parent := Form;
+  BandMap.Align := alClient;
+  Transcript.Visible := False;
+  View.Visible := False;
+  Application.ProcessMessages;
+
+  SetLength(Logs, 24);
+  for X := 0 to 23 do
+  begin
+    Logs[X] := Default(TStationLog);
+    Logs[X].Id := 100 + X;
+    Logs[X].Hz := 600 + X * 100;
+    Logs[X].LevelDb := 30 - X * 0.5;
+    Logs[X].LastSeconds := 300 - X;
+    Logs[X].Analysed := X < 20;
+    Logs[X].Chars := nil;
+  end;
+  { 3 種類の局を作り分ける。確かなもの、1 度きりのもの、密集しているもの。
+    Three kinds of station: certain, seen once, and crowded. }
+  Logs[0].Chars := CharsOf('CQ CQ DE JH2XYZ JH2XYZ K ');
+  Logs[1].Chars := CharsOf('JA1ABC DE JH3DEF K ');
+  Logs[2].Crowded := 3;
+  Logs[2].Chars := CharsOf('CQ DE JA1ABC ');
+
+  Entries := BuildBandEntries(Logs, 320);
+  BandMap.SetEntries(Entries, 320);
+  Application.ProcessMessages;
+  Check('24 局ぶんの行を持つ', BandMap.Count = 24,
+    Format('(%d 行)', [BandMap.Count]));
+
+  { 複数回一致したものは、そのまま名前として出す。 }
+  Check('一致した呼出符号はそのまま出す', BandMap.NameCaption(0) = 'JH2XYZ',
+    Format('("%s")', [BandMap.NameCaption(0)]));
+  { 1 度きりのものは、確かでないと分かる形で出す（要件 FR-J.7）。 }
+  Check('1 度きりの呼出符号は確かでないと分かる',
+    (Pos('JH3DEF', BandMap.NameCaption(1)) > 0) and
+    (BandMap.NameCaption(1) <> 'JH3DEF'),
+    Format('("%s")', [BandMap.NameCaption(1)]));
+  { 密集している範囲は、1 局として読んだふりをしない（要件 FR-J.6）。 }
+  Check('密集は呼出符号を出さずに密集と示す',
+    (Pos('密集', BandMap.NameCaption(2)) > 0) and
+    (Pos('JA1ABC', BandMap.NameCaption(2)) = 0),
+    Format('("%s")', [BandMap.NameCaption(2)]));
+  { いつ聞こえたかが読めること。 }
+  Check('いつ聞こえたかを言葉で出す', BandMap.AgeCaption(0) <> '',
+    Format('("%s")', [BandMap.AgeCaption(0)]));
+
+  { 行を押すと、その局が選ばれて通知される（要件 FR-J.3）。 }
+  Chooser := TStationWatcher.Create;
+  BandMap.OnStationChosen := @Chooser.Choose;
+  BandMap.Tap(BandMap.Height div 2 - BandMap.Height div 2 + 4);
+  Check('押した行が選ばれる', BandMap.SelectedId = Logs[0].Id,
+    Format('(%d)', [BandMap.SelectedId]));
+  Check('選ばれた局が通知される',
+    (Chooser.Count = 1) and (Chooser.Id = Logs[0].Id) and
+    SameValue(Chooser.Hz, Logs[0].Hz, 0.1),
+    Format('(%d 回、%d、%.0f Hz)', [Chooser.Count, Chooser.Id, Chooser.Hz]));
+
+  { 局がいないときに、黙って空にしない。動いていないのか局がいないのかが
+    分からなくなる。 }
+  BandMap.Clear;
+  Check('消しても選択が残らない', BandMap.SelectedId = 0,
+    Format('(%d)', [BandMap.SelectedId]));
+  Check('局がいなければ 0 行', BandMap.Count = 0);
+  BandMap.SetEntries(Entries, 320);
+
+  { 20 局を毎秒描き直しても遅れないこと。 }
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(Form.ClientWidth, Form.ClientHeight);
+    Started := Now;
+    for Repeats := 1 to 20 do
+      BandMap.PaintTo(Shot.Canvas, 0, 0);
+    PaintMs := MilliSecondsBetween(Now, Started) / 20;
+    WriteLn(Format('  24 局の描画: %.1f ms', [PaintMs]));
+    Check('24 局の描画が 50 ms 未満', PaintMs < 50,
+      Format('(%.1f ms)', [PaintMs]));
+  finally
+    Shot.Free;
+  end;
+  Chooser.Free;
+  BandMap.Visible := False;
+  View.Visible := True;
+  Application.ProcessMessages;
 
   { ── 長時間使ったときにメモリが増え続けないこと ──
     常設シャックは何時間も動かしたままになる。**増え続けるなら、いつか止まる。**

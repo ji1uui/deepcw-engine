@@ -22,7 +22,7 @@ interface
 
 uses
   SysUtils, Classes, Math, Controls, Graphics, Forms, StdCtrls, LCLType,
-  DeepCW.Types, DeepCW.Decoder;
+  DeepCW.Types, DeepCW.Decoder, ViewColors;
 
 type
   { 文字がひとつ選ばれたことを知らせます。番号は文字配列上の位置です。
@@ -172,21 +172,6 @@ type
   end;
 
 implementation
-
-{ 2 色を Amount(0..1) で混ぜます。/ Blends two colours by Amount. }
-function BlendColor(Background, Foreground: TColor; Amount: Single): TColor;
-var
-  BackRGB, ForeRGB: LongInt;
-  R, G, B: Integer;
-begin
-  Amount := ClampDouble(Amount, 0, 1);
-  BackRGB := ColorToRGB(Background);
-  ForeRGB := ColorToRGB(Foreground);
-  R := Round(Red(BackRGB) + (Red(ForeRGB) - Red(BackRGB)) * Amount);
-  G := Round(Green(BackRGB) + (Green(ForeRGB) - Green(BackRGB)) * Amount);
-  B := Round(Blue(BackRGB) + (Blue(ForeRGB) - Blue(BackRGB)) * Amount);
-  Result := RGBToColor(ClampInt(R, 0, 255), ClampInt(G, 0, 255), ClampInt(B, 0, 255));
-end;
 
 constructor TTranscriptView.Create(AOwner: TComponent);
 begin

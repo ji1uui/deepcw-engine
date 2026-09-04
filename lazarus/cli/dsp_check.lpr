@@ -17,7 +17,8 @@ program dsp_check;
 
 uses
   Classes, SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
-  DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder;
+  DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder,
+  DeepCW.Multi, DeepCW.BandMap;
 
 var
   Meta: TDeepCWMetadata;
@@ -626,6 +627,113 @@ begin
   end;
 end;
 
+{ 文字列から、確からしさを指定した局の記録を 1 件作ります。
+  Builds one station record from a string, with a given confidence. }
+function LogOf(const Text: string; Hz: Double; Sure: Single): TStationLog;
+var
+  I: Integer;
+begin
+  Result := Default(TStationLog);
+  Result.Id := Round(Hz);
+  Result.Hz := Hz;
+  Result.LevelDb := 30;
+  Result.Analysed := True;
+  SetLength(Result.Chars, Length(Text));
+  for I := 1 to Length(Text) do
+  begin
+    Result.Chars[I - 1].Text := Text[I];
+    Result.Chars[I - 1].Seconds := (I - 1) * 0.2;
+    Result.Chars[I - 1].EndSeconds := Result.Chars[I - 1].Seconds;
+    Result.Chars[I - 1].Confidence := Sure;
+  end;
+  Result.LastSeconds := Length(Text) * 0.2;
+end;
+
+procedure TestBandMap;
+var
+  Logs: TStationLogs;
+  Entries: TBandEntries;
+  Started: TDateTime;
+  I, Repeats: Integer;
+  Elapsed: Double;
+begin
+  WriteLn('DeepCW.BandMap');
+
+  { 交信の形。DE の後ろが送信している局です。**相手局の符号を自局として
+    出してはいけません。** }
+  SetLength(Logs, 1);
+  Logs[0] := LogOf('JA1ABC DE JH2XYZ JH2XYZ K ', 1000, 0.99);
+  Entries := BuildBandEntries(Logs, 10);
+  Check('DE の後ろを送信局として採る', Entries[0].Callsign = 'JH2XYZ',
+    Format('("%s")', [Entries[0].Callsign]));
+  Check('2 回出たので一致と見なす', Entries[0].Trust = ctAgreed,
+    Format('(%d 回)', [Entries[0].Sightings]));
+
+  { 1 度しか出ていないものは、事実として出してはいけません（要件 FR-J.7）。 }
+  Logs[0] := LogOf('JA1ABC DE JH2XYZ K ', 1000, 0.99);
+  Entries := BuildBandEntries(Logs, 10);
+  Check('1 回きりなら「確認中」どまり', Entries[0].Trust = ctShape,
+    Format('(%d 回、%s)', [Entries[0].Sightings,
+      TrustCaption(Entries[0].Trust)]));
+
+  { 形が合わないものは候補になりません。 }
+  Logs[0] := LogOf('TNX FER QSO 73 ES GL ', 1000, 0.99);
+  Entries := BuildBandEntries(Logs, 10);
+  Check('呼出符号が無ければ候補も無い', Entries[0].Trust = ctNone,
+    Format('("%s")', [Entries[0].Callsign]));
+
+  { CQ を出しているかどうか（要件 FR-J.2）。根拠が古くなれば消えます。 }
+  Logs[0] := LogOf('CQ CQ DE JH2XYZ JH2XYZ K ', 1000, 0.99);
+  Entries := BuildBandEntries(Logs, 10);
+  Check('CQ を出していると分かる', Entries[0].Calling);
+  Entries := BuildBandEntries(Logs, 10 + BANDMAP_CALLING_SECONDS + 1);
+  Check('根拠が古くなれば CQ の区別が消える', not Entries[0].Calling);
+
+  { 確からしさは、いちばん良かった一度のものを採ります。 }
+  Logs[0] := LogOf('CQ DE JH2XYZ JH2XYZ K ', 1000, 0.55);
+  Entries := BuildBandEntries(Logs, 10);
+  Check('文字の確からしさが伝わる',
+    SameValue(Entries[0].Confidence, 0.55, 0.01),
+    Format('(%.2f)', [Entries[0].Confidence]));
+
+  { 直近の文字が添えられること。全文は行を選んだときに出します。 }
+  Logs[0] := LogOf('CQ CQ DE JH2XYZ JH2XYZ K TNX FER QSO 73 ES GL SK ', 1000, 0.99);
+  Entries := BuildBandEntries(Logs, 10);
+  Check('直近の文字が添えられる',
+    (Length(Entries[0].Recent) > 0) and
+    (Length(Entries[0].Recent) <= BANDMAP_RECENT_CHARS),
+    Format('("%s")', [Entries[0].Recent]));
+
+  { 密集と、切り捨ての印がそのまま伝わること（要件 FR-J.6・FR-I.7）。 }
+  Logs[0] := LogOf('CQ DE JH2XYZ ', 1000, 0.99);
+  Logs[0].Crowded := 2;
+  Logs[0].Analysed := False;
+  Entries := BuildBandEntries(Logs, 10);
+  Check('密集が伝わる', Entries[0].Crowded = 2);
+  Check('切り捨ての印が伝わる', not Entries[0].Analysed);
+
+  { 24 局 × 4000 文字でも、翻訳が目に見える遅れにならないこと。一覧は毎秒
+    作り直します。
+    The translation must stay imperceptible at 24 stations of 4000 characters;
+    the list is rebuilt every second. }
+  SetLength(Logs, 24);
+  for I := 0 to 23 do
+  begin
+    Logs[I] := LogOf(
+      StringOfChar(' ', 0) + 'CQ CQ DE JH2XYZ JH2XYZ K ', 800 + I * 100, 0.99);
+    while Length(Logs[I].Chars) < 4000 do
+      Logs[I].Chars := Concat(Logs[I].Chars, Logs[I].Chars);
+    SetLength(Logs[I].Chars, 4000);
+  end;
+  Started := Now;
+  for Repeats := 1 to 5 do
+    Entries := BuildBandEntries(Logs, 1000);
+  Elapsed := MilliSecondsBetween(Now, Started) / 5;
+  WriteLn(Format('    24 局 × 4000 文字の翻訳: %.1f ms', [Elapsed]));
+  Check('24 局 × 4000 文字でも 100 ms 未満', Elapsed < 100,
+    Format('(%.1f ms)', [Elapsed]));
+end;
+
 var
   ModelMeta, MetadataPath: string;
 { 強制終了に耐えることを、本当に強制終了して確かめるための入口です。
@@ -692,6 +800,7 @@ begin
     TestResampleBandLimited;
     TestHistory;
     TestJournal;
+    TestBandMap;
   finally
     Meta.Free;
   end;

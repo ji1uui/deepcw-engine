@@ -141,6 +141,23 @@ type
       The half width kept in the picture, about half the distance to the nearest
       neighbour. }
     HalfWidthHz: Double;
+    { この山の近傍に畳み込まれた、別の峰の数。0 なら 1 局だけです。
+
+      検出は 100 Hz より近い山を 1 つに畳みます（付録 G.2 の測定下限）。畳んだ
+      という事実をここで残さないと、**上の層からは「1 局」と見分けが付きません。**
+      パイルアップのように密集した範囲を「密集している」と示すには（要件 FR-J.6）、
+      畳んだことを知っている必要があります。読めていない文字列を並べるより、
+      「ここに大勢いる」と正しく伝えるほうが役に立ちます。
+
+      How many other peaks were folded into this one; zero means a single
+      station.
+
+      Detection folds peaks closer than 100 Hz — the limit measured in appendix
+      G.2 — into one. Unless the fact is recorded here, **the layers above cannot
+      tell that from a single station.** Showing a crowded stretch as crowded
+      (requirement FR-J.6) requires knowing that folding happened. Saying "there
+      are many here" is more use than listing strings that were not read. }
+    Crowded: Integer;
   end;
   TStations = array of TStation;
 
@@ -367,7 +384,7 @@ function DetectStations(const Wide: TSpectrogram; WideRate: Integer): TStations;
 var
   BinHz: Double;
   FirstBin, LastBin, Radius, FloorBins: Integer;
-  Bin, Frame, Window, WindowFirst, WindowLast, I, Count: Integer;
+  Bin, Frame, Window, WindowFirst, WindowLast, I, Count, Folded: Integer;
   Column, Neighbourhood: TDoubleArray;
   Level, Floor_, Statistic: TDoubleArray;
   Peak: Boolean;
@@ -487,6 +504,17 @@ begin
     Result[Count].Hz := Bin * BinHz;
     Result[Count].LevelDb := Level[Bin];
     Result[Count].HalfWidthHz := DETECT_MAX_HALF_WIDTH_HZ;
+    { 近傍に畳み込んだ峰を数えます。峰は「両隣より高く、しきい値を超えるビン」
+      とします。自分自身も数に入るので、1 を引いた残りが畳んだ数です。
+      Counts the peaks folded in. A peak is a bin above the threshold and higher
+      than both its neighbours; this bin counts itself, so one less is the number
+      folded in. }
+    Folded := 0;
+    for I := Max(1, Bin - Radius) to Min(Wide.Bins - 2, Bin + Radius) do
+      if (Level[I] >= DETECT_MIN_LEVEL_DB) and (Level[I] > Level[I - 1]) and
+         (Level[I] >= Level[I + 1]) then
+        Inc(Folded);
+    Result[Count].Crowded := Max(0, Folded - 1);
     Inc(Count);
   end;
   SetLength(Result, Count);
