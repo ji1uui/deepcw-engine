@@ -18,7 +18,7 @@ program dsp_check;
 uses
   Classes, SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
   DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder,
-  DeepCW.Multi, DeepCW.BandMap;
+  DeepCW.Multi, DeepCW.BandMap, DeepCW.Log;
 
 var
   Meta: TDeepCWMetadata;
@@ -649,6 +649,21 @@ begin
   Result.LastSeconds := Length(Text) * 0.2;
 end;
 
+{ 交信済みの引き当てを差し替えるための、いつでも「ある」と答える相手です。
+  A stand-in for the worked lookup that always answers yes. }
+type
+  TAlwaysWorked = class
+    function Always(const Callsign: string): Boolean;
+  end;
+
+function TAlwaysWorked.Always(const Callsign: string): Boolean;
+begin
+  Result := Callsign <> '';
+end;
+
+var
+  Answers: TAlwaysWorked;
+
 procedure TestBandMap;
 var
   Logs: TStationLogs;
@@ -711,6 +726,24 @@ begin
   Entries := BuildBandEntries(Logs, 10);
   Check('密集が伝わる', Entries[0].Crowded = 2);
 
+  { 交信済みの区別（要件 FR-J.4）。**確かでない符号では交信済みと言いません。**
+    1 文字違いの別人を「交信済み」と示すのは、示さないより悪いためです。
+    The worked distinction (requirement FR-J.4). **Nothing uncertain is called
+    worked**: showing whoever is one letter away as already worked is worse than
+    showing nothing. }
+  SetLength(Logs, 1);
+  Logs[0] := LogOf('CQ CQ DE JH2XYZ JH2XYZ K ', 1000, 0.99);
+  Entries := BuildBandEntries(Logs, 10, nil);
+  Check('記録が無ければ交信済みと言わない', not Entries[0].Worked);
+  Entries := BuildBandEntries(Logs, 10, @Answers.Always);
+  Check('記録にあれば交信済みと分かる', Entries[0].Worked);
+
+  { 1 回きりの符号は確かでないので、交信済みとは言わない。 }
+  Logs[0] := LogOf('JA1ABC DE JH2XYZ K ', 1000, 0.99);
+  Entries := BuildBandEntries(Logs, 10, @Answers.Always);
+  Check('確かでない符号では交信済みと言わない', not Entries[0].Worked,
+    Format('(%s)', [TrustCaption(Entries[0].Trust)]));
+
   { **「能力の都合で読んでいない」と「送信を止めた」を取り違えないこと**
     （要件 FR-I.7）。取り違えると、止めただけの局を「切り捨てた」と見せます。
     **Not being read for want of capacity must not be confused with having
@@ -756,6 +789,205 @@ begin
     Format('(%.1f ms)', [Elapsed]));
 end;
 
+{ 交信 1 件を組み立てます。/ Builds one contact. }
+function ContactOf(const Call, On_, At_: string): TAdifRecord;
+begin
+  Result := Default(TAdifRecord);
+  SetAdifValue(Result, 'CALL', Call);
+  SetAdifValue(Result, 'QSO_DATE', On_);
+  SetAdifValue(Result, 'TIME_ON', At_);
+  SetAdifValue(Result, 'MODE', 'CW');
+end;
+
+procedure TestContactLog;
+var
+  Dir, Path, Other: string;
+  Log: TContactLog;
+  Items: TAdifRecords;
+  Item: TAdifRecord;
+  Added, Skipped, I: Integer;
+  Started: TDateTime;
+  Elapsed: Double;
+  Body: string;
+begin
+  WriteLn('DeepCW.Log');
+  Dir := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw-log-test';
+  Path := IncludeTrailingPathDelimiter(Dir) + 'contacts.adi';
+  Other := IncludeTrailingPathDelimiter(Dir) + 'imported.adi';
+  if DirectoryExists(Dir) then
+  begin
+    DeleteFile(Path);
+    DeleteFile(Other);
+  end;
+
+  { --- 読み書きそのもの --- }
+  Items := ParseAdif(
+    'Some header text' + LineEnding +
+    '<adif_ver:5>3.1.4<EOH>' + LineEnding +
+    '<CALL:6>JA1ABC<QSO_DATE:8>20260904<TIME_ON:6>101500<MODE:2>CW<EOR>' +
+    '<call:6:S>JH2XYZ<QSO_DATE:8>20260904<TIME_ON:6>102000<EOR>');
+  Check('見出しを読み飛ばす', Length(Items) = 2, Format('(%d 件)', [Length(Items)]));
+  Check('項目を取り出せる', AdifValue(Items[0], 'CALL') = 'JA1ABC',
+    Format('("%s")', [AdifValue(Items[0], 'CALL')]));
+  Check('小文字の項目名も同じに扱う', AdifValue(Items[1], 'call') = 'JH2XYZ',
+    Format('("%s")', [AdifValue(Items[1], 'CALL')]));
+
+  { 型の指定が付いていても長さだけを見る。 }
+  Items := ParseAdif('<CALL:6:S>JA1ABC<EOR>');
+  Check('型の指定が付いていても読める', AdifValue(Items[0], 'CALL') = 'JA1ABC',
+    Format('("%s")', [AdifValue(Items[0], 'CALL')]));
+
+  { 壊れていても例外を投げず、読めるところまで読む。**長年の記録の 1 行が
+    壊れていたときに全部を失うほうが損。** }
+  Items := ParseAdif('<CALL:6>JA1ABC<EOR><CALL:99>JH2');
+  Check('壊れた末尾があっても読めるところは読む', Length(Items) = 2,
+    Format('(%d 件)', [Length(Items)]));
+  Items := ParseAdif('<CALL:6>JA1ABC<EOR><NOTCLOSED');
+  Check('閉じない括弧があっても落ちない', Length(Items) = 1,
+    Format('(%d 件)', [Length(Items)]));
+  Items := ParseAdif('');
+  Check('空でも落ちない', Length(Items) = 0);
+
+  { 知らない項目も落とさない。**別のソフトで積み上げた記録を通したときに
+    黙って何かが消えるのは許されない。** }
+  Items := ParseAdif('<CALL:6>JA1ABC<MY_GRID:6>PM95uq<EOR>');
+  Item := ParseAdif(FormatAdifRecord(Items[0]))[0];
+  Check('知らない項目も往復で残る', AdifValue(Item, 'MY_GRID') = 'PM95uq',
+    Format('("%s")', [AdifValue(Item, 'MY_GRID')]));
+
+  { 渡した時刻がそのまま日付と時刻の欄になること。**ADIF はこの 2 つを協定
+    世界時と定めているので、渡す側が変換して渡す。**ここで二重に変換しないことも
+    同時に押さえる。
+    The moment handed in must appear as the date and time fields. **ADIF defines
+    them as UTC and the caller converts**, so this also holds that no second
+    conversion happens here. }
+  Item := BuildContact('ja1abc',
+    EncodeDate(2026, 9, 4) + EncodeTime(23, 9, 22, 0));
+  Check('渡した時刻がそのまま日付になる',
+    AdifValue(Item, 'QSO_DATE') = '20260904',
+    Format('("%s")', [AdifValue(Item, 'QSO_DATE')]));
+  Check('渡した時刻がそのまま時刻になる',
+    AdifValue(Item, 'TIME_ON') = '230922',
+    Format('("%s")', [AdifValue(Item, 'TIME_ON')]));
+  Check('呼出符号は大文字で残る', AdifValue(Item, 'CALL') = 'JA1ABC',
+    Format('("%s")', [AdifValue(Item, 'CALL')]));
+  Check('電波型式が入る', AdifValue(Item, 'MODE') = 'CW');
+
+  { --- 交信記録として --- }
+  Log := TContactLog.Create(Path);
+  try
+    Log.Load;
+    Check('無いファイルなら空で始まる', Log.Count = 0);
+    Check('知らない局は交信済みでない', Log.WorkedCount('JA1ABC') = 0);
+
+    Check('交信を加えられる', Log.Add(ContactOf('JA1ABC', '20260904', '101500')),
+      Log.LastError);
+    { **書いた時点でファイルに残っていること。**閉じるまで書かない作りでは、
+      強制終了したときに交信が消える。 }
+    Body := ReadWhole(Path);
+    Check('加えた時点でファイルに残る', Pos('JA1ABC', Body) > 0,
+      Format('("%s")', [Copy(Body, 1, 40)]));
+    Check('交信済みと分かる', Log.WorkedCount('JA1ABC') = 1,
+      Format('(%d 回)', [Log.WorkedCount('JA1ABC')]));
+    Check('最後に交信した日が分かる', Log.LastWorkedOn('JA1ABC') = '20260904',
+      Format('("%s")', [Log.LastWorkedOn('JA1ABC')]));
+
+    { 附加符号は同じ局として扱う。別々に数えると「初めての局」と誤って示す。 }
+    Check('附加符号が付いても同じ局と分かる', Log.WorkedCount('JA1ABC/P') = 1,
+      Format('(%d 回)', [Log.WorkedCount('JA1ABC/P')]));
+    Check('小文字でも同じ局と分かる', Log.WorkedCount('ja1abc') = 1,
+      Format('(%d 回)', [Log.WorkedCount('ja1abc')]));
+    Check('別の局は交信済みでない', Log.WorkedCount('JA1ABD') = 0);
+
+    Log.Add(ContactOf('JA1ABC', '20260905', '090000'));
+    Check('2 回目が数に入る', Log.WorkedCount('JA1ABC') = 2,
+      Format('(%d 回)', [Log.WorkedCount('JA1ABC')]));
+    Check('新しいほうの日が残る', Log.LastWorkedOn('JA1ABC') = '20260905',
+      Format('("%s")', [Log.LastWorkedOn('JA1ABC')]));
+  finally
+    Log.Free;
+  end;
+
+  { 開き直しても同じことが分かる。 }
+  Log := TContactLog.Create(Path);
+  try
+    Log.Load;
+    Check('開き直しても件数が残る', Log.Count = 2, Format('(%d 件)', [Log.Count]));
+    Check('開き直しても交信済みが分かる', Log.WorkedCount('JA1ABC') = 2,
+      Format('(%d 回)', [Log.WorkedCount('JA1ABC')]));
+
+    { 取り込み。同じものを 2 回取り込んでも増えない。 }
+    Log.ExportAdif(Other);
+    Check('書き出せる', FileExists(Other));
+    Check('書き出しに見出しが付く',
+      Pos('<EOH>', ReadWhole(Other)) > 0, '(見出しが無い)');
+    Check('取り込みで既にあるものは飛ばす',
+      Log.ImportAdif(Other, Added, Skipped) and (Added = 0) and (Skipped = 2),
+      Format('(追加 %d / 飛ばし %d)', [Added, Skipped]));
+    Check('取り込んでも件数が増えない', Log.Count = 2,
+      Format('(%d 件)', [Log.Count]));
+
+    { 新しい局を含むファイルを取り込むと、その分だけ増える。 }
+    Items := nil;
+    SetLength(Items, 2);
+    Items[0] := ContactOf('JA1ABC', '20260904', '101500');
+    Items[1] := ContactOf('JR3KLM', '20260906', '120000');
+    Body := FormatAdif(Items, 'test');
+    with TFileStream.Create(Other, fmCreate) do
+      try
+        WriteBuffer(Body[1], Length(Body));
+      finally
+        Free;
+      end;
+    Check('新しい局だけ取り込む',
+      Log.ImportAdif(Other, Added, Skipped) and (Added = 1) and (Skipped = 1),
+      Format('(追加 %d / 飛ばし %d)', [Added, Skipped]));
+    Check('取り込んだ局が交信済みになる', Log.WorkedCount('JR3KLM') = 1,
+      Format('(%d 回)', [Log.WorkedCount('JR3KLM')]));
+
+    { 読めない場所を指されても例外を投げない。 }
+    Check('取り込めなくても例外を投げない',
+      not Log.ImportAdif(Dir + '/nowhere.adi', Added, Skipped), '');
+    Check('取り込めなかった理由が残る', Log.LastError <> '', '(理由が空)');
+  finally
+    Log.Free;
+  end;
+
+  { 1 万件でも引くのが遅くならないこと。索引を持たずに毎回走査すると、
+    バンドマップの 1 行ごとにこれを引くので目に見えて遅くなる。 }
+  DeleteFile(Path);
+  Log := TContactLog.Create(Path);
+  try
+    Body := '';
+    for I := 1 to 10000 do
+      Body := Body + FormatAdifRecord(
+        ContactOf(Format('JA%dABC', [I mod 10]), '20260904',
+          Format('%.6d', [I]))) + LineEnding;
+    with TFileStream.Create(Path, fmCreate) do
+      try
+        WriteBuffer(Body[1], Length(Body));
+      finally
+        Free;
+      end;
+    Started := Now;
+    Log.Load;
+    Elapsed := MilliSecondsBetween(Now, Started);
+    WriteLn(Format('    1 万件の読み込み: %.0f ms', [Elapsed]));
+    Check('1 万件を読み込める', Log.Count = 10000, Format('(%d 件)', [Log.Count]));
+    Check('1 万件の読み込みが 2 秒未満', Elapsed < 2000,
+      Format('(%.0f ms)', [Elapsed]));
+    Started := Now;
+    for I := 1 to 10000 do
+      Log.WorkedCount('JA1ABC');
+    Elapsed := MilliSecondsBetween(Now, Started);
+    WriteLn(Format('    交信済みの問い合わせ 1 万回: %.0f ms', [Elapsed]));
+    Check('問い合わせ 1 万回が 200 ms 未満', Elapsed < 200,
+      Format('(%.0f ms)', [Elapsed]));
+  finally
+    Log.Free;
+  end;
+end;
+
 var
   ModelMeta, MetadataPath: string;
 { 強制終了に耐えることを、本当に強制終了して確かめるための入口です。
@@ -789,11 +1021,39 @@ begin
     Sleep(200);
 end;
 
+{ 交信記録が強制終了に耐えることを、本当に強制終了して確かめるための入口です。
+  記録帳（TTranscriptJournal）と同じ理由で、殺してみないと分かりません。
+  The entry point for checking that the contact log survives a kill by actually
+  being killed — for the same reason as the transcript journal, it is only
+  answered by killing the process. }
+procedure LogUntilKilled(const Directory: string);
+var
+  Log: TContactLog;
+begin
+  Log := TContactLog.Create(
+    IncludeTrailingPathDelimiter(Directory) + 'contacts.adi');
+  Log.Load;
+  Log.Add(ContactOf('JH2XYZ', '20260904', '101500'));
+  Log.Add(ContactOf('JA1ABC', '20260904', '101800'));
+  WriteLn(Log.FileName);
+  Flush(Output);
+  { 意図的に閉じません。ここで殺されても交信が残っていることが要件です。
+    Deliberately never closed: the requirement is that the contacts are there
+    even when the process is killed at this point. }
+  while True do
+    Sleep(200);
+end;
+
 begin
   MetadataPath := '';
   if ParamStr(1) = '--journal-until-killed' then
   begin
     RunUntilKilled(ParamStr(2));
+    Halt(0);
+  end;
+  if ParamStr(1) = '--log-until-killed' then
+  begin
+    LogUntilKilled(ParamStr(2));
     Halt(0);
   end;
   if ParamCount >= 1 then MetadataPath := ParamStr(1);
@@ -822,7 +1082,13 @@ begin
     TestResampleBandLimited;
     TestHistory;
     TestJournal;
-    TestBandMap;
+    Answers := TAlwaysWorked.Create;
+    try
+      TestBandMap;
+    finally
+      Answers.Free;
+    end;
+    TestContactLog;
   finally
     Meta.Free;
   end;

@@ -32,7 +32,8 @@ uses
   LCLType,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
-  DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap,
+  DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
+  DeepCW.Callsign,
   TranscriptView, WaterfallView, BandMapView;
 
 type
@@ -164,6 +165,20 @@ type
       zero. Without the origin the recorded times would be the moments of
       writing, late by the confirmation lag (requirement FR-B.6). }
     FJournal: TTranscriptJournal;
+    { 交信の記録。バンドマップの「交信済み」も ADIF の書き出しも、ここ 1 つを
+      見ます（要件 FR-E.3・FR-J.4）。
+      The contact log. Both the worked marks on the band map and the ADIF export
+      read this one thing (requirements FR-E.3 and FR-J.4). }
+    FLog: TContactLog;
+    { 一覧から選んだ局の呼出符号。選んだ時点で分かっているものを、交信モードへ
+      移ったあとも覚えておきます。**忘れると、相手が分かっているのに記録できない
+      という間の抜けた状態になります。**受信テキストから符号が読めれば、そちらを
+      優先します。
+      The call sign of the station chosen from the list, remembered into the
+      contact mode. **Forgetting it leaves the odd state of knowing who is being
+      worked and being unable to log it.** A call sign read from the transcript
+      takes precedence once there is one. }
+    FChosenCallsign: string;
     FClockOrigin: TDateTime;
     { 記録へ渡し終えた確定文字の数。ここまでは書いたという印で、同じ文字を
       二度書かないために要ります。
@@ -242,6 +257,8 @@ type
     FRxWaterfall: TWaterfallView;
     FRxBandMap: TBandMapView;
     FRxMode: TComboBox;
+    FRxWorked: TButton;
+    FRxLogInfo: TLabel;
     FRxTuneInfo: TLabel;
     FRxTuneClear: TButton;
     FRxTrack: TCheckBox;
@@ -264,6 +281,9 @@ type
     FSetBandwidth: TComboBox;
     FSetRetention: TComboBox;
     FSetJournal: TCheckBox;
+    FSetLogImport: TButton;
+    FSetLogExport: TButton;
+    FSetLogInfo: TLabel;
     FSetApply: TButton;
     FSetInfo: TMemo;
 
@@ -295,6 +315,21 @@ type
     procedure TxStopClick(Sender: TObject);
     procedure TxSaveClick(Sender: TObject);
     procedure TxVerifyClick(Sender: TObject);
+
+    { 交信の記録（要件 FR-E.3・FR-J.4） / the contact log }
+    function LogFileName: string;
+    { バンドマップから引く「交信済みか」。呼出符号だけを渡します。
+      The worked-before lookup the band map uses, given only a call sign. }
+    function WorkedBefore(const Callsign: string): Boolean;
+    procedure RxWorkedClick(Sender: TObject);
+    procedure SetLogImportClick(Sender: TObject);
+    procedure SetLogExportClick(Sender: TObject);
+    procedure UpdateLogInfo;
+    { いま記録に残せる呼出符号。交信モードでは受信テキストから、待機モードでは
+      選ばれている行から取ります。無ければ空です。
+      The call sign that could be logged now: from the transcript in the contact
+      mode and from the chosen row in the waiting mode, or empty. }
+    function CallsignToLog: string;
 
     { 受信のしかた（要件 FR-I.6・FR-J） / how reception is used }
     procedure RxModeChanged(Sender: TObject);
@@ -480,6 +515,7 @@ begin
   FReviewPlay := TAudioPlayback.Create;
   FHistory := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, FCaptureRate);
   FJournal := TTranscriptJournal.Create(JournalDirectory);
+  FLog := TContactLog.Create(LogFileName);
   FMode := rmContact;
 
   BuildUI;
@@ -496,6 +532,12 @@ begin
   { 読み込んだ保持時間を保管庫へ反映します。設定を読むだけでは効きません。
     Apply the retention that was loaded; reading the setting is not enough. }
   FHistory.SetRetention(SelectedRetention);
+  { 交信記録を読み込みます。読めなくても受信は続きます。
+    The contact log is loaded; reception continues even if it cannot be read. }
+  FLog.Load;
+  if FLog.LastError <> '' then
+    LogDiagnostic('交信記録', FLog.LastError);
+  UpdateLogInfo;
   UpdateReplayInfo;
   { 読み込んだ設定を記録へも反映します。控えるだけでは効きません。
     Apply the loaded setting to the journal too; holding it in a control is not
@@ -558,6 +600,7 @@ begin
   if FJournal <> nil then
     FJournal.Flush;
   FJournal.Free;
+  FLog.Free;
   FHistory.Free;
   FRing.Free;
   FDecoder.Free;
@@ -998,13 +1041,23 @@ begin
     だけです（要件 FR-E.10）。
     The replay controls. A press on a character already plays it, so these two
     are only "again" and "stop" (requirement FR-E.10). }
-  FRxReplay := AddButton(FindTools, 'もう一度聴く', 396, 2, 110, @RxReplayClick);
+  { 交信を記録する操作は、受信テキストのすぐ下に置きます。読めた符号をその場で
+    残す、という一連の動作が 1 か所にまとまります（要件 FR-E.3）。
+    Recording a contact sits directly under the transcript, so that reading a call
+    sign and keeping it is one gesture in one place (requirement FR-E.3). }
+  FRxWorked := AddButton(FindTools, '交信を記録', 396, 2, 100, @RxWorkedClick);
+  FRxWorked.Enabled := False;
+  FRxLogInfo := TLabel.Create(FindTools);
+  FRxLogInfo.Parent := FindTools;
+  FRxLogInfo.SetBounds(504, 9, 250, 20);
+
+  FRxReplay := AddButton(FindTools, 'もう一度聴く', 760, 2, 110, @RxReplayClick);
   FRxReplay.Enabled := False;
-  FRxReplayStop := AddButton(FindTools, '停止', 510, 2, 60, @RxReplayStopClick);
+  FRxReplayStop := AddButton(FindTools, '停止', 874, 2, 60, @RxReplayStopClick);
   FRxReplayStop.Enabled := False;
   FRxReplayInfo := TLabel.Create(FindTools);
   FRxReplayInfo.Parent := FindTools;
-  FRxReplayInfo.SetBounds(580, 9, 400, 20);
+  FRxReplayInfo.SetBounds(944, 9, 300, 20);
   { 窓の幅に合わせて伸ばします。固定幅だと、狭い窓では文が途中で切れ、広い窓では
     余白が空きます。
     Stretched with the window: at a fixed width the sentence is cut off in a
@@ -1057,7 +1110,7 @@ begin
     Operating settings: what an operator actually changes. No jargon here. }
   Operating := TGroupBox.Create(Sheet);
   Operating.Parent := Sheet;
-  Operating.Height := 152;
+  Operating.Height := 182;
   Operating.Caption := '運用設定';
   Stretch(Operating, alTop);
 
@@ -1100,6 +1153,18 @@ begin
   AddLabel(Operating,
     '確定するそばからファイルへ書き足します。異常終了しても直前まで残ります。',
     330, 92);
+
+  { 交信記録の出し入れ。運用者が別のソフトで積み上げた記録を取り込めば、その場で
+    「交信済み」が効きます（要件 FR-E.3・FR-J.4）。
+    Taking the contact log in and out. Importing a log an operator built in
+    another program makes the worked marks work at once (requirements FR-E.3 and
+    FR-J.4). }
+  AddLabel(Operating, '交信記録', 14, 122);
+  FSetLogImport := AddButton(Operating, 'ADIF を取り込む', 120, 118, 150,
+    @SetLogImportClick);
+  FSetLogExport := AddButton(Operating, 'ADIF を書き出す', 278, 118, 150,
+    @SetLogExportClick);
+  FSetLogInfo := AddLabel(Operating, '', 440, 122);
 
   { ── 詳細・診断：困ったときだけ見るもの ──
     Advanced and diagnostics: only looked at when something is wrong. }
@@ -1357,6 +1422,12 @@ begin
           [FJournal.FileName, FJournal.LinesWritten, FJournal.BytesWritten]));
       if FJournal.LastError <> '' then
         Lines.Add('  ' + FJournal.LastError);
+    end;
+    if FLog <> nil then
+    begin
+      Lines.Add(Format('交信記録: %d 件（%s）', [FLog.Count, FLog.FileName]));
+      if FLog.LastError <> '' then
+        Lines.Add('  ' + FLog.LastError);
     end;
     if FHistory <> nil then
       { 保持している音の量と、それが使っている記憶を出します。長くするほど
@@ -1979,8 +2050,10 @@ begin
   FClockOrigin := 0;
   FRxTranscript.Clear;
   FRxWaterfall.Clear;
+  FChosenCallsign := '';
   UpdateReplayInfo;
   UpdateFindInfo;
+  UpdateLogInfo;
 end;
 
 procedure TMainForm.RxCopyClick(Sender: TObject);
@@ -1988,6 +2061,169 @@ begin
   Clipboard.AsText := FRxTranscript.AsText;
   SetStatus('', '', Format('受信テキスト %d 文字をコピーしました。',
     [FRxTranscript.CharCount]));
+end;
+
+{ ---- 交信の記録（要件 FR-E.3・FR-J.4） ---- }
+
+function TMainForm.LogFileName: string;
+begin
+  { 設定ファイルと同じ場所に置きます。受信テキストの記録と並びます。
+    Beside the settings file, alongside the transcript journal. }
+  Result := IncludeTrailingPathDelimiter(
+    ExtractFilePath(ConfigFileName)) + 'contacts.adi';
+end;
+
+function TMainForm.WorkedBefore(const Callsign: string): Boolean;
+begin
+  Result := (FLog <> nil) and (FLog.WorkedCount(Callsign) > 0);
+end;
+
+{ いま記録に残せる呼出符号を探します。
+
+  交信モードでは受信テキストの**末尾のほうから**探します。交信の相手は直前に
+  送られてきた符号であって、何分も前のものではないためです。待機モードでは、
+  一覧で選ばれている行の符号を使います。
+
+  Finds the call sign that could be logged now.
+
+  In the contact mode the search runs **from the end** of the transcript: the
+  station being worked is the one that came in a moment ago, not one from minutes
+  back. In the waiting mode it is the call sign of the chosen row. }
+function TMainForm.CallsignToLog: string;
+var
+  Found: TCallsigns;
+  Entries: TBandEntries;
+  I: Integer;
+begin
+  Result := '';
+  if FMode = rmWatch then
+  begin
+    if (FMulti = nil) or (FRxBandMap.SelectedId = 0) then
+      Exit;
+    Entries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
+      @WorkedBefore);
+    for I := 0 to High(Entries) do
+      if (Entries[I].Id = FRxBandMap.SelectedId) and
+         (Entries[I].Trust >= ctAgreed) then
+        Exit(Entries[I].Callsign);
+    Exit;
+  end;
+  Found := ExtractCallsigns(FRxTranscript.AsText);
+  if Length(Found) > 0 then
+    Exit(Found[High(Found)].Text);
+  Result := FChosenCallsign;
+end;
+
+procedure TMainForm.UpdateLogInfo;
+var
+  Call: string;
+begin
+  if FRxWorked = nil then
+    Exit;
+  Call := CallsignToLog;
+  FRxWorked.Enabled := Call <> '';
+  if Call = '' then
+    FRxLogInfo.Caption := '相手の符号が読めたら記録できます'
+  else if WorkedBefore(Call) then
+    FRxLogInfo.Caption := Format('%s（%s に交信済み）',
+      [Call, FLog.LastWorkedOn(Call)])
+  else
+    FRxLogInfo.Caption := Call;
+  if FSetLogInfo <> nil then
+    FSetLogInfo.Caption := Format('%d 件 / %s', [FLog.Count, FLog.FileName]);
+end;
+
+{ 交信を 1 件記録します（要件 FR-E.3）。時刻は協定世界時で持ちます。ADIF の
+  QSO_DATE と TIME_ON はいずれも協定世界時と決まっており、地方時で書くと、
+  読み込んだログソフトが別の時刻として扱います。
+
+  Records one contact (requirement FR-E.3). The times are UTC: ADIF defines
+  QSO_DATE and TIME_ON as UTC, and writing local time would have the logger that
+  reads it treat them as a different moment. }
+procedure TMainForm.RxWorkedClick(Sender: TObject);
+var
+  Item: TAdifRecord;
+  Call: string;
+  Moment: TDateTime;
+begin
+  Call := CallsignToLog;
+  if Call = '' then
+    Exit;
+  { 地方時を協定世界時へ直してから渡します。ADIF はこの 2 つの欄を協定世界時と
+    定めており、地方時のまま書くと、読み込んだログソフトが別の時刻として扱います。
+    The local time is converted to UTC before it is handed over: ADIF defines
+    these two fields as UTC, and left local the logger that reads them would
+    treat them as a different moment. }
+  Moment := LocalTimeToUniversal(Now);
+  Item := BuildContact(Call, Moment);
+  if not FLog.Add(Item) then
+  begin
+    LogDiagnostic('交信記録', FLog.LastError);
+    SetStatus('', '', StatusLine(FLog.LastError));
+    Exit;
+  end;
+  UpdateLogInfo;
+  FBandMapAt := 0;
+  RefreshBandMap;
+  RefreshInfo;
+  SetStatus('', '', Format('%s との交信を記録しました（%s UTC）。',
+    [Call, FormatDateTime('yyyy-mm-dd hh:nn', Moment)]));
+end;
+
+procedure TMainForm.SetLogImportClick(Sender: TObject);
+var
+  Dialog: TOpenDialog;
+  Added, Skipped: Integer;
+begin
+  Dialog := TOpenDialog.Create(Self);
+  try
+    Dialog.Title := '交信記録（ADIF）を取り込む';
+    Dialog.Filter := 'ADIF (*.adi;*.adif)|*.adi;*.adif|すべて (*.*)|*.*';
+    if not Dialog.Execute then
+      Exit;
+    if not FLog.ImportAdif(Dialog.FileName, Added, Skipped) then
+    begin
+      LogDiagnostic('交信記録', FLog.LastError);
+      SetStatus('', '', StatusLine(FLog.LastError));
+      Exit;
+    end;
+    UpdateLogInfo;
+    FBandMapAt := 0;
+    RefreshBandMap;
+    RefreshInfo;
+    { 飛ばした件数も言います。**黙って減ると、取り込めたのかどうかが分かりません。**
+      The number skipped is said too: **silence about it leaves the operator
+      unable to tell whether the import worked.** }
+    SetStatus('', '', Format('%d 件を取り込みました（既にある %d 件は飛ばしました）。',
+      [Added, Skipped]));
+  finally
+    Dialog.Free;
+  end;
+end;
+
+procedure TMainForm.SetLogExportClick(Sender: TObject);
+var
+  Dialog: TSaveDialog;
+begin
+  Dialog := TSaveDialog.Create(Self);
+  try
+    Dialog.Title := '交信記録（ADIF）を書き出す';
+    Dialog.Filter := 'ADIF (*.adi)|*.adi|すべて (*.*)|*.*';
+    Dialog.DefaultExt := 'adi';
+    Dialog.FileName := 'contacts.adi';
+    if not Dialog.Execute then
+      Exit;
+    if not FLog.ExportAdif(Dialog.FileName) then
+    begin
+      LogDiagnostic('交信記録', FLog.LastError);
+      SetStatus('', '', StatusLine(FLog.LastError));
+      Exit;
+    end;
+    SetStatus('', '', Format('%d 件を %s へ書き出しました。',
+      [FLog.Count, Dialog.FileName]));
+  finally
+    Dialog.Free;
+  end;
 end;
 
 { ---- 受信のしかた（要件 FR-I.6・FR-J） ---- }
@@ -2044,6 +2280,12 @@ begin
   FLiveChars := nil;
   FRxTranscript.Clear;
   FRxBandMap.Clear;
+  { 一覧へ戻るなら、覚えていた符号は用済みです。持ち越すと、別の局を選ぶまで
+    前の相手が記録の候補として残ります。
+    Back to the list, the remembered call sign has served its purpose; carried
+    over it would stand as the candidate to log until another is chosen. }
+  if FMode = rmWatch then
+    FChosenCallsign := '';
 
   FRxTranscript.Visible := FMode = rmContact;
   FRxBandMap.Visible := FMode = rmWatch;
@@ -2072,11 +2314,28 @@ end;
   Choosing a row tunes to that station and moves to the contact mode
   (requirement FR-J.3), in one gesture. }
 procedure TMainForm.RxStationChosen(Sender: TObject; Id: Int64; Hz: Double);
+var
+  Entries: TBandEntries;
+  I: Integer;
 begin
+  { 移る前に、選んだ行の呼出符号を控えます。ApplyMode が一覧を消すので、
+    あとからでは引けません。
+    The chosen row's call sign is taken before the move: ApplyMode clears the
+    list, and it could not be read afterwards. }
+  FChosenCallsign := '';
+  if FMulti <> nil then
+  begin
+    Entries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
+      @WorkedBefore);
+    for I := 0 to High(Entries) do
+      if (Entries[I].Id = Id) and (Entries[I].Trust >= ctAgreed) then
+        FChosenCallsign := Entries[I].Callsign;
+  end;
   FRxWaterfall.TuneHz := Hz;
   FRxMode.ItemIndex := 0;
   FMode := rmContact;
   ApplyMode;
+  UpdateLogInfo;
   if FStream <> nil then
     FStream.TuneHz := FRxWaterfall.TuneHz;
   UpdateTuneInfo;
@@ -2096,7 +2355,7 @@ begin
     Exit;
   FBandMapAt := Now;
   FRxBandMap.SetEntries(
-    BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds),
+    BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds, @WorkedBefore),
     FMulti.ElapsedSeconds);
 end;
 
@@ -2769,6 +3028,7 @@ begin
     The replay controls follow what the store holds and whether it is playing;
     both change only here, so they are refreshed together. }
   UpdateReplayInfo;
+  UpdateLogInfo;
 end;
 
 procedure TMainForm.SetStatus(const Engine, Audio, Message_: string);

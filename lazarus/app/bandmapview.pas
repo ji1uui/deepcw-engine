@@ -285,6 +285,12 @@ begin
   else
     Result := FEntries[Index].Callsign;
   end;
+  { 交信済みの局に印を付けます（要件 FR-J.4）。呼びに行くかどうかの判断が、
+    一覧を見ただけで付きます。
+    A mark for a station already worked (requirement FR-J.4), so that whether to
+    call is decided from the list alone. }
+  if FEntries[Index].Worked then
+    Result := Result + ' ✓';
 end;
 
 procedure TBandMapView.DrawRow(Index, AtY: Integer);

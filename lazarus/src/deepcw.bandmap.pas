@@ -121,16 +121,42 @@ type
     { 直近の文字。一覧の中で「いま何を送っているか」の気配を伝えます。
       The most recent characters, giving a sense of what is being sent now. }
     Recent: string;
+    { この局と交信したことがあるか（要件 FR-J.4）。記録が無ければ区別しません。
+
+      **呼出符号が確かでないうちは、交信済みとは言いません。**1 文字違いの別人を
+      「交信済み」と示すのは、示さないより悪いためです。判定は BuildBandEntries
+      に渡された引き当ての手続きが行い、この層は記録の中身を知りません
+      （要件 FR-K の段を足す先が同じ場所になります）。
+
+      Whether this station has been worked before (requirement FR-J.4); with no
+      log there is no distinction to draw.
+
+      **Nothing is called worked while the call sign is not certain**: showing a
+      station one letter away as already worked is worse than showing nothing.
+      The lookup is done by the procedure handed to BuildBandEntries, and this
+      layer knows nothing of the log's contents — which is where the further
+      stages of FR-K will attach. }
+    Worked: Boolean;
   end;
   TBandEntries = array of TBandEntry;
 
-{ 局ごとの読み取り結果を、一覧の行へ翻訳します。純粋な変換で、状態を持ちません。
-  同じ入力からは必ず同じ行が出ます。
+type
+  { 交信済みかを引く手続き。記録そのものはここでは持ちません。**復号の側に
+    記録の知識を持たせないためです**（要件 FR-K の第 3・4 段は外部の資料と通信を
+    伴います）。nil を渡せば、交信済みの区別を付けません。
+    The lookup for whether a station has been worked. The log itself is not held
+    here, **so that the decoding side carries no knowledge of it** (the third and
+    fourth stages of FR-K involve outside material and outside traffic). Passing
+    nil draws no such distinction. }
+  TWorkedLookup = function(const Callsign: string): Boolean of object;
 
-  Translates the per-station results into rows. It is a pure transformation with
-  no state: the same input always gives the same rows. }
-function BuildBandEntries(const Logs: TStationLogs;
-  NowSeconds: Double): TBandEntries;
+{ 局ごとの読み取り結果を、一覧の行へ翻訳します。渡された引き当て以外に状態を
+  持たず、同じ入力からは必ず同じ行が出ます。
+
+  Translates the per-station results into rows. Beyond the lookup it is handed it
+  holds no state, and the same input always gives the same rows. }
+function BuildBandEntries(const Logs: TStationLogs; NowSeconds: Double;
+  Worked: TWorkedLookup = nil): TBandEntries;
 
 { 確からしさを、運用者に見せる短い言葉にします。
   Puts the trust into the few words shown to the operator. }
@@ -299,8 +325,8 @@ begin
       Result := Words[I].Seconds;
 end;
 
-function BuildBandEntries(const Logs: TStationLogs;
-  NowSeconds: Double): TBandEntries;
+function BuildBandEntries(const Logs: TStationLogs; NowSeconds: Double;
+  Worked: TWorkedLookup): TBandEntries;
 var
   I: Integer;
   Words: TWords;
@@ -334,6 +360,13 @@ begin
     Calling := LastCallingSeconds(Words);
     Result[I].Calling := (Calling >= 0) and
       (NowSeconds - Calling <= BANDMAP_CALLING_SECONDS);
+
+    { 交信済みの区別は、呼出符号が確かなときだけ付けます。**確かでない符号で
+      「交信済み」と示すのは、1 文字違いの別人をそう示すことです。**
+      The worked distinction is drawn only for a certain call sign: **drawing it
+      on an uncertain one draws it on whoever is one letter away.** }
+    Result[I].Worked := Assigned(Worked) and
+      (Result[I].Trust >= ctAgreed) and Worked(Result[I].Callsign);
 
     Text := DecodedText(Logs[I].Chars);
     if Length(Text) > BANDMAP_RECENT_CHARS then
