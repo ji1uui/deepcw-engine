@@ -489,6 +489,109 @@ begin
     Shot.Free;
   end;
 
+  { ── 受信テキストの中を探せること（要件 FR-B.5）──
+    探して見つかるだけでは足りない。**受信は続いており、文字は 0.2 秒ごとに
+    増える。**そのたびに探し直しても、見ている場所が先頭へ戻ってしまえば、
+    溜まったテキストの中を辿ることはできない。増えても位置が動かないことを
+    確かめる。
+
+    Searching the received text (requirement FR-B.5). Finding a hit is not
+    enough: **reception continues and characters arrive five times a second.**
+    If each rescan sent the operator back to the first hit, walking through what
+    has accumulated would be impossible. That the position holds as text arrives
+    is what is checked here. }
+  WriteLn;
+  WriteLn('検索の検証 / search checks');
+  Chars := BuildChars(300);
+  { 探す語を、狙った 3 か所だけに置きます。生成した文字にたまたま現れないよう、
+    実際に使われない綴りを選びます。
+    The term is planted at exactly three places, spelled so that it cannot occur
+    by chance in the generated characters. }
+  Chars[20].Text := 'Q'; Chars[21].Text := 'R'; Chars[22].Text := 'Z';
+  Chars[150].Text := 'Q'; Chars[151].Text := 'R'; Chars[152].Text := 'Z';
+  Chars[280].Text := 'Q'; Chars[281].Text := 'R'; Chars[282].Text := 'Z';
+  for X := 0 to High(Chars) do
+    if (Chars[X].Text = 'Q') and (X <> 20) and (X <> 150) and (X <> 280) then
+      Chars[X].Text := 'A';
+  Transcript.SetChars(Chars);
+  Transcript.FollowTail := False;
+
+  Transcript.Search('QRZ');
+  Check('置いた数だけ見つかる', Transcript.MatchCount = 3,
+    Format('(%d 件)', [Transcript.MatchCount]));
+  Check('探したら最初の 1 件へ行く',
+    (Transcript.CurrentMatch = 1) and (Transcript.SelectedIndex = 20),
+    Format('(%d 件目、%d 文字目)',
+      [Transcript.CurrentMatch, Transcript.SelectedIndex]));
+
+  Transcript.Search('qrz');
+  Check('大文字小文字を区別しない', Transcript.MatchCount = 3,
+    Format('(%d 件)', [Transcript.MatchCount]));
+
+  Transcript.NextMatch;
+  Check('次へ進む',
+    (Transcript.CurrentMatch = 2) and (Transcript.SelectedIndex = 150),
+    Format('(%d 件目、%d 文字目)',
+      [Transcript.CurrentMatch, Transcript.SelectedIndex]));
+  Transcript.PreviousMatch;
+  Check('前へ戻る', Transcript.SelectedIndex = 20,
+    Format('(%d 文字目)', [Transcript.SelectedIndex]));
+  Transcript.PreviousMatch;
+  Check('先頭より前は末尾へ回る', Transcript.SelectedIndex = 280,
+    Format('(%d 文字目)', [Transcript.SelectedIndex]));
+  Transcript.NextMatch;
+  Check('末尾より先は先頭へ回る', Transcript.SelectedIndex = 20,
+    Format('(%d 文字目)', [Transcript.SelectedIndex]));
+
+  { **受信が続いても、見ている場所が動かないこと。**ここが崩れると、
+    溜まったテキストを辿れない。
+    **The position must hold as reception continues**, or what has accumulated
+    cannot be walked through. }
+  Transcript.NextMatch;
+  PickedIndex := Transcript.SelectedIndex;
+  Chars := Copy(Chars, 0, Length(Chars));
+  SetLength(Chars, Length(Chars) + 40);
+  for X := 300 to High(Chars) do
+  begin
+    Chars[X].Text := 'E';
+    Chars[X].Seconds := X * 0.24;
+    Chars[X].EndSeconds := Chars[X].Seconds + 0.2;
+    Chars[X].Confidence := 0.99;
+  end;
+  Transcript.SetChars(Chars);
+  Check('文字が増えても見ている場所が動かない',
+    (Transcript.SelectedIndex = PickedIndex) and (Transcript.CurrentMatch = 2),
+    Format('(%d 文字目、%d 件目)',
+      [Transcript.SelectedIndex, Transcript.CurrentMatch]));
+
+  { あとから届いた分も見つかること。届いたきり探し直さなければ、見つからない。
+    Text that arrives later must be found too; without a rescan it never would
+    be. }
+  Chars[320].Text := 'Q'; Chars[321].Text := 'R'; Chars[322].Text := 'Z';
+  Transcript.SetChars(Chars);
+  Check('あとから届いた分も見つかる', Transcript.MatchCount = 4,
+    Format('(%d 件)', [Transcript.MatchCount]));
+
+  Transcript.Search('');
+  Check('空にすれば検索が解ける', Transcript.MatchCount = 0,
+    Format('(%d 件)', [Transcript.MatchCount]));
+
+  { 20 万文字でも、文字が届くたびの探し直しが目に見える遅れにならないこと。
+    受信中は毎秒数回起きる。
+    The rescan on every arrival must stay imperceptible at two hundred thousand
+    characters; it happens several times a second while receiving. }
+  Chars := BuildChars(200000);
+  Transcript.SetChars(Chars);
+  Transcript.Search('QRZ');
+  Started := Now;
+  for Repeats := 1 to 10 do
+    Transcript.SetChars(Chars);
+  SetMs := MilliSecondsBetween(Now, Started) / 10;
+  WriteLn(Format('  20 万文字での探し直し: %.1f ms', [SetMs]));
+  Check('20 万文字でも探し直しが 100 ms 未満', SetMs < 100,
+    Format('(%.1f ms)', [SetMs]));
+  Transcript.Search('');
+
   { ── 受信テキストから音へ戻れること（要件 FR-E.10）──
     押した場所と、鳴らす音の場所が一致していなければ、この機能は成り立たない。
     **ずれていても音は鳴るので、動かして耳で聴くだけでは気づけない。**押下から

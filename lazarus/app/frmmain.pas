@@ -29,9 +29,10 @@ interface
 uses
   SysUtils, Classes, Math, DateUtils, IniFiles, Clipbrd,
   Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls, Spin,
+  LCLType,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
-  DeepCW.Review,
+  DeepCW.Review, DeepCW.Journal,
   TranscriptView, WaterfallView;
 
 type
@@ -113,6 +114,18 @@ type
       stopping the other. }
     FHistory: TAudioHistory;
     FReviewPlay: TAudioPlayback;
+    { 受信テキストの記録と、経過秒 0 に対応する実時刻。原点が無ければ、記録の
+      時刻は書いた瞬間になり、確定の遅れのぶんだけ遅くなります（要件 FR-B.6）。
+      The transcript journal and the wall clock corresponding to elapsed second
+      zero. Without the origin the recorded times would be the moments of
+      writing, late by the confirmation lag (requirement FR-B.6). }
+    FJournal: TTranscriptJournal;
+    FClockOrigin: TDateTime;
+    { 記録へ渡し終えた確定文字の数。ここまでは書いたという印で、同じ文字を
+      二度書かないために要ります。
+      How many confirmed characters have been handed to the journal, so that the
+      same character is never written twice. }
+    FJournalled: Integer;
     FCaptureRate: Integer;
     { 選べる入力装置。番号は抜き差しで変わるため、覚えておくのは名前です
       （要件 FR-A.5）。
@@ -180,6 +193,10 @@ type
     FRxReplay: TButton;
     FRxReplayStop: TButton;
     FRxReplayInfo: TLabel;
+    FRxFind: TEdit;
+    FRxFindPrev: TButton;
+    FRxFindNext: TButton;
+    FRxFindInfo: TLabel;
 
     { 設定タブ / settings tab }
     FSetModel: TEdit;
@@ -190,6 +207,7 @@ type
     FSetThreads: TComboBox;
     FSetBandwidth: TComboBox;
     FSetRetention: TComboBox;
+    FSetJournal: TCheckBox;
     FSetApply: TButton;
     FSetInfo: TMemo;
 
@@ -221,6 +239,18 @@ type
     procedure TxStopClick(Sender: TObject);
     procedure TxSaveClick(Sender: TObject);
     procedure TxVerifyClick(Sender: TObject);
+
+    { 検索（要件 FR-B.5） / search (requirement FR-B.5) }
+    procedure RxFindChanged(Sender: TObject);
+    procedure RxFindNextClick(Sender: TObject);
+    procedure RxFindPrevClick(Sender: TObject);
+    procedure RxFindKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure UpdateFindInfo;
+
+    { 記録（要件 FR-B.6） / the journal (requirement FR-B.6) }
+    procedure RxJournalChanged(Sender: TObject);
+    function JournalDirectory: string;
+    procedure JournalConfirmed;
 
     { 聴き直し（要件 FR-E.10） / replay (requirement FR-E.10) }
     procedure RxCharChosen(Sender: TObject; Index: Integer);
@@ -340,6 +370,7 @@ begin
   FPlayback := TAudioPlayback.Create;
   FReviewPlay := TAudioPlayback.Create;
   FHistory := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, FCaptureRate);
+  FJournal := TTranscriptJournal.Create(JournalDirectory);
 
   BuildUI;
   LoadSettings;
@@ -355,6 +386,11 @@ begin
     Apply the retention that was loaded; reading the setting is not enough. }
   FHistory.SetRetention(SelectedRetention);
   UpdateReplayInfo;
+  { 読み込んだ設定を記録へも反映します。控えるだけでは効きません。
+    Apply the loaded setting to the journal too; holding it in a control is not
+    enough. }
+  FJournal.Enabled := FSetJournal.Checked;
+  UpdateFindInfo;
   { 設定に装置名が無かった場合でも一覧は用意します。
     The list is built even when the settings held no device name. }
   if FRxDevice.Items.Count = 0 then
@@ -398,6 +434,12 @@ begin
   FCapture.Free;
   FPlayback.Free;
   FReviewPlay.Free;
+  { 書き残しを出してから解放します。閉じるときの 1 語は、記録として要ります。
+    The remainder is written before releasing: the last word of a session
+    belongs in the record. }
+  if FJournal <> nil then
+    FJournal.Flush;
+  FJournal.Free;
   FHistory.Free;
   FRing.Free;
   FDecoder.Free;
@@ -615,7 +657,8 @@ function TMainForm.BuildReceiveTab: TTabSheet;
 var
   Sheet: TTabSheet;
   FileBox, LiveBox: TGroupBox;
-  LiveControls, LevelPanel, WaterfallPanel, TuneTools, TextPanel, TextTools: TPanel;
+  LiveControls, LevelPanel, WaterfallPanel, TuneTools, TextPanel: TPanel;
+  TextTools, FindTools: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
   Sheet.Caption := '受信';
@@ -780,17 +823,51 @@ begin
   FRxFontSize := AddSpin(TextTools, 512, 5, 9, 32, 14, @RxDisplayChanged);
   FRxCopy := AddButton(TextTools, 'コピー', 604, 2, 90, @RxCopyClick);
 
+  { 検索と聴き直しは、表示の設定とは別の行に置きます。同じ行に並べると、窓を
+    狭くしたときに右端の操作が画面の外へ出て、押せなくなります（最小幅 900）。
+    Search and replay go on their own row: on the same row as the display
+    settings, narrowing the window pushes the right-hand controls off the screen
+    where they cannot be pressed (the minimum width is 900). }
+  FindTools := TPanel.Create(TextPanel);
+  FindTools.Parent := TextPanel;
+  FindTools.Height := 34;
+  StackBelow(FindTools);
+  FindTools.Align := alTop;
+  FindTools.BevelOuter := bvNone;
+
+  { 検索（要件 FR-B.5）。溜まった受信テキストから、呼出符号や符丁を探すための
+    ものです。入力しながら探し、Enter で次へ進みます。
+    Search (requirement FR-B.5), for finding a call sign or an abbreviation in
+    what has accumulated. It searches as you type; Enter moves to the next hit. }
+  AddLabel(FindTools, '検索', 6, 9);
+  FRxFind := TEdit.Create(FindTools);
+  FRxFind.Parent := FindTools;
+  FRxFind.SetBounds(42, 4, 150, 26);
+  FRxFind.OnChange := @RxFindChanged;
+  FRxFind.OnKeyDown := @RxFindKeyDown;
+  FRxFindPrev := AddButton(FindTools, '<', 198, 2, 34, @RxFindPrevClick);
+  FRxFindNext := AddButton(FindTools, '>', 234, 2, 34, @RxFindNextClick);
+  FRxFindInfo := TLabel.Create(FindTools);
+  FRxFindInfo.Parent := FindTools;
+  FRxFindInfo.SetBounds(276, 9, 110, 20);
+
   { 聴き直しの操作。文字を押せば鳴るので、この 2 つは「もう一度」と「止める」
     だけです（要件 FR-E.10）。
     The replay controls. A press on a character already plays it, so these two
     are only "again" and "stop" (requirement FR-E.10). }
-  FRxReplay := AddButton(TextTools, 'もう一度聴く', 700, 2, 110, @RxReplayClick);
+  FRxReplay := AddButton(FindTools, 'もう一度聴く', 396, 2, 110, @RxReplayClick);
   FRxReplay.Enabled := False;
-  FRxReplayStop := AddButton(TextTools, '停止', 814, 2, 60, @RxReplayStopClick);
+  FRxReplayStop := AddButton(FindTools, '停止', 510, 2, 60, @RxReplayStopClick);
   FRxReplayStop.Enabled := False;
-  FRxReplayInfo := TLabel.Create(TextTools);
-  FRxReplayInfo.Parent := TextTools;
-  FRxReplayInfo.SetBounds(880, 9, 320, 20);
+  FRxReplayInfo := TLabel.Create(FindTools);
+  FRxReplayInfo.Parent := FindTools;
+  FRxReplayInfo.SetBounds(580, 9, 400, 20);
+  { 窓の幅に合わせて伸ばします。固定幅だと、狭い窓では文が途中で切れ、広い窓では
+    余白が空きます。
+    Stretched with the window: at a fixed width the sentence is cut off in a
+    narrow window and leaves a gap in a wide one. }
+  FRxReplayInfo.Anchors := [akLeft, akTop, akRight];
+  FRxReplayInfo.BorderSpacing.Right := 8;
   FRxReplayInfo.Caption := '文字を押すと、その音を聴き直せます。';
 
   FRxTranscript := TTranscriptView.Create(TextPanel);
@@ -827,7 +904,7 @@ begin
     Operating settings: what an operator actually changes. No jargon here. }
   Operating := TGroupBox.Create(Sheet);
   Operating.Parent := Sheet;
-  Operating.Height := 122;
+  Operating.Height := 152;
   Operating.Caption := '運用設定';
   Stretch(Operating, alTop);
 
@@ -860,6 +937,16 @@ begin
   AddLabel(Operating,
     '受信テキストの文字を押して音を聴き直せる範囲です。長くするほど記憶を使います。',
     248, 62);
+
+  FSetJournal := TCheckBox.Create(Operating);
+  FSetJournal.Parent := Operating;
+  FSetJournal.SetBounds(14, 90, 300, 22);
+  FSetJournal.Caption := '受信テキストを時刻付きで記録する';
+  FSetJournal.Checked := True;
+  FSetJournal.OnChange := @RxJournalChanged;
+  AddLabel(Operating,
+    '確定するそばからファイルへ書き足します。異常終了しても直前まで残ります。',
+    330, 92);
 
   { ── 詳細・診断：困ったときだけ見るもの ──
     Advanced and diagnostics: only looked at when something is wrong. }
@@ -956,6 +1043,7 @@ begin
       Ini.ReadInteger('receive', 'doubt_strength', 100), 0, 100);
     FRxFontSize.Value := ClampInt(Ini.ReadInteger('receive', 'font_size', 14), 9, 32);
     FSetRetention.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'retention', 1), 0, 3);
+    FSetJournal.Checked := Ini.ReadBool('receive', 'journal', True);
     FSetBandwidth.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'bandwidth', 0),
       0, FSetBandwidth.Items.Count - 1);
     { 前回の同調先は覚えておきます。同じ設備なら音程は同じであることが多く、
@@ -1013,6 +1101,7 @@ begin
       Ini.WriteInteger('receive', 'tune_hz', Round(FRxWaterfall.TuneHz));
       Ini.WriteInteger('receive', 'bandwidth', FSetBandwidth.ItemIndex);
       Ini.WriteInteger('receive', 'retention', FSetRetention.ItemIndex);
+      Ini.WriteBool('receive', 'journal', FSetJournal.Checked);
       Ini.WriteString('audio', 'input_device', SelectedDeviceName);
       Ini.WriteBool('receive', 'track_signal', FRxTrack.Checked);
     finally
@@ -1100,6 +1189,18 @@ begin
         be why something was not read (requirements NFR-4, FR-G.3). }
       if FStream.DroppedSeconds > 0 then
         Lines.Add(Format('追いつけずに捨てた音声: %.1f 秒', [FStream.DroppedSeconds]));
+    end;
+    if FJournal <> nil then
+    begin
+      if not FSetJournal.Checked then
+        Lines.Add('受信テキストの記録: 取っていません')
+      else if FJournal.FileName = '' then
+        Lines.Add('受信テキストの記録: ' + JournalDirectory + '（まだ書いていません）')
+      else
+        Lines.Add(Format('受信テキストの記録: %s（%d 行 / %d バイト）',
+          [FJournal.FileName, FJournal.LinesWritten, FJournal.BytesWritten]));
+      if FJournal.LastError <> '' then
+        Lines.Add('  ' + FJournal.LastError);
     end;
     if FHistory <> nil then
       { 保持している音の量と、それが使っている記憶を出します。長くするほど
@@ -1276,7 +1377,14 @@ begin
     FFinishPending := False;
     try
       FStream.Finish;
+      { ShowStreamText の中で、確定した末尾が記録へ回ります。そのあとで書き残しを
+        出さないと、最後の語が待ったまま残ります（要件 FR-B.6）。
+        ShowStreamText passes the newly confirmed tail to the journal; without
+        the flush that follows, the last word would stay waiting (requirement
+        FR-B.6). }
       ShowStreamText;
+      if FJournal <> nil then
+        FJournal.Flush;
     except
       on E: Exception do
         LogDiagnostic('受信の終了', E.Message);
@@ -1533,6 +1641,15 @@ begin
   if FStream <> nil then
     FStream.Reset;
   FReviewPlay.Stop;
+  { ファイルの復号は実時刻を持ちません。記録は実時刻の記録なので、ここでは
+    書き残しを出すだけで、以後は書きません（要件 FR-B.6）。
+    A file decode has no wall clock, and the journal is a record of wall-clock
+    times, so the waiting line is written out and nothing further is recorded
+    (requirement FR-B.6). }
+  if FJournal <> nil then
+    FJournal.Flush;
+  FJournalled := 0;
+  FClockOrigin := 0;
   FHistory.Clear;
   { ファイルの音そのものを保管します。これで、ファイルから読んだ文字も押せば
     聴き直せます。保持時間より長いファイルは、後ろのぶんだけが残ります。
@@ -1618,6 +1735,13 @@ begin
           LogDiagnostic('受信の終了', E.Message);
       end;
   end;
+  { 書き残しの行を出します。交信の最後の語は、たいてい語間で終わらないため、
+    ここで出さなければ記録から落ちます（要件 FR-B.6）。
+    The waiting line is written out: the last word of a contact usually does not
+    end on a word space, so without this it would be missing from the record
+    (requirement FR-B.6). }
+  if FJournal <> nil then
+    FJournal.Flush;
   SetStatus('', '待機中', '受信を停止しました。');
 end;
 
@@ -1634,9 +1758,19 @@ begin
   FReviewPlay.Stop;
   if FHistory <> nil then
     FHistory.Clear;
+  { 記録は残します。消すのは画面であって、書いたものではありません。書き残しの
+    行だけ先に出して、次の受信と混ざらないようにします（要件 FR-B.6）。
+    The record stays: what is cleared is the display, not what was written. Only
+    the waiting line is written out, so it does not run into the next reception
+    (requirement FR-B.6). }
+  if FJournal <> nil then
+    FJournal.Flush;
+  FJournalled := 0;
+  FClockOrigin := 0;
   FRxTranscript.Clear;
   FRxWaterfall.Clear;
   UpdateReplayInfo;
+  UpdateFindInfo;
 end;
 
 procedure TMainForm.RxCopyClick(Sender: TObject);
@@ -1644,6 +1778,131 @@ begin
   Clipboard.AsText := FRxTranscript.AsText;
   SetStatus('', '', Format('受信テキスト %d 文字をコピーしました。',
     [FRxTranscript.CharCount]));
+end;
+
+{ ---- 検索（要件 FR-B.5） / search (requirement FR-B.5) ---- }
+
+procedure TMainForm.UpdateFindInfo;
+begin
+  if FRxFindInfo = nil then
+    Exit;
+  FRxFindPrev.Enabled := FRxTranscript.MatchCount > 0;
+  FRxFindNext.Enabled := FRxTranscript.MatchCount > 0;
+  if FRxTranscript.SearchTerm = '' then
+    FRxFindInfo.Caption := ''
+  else if FRxTranscript.MatchCount = 0 then
+    { 「0 件」ではなく「見つかりません」と言います。数だけでは、探せていないのか
+      無いのかが分かりません。
+      "Not found" rather than "0": a bare count does not say whether the search
+      ran or whether there is nothing there. }
+    FRxFindInfo.Caption := '見つかりません'
+  else
+    FRxFindInfo.Caption := Format('%d / %d 件',
+      [FRxTranscript.CurrentMatch, FRxTranscript.MatchCount]);
+end;
+
+procedure TMainForm.RxFindChanged(Sender: TObject);
+begin
+  FRxTranscript.Search(Trim(FRxFind.Text));
+  UpdateFindInfo;
+end;
+
+procedure TMainForm.RxFindNextClick(Sender: TObject);
+begin
+  FRxTranscript.NextMatch;
+  UpdateFindInfo;
+end;
+
+procedure TMainForm.RxFindPrevClick(Sender: TObject);
+begin
+  FRxTranscript.PreviousMatch;
+  UpdateFindInfo;
+end;
+
+procedure TMainForm.RxFindKeyDown(Sender: TObject; var Key: Word;
+  Shift: TShiftState);
+begin
+  { Enter で次へ、Shift+Enter で前へ。検索欄に居たまま辿れるようにします。
+    Enter goes forward and Shift+Enter back, so the operator can walk the hits
+    without leaving the box. }
+  if Key <> VK_RETURN then
+    Exit;
+  if ssShift in Shift then
+    FRxTranscript.PreviousMatch
+  else
+    FRxTranscript.NextMatch;
+  UpdateFindInfo;
+  Key := 0;
+end;
+
+{ ---- 記録（要件 FR-B.6） / the journal (requirement FR-B.6) ---- }
+
+function TMainForm.JournalDirectory: string;
+begin
+  { 設定ファイルと同じ場所に置きます。利用者が 1 か所だけ覚えれば済みます。
+    Kept beside the settings file, so there is only one place to remember. }
+  Result := IncludeTrailingPathDelimiter(
+    ExtractFilePath(ConfigFileName)) + 'log';
+end;
+
+procedure TMainForm.RxJournalChanged(Sender: TObject);
+begin
+  if FJournal = nil then
+    Exit;
+  { 記録を始めるのは「ここから」です。それまでに確定していた分は、利用者が
+    記録しないと決めていた間のものなので、遡って書きません（要件 FR-B.6）。
+    Journalling starts here: what was confirmed beforehand belongs to the time
+    the operator had chosen not to record, so it is not written retrospectively
+    (requirement FR-B.6). }
+  if FSetJournal.Checked and (FStream <> nil) then
+    FJournalled := Length(FStream.ConfirmedChars);
+  FJournal.Enabled := FSetJournal.Checked;
+  MarkSettingsDirty;
+  if FSetJournal.Checked then
+    SetStatus('', '', Format('受信テキストを %s に記録します。',
+      [JournalDirectory]))
+  else
+    SetStatus('', '', '受信テキストの記録を止めました。');
+  RefreshInfo;
+end;
+
+{ 確定した分だけを記録へ渡します。
+
+  暫定の文字は渡しません。暫定は後から書き換わるため、書いてしまうと記録に
+  取り消せない誤りが残ります。確定はもう変わらないので、そこだけを書きます。
+
+  Hands the newly confirmed characters to the journal.
+
+  Provisional characters are not handed over: they can still change, and writing
+  them would leave errors in the record that cannot be taken back. Confirmed
+  text no longer changes, so only that is written. }
+procedure TMainForm.JournalConfirmed;
+var
+  Confirmed: TDecodedChars;
+  Fresh: TDecodedChars;
+  I, Count: Integer;
+begin
+  if (FJournal = nil) or (FStream = nil) or not FSetJournal.Checked then
+    Exit;
+  Confirmed := FStream.ConfirmedChars;
+  Count := Length(Confirmed) - FJournalled;
+  if Count <= 0 then
+  begin
+    { 確定が減るのは、受信をやり直したときだけです。印も戻します。戻さないと、
+      次の受信の頭が「もう書いた」と見なされて記録から落ちます。
+      Confirmed text only shrinks when reception restarts; the mark goes back
+      with it. Leaving it high would treat the start of the next reception as
+      already written and drop it from the record. }
+    FJournalled := Length(Confirmed);
+    Exit;
+  end;
+  SetLength(Fresh, Count);
+  for I := 0 to Count - 1 do
+    Fresh[I] := Confirmed[FJournalled + I];
+  FJournalled := Length(Confirmed);
+  FJournal.Add(Fresh);
+  if FJournal.LastError <> '' then
+    LogDiagnostic('記録', FJournal.LastError);
 end;
 
 { ---- 聴き直し（要件 FR-E.10） / replay (requirement FR-E.10) ---- }
@@ -2021,6 +2280,13 @@ begin
   FLiveChars := All;
   FRxTranscript.PendingFrom := ConfirmedCount;
   FRxTranscript.SetChars(All);
+  { 表示を更新したところで、確定した分を記録へ回します。画面と記録が同じ
+    ところから出ていれば、食い違いません（要件 FR-B.6）。
+    With the display updated, the newly confirmed text goes to the journal. Both
+    coming from the same place is what keeps them from disagreeing (requirement
+    FR-B.6). }
+  JournalConfirmed;
+  UpdateFindInfo;
 end;
 
 procedure TMainForm.UpdateLiveReceive;
@@ -2092,6 +2358,16 @@ begin
       (requirement FR-E.10). The order matters: **the time read after the append
       would place the audio one buffer too late.** }
     StartAt := FStream.ElapsedSeconds;
+    { 経過秒 0 に対応する実時刻は、最初の音が届いた瞬間です。受信を押した瞬間
+      ではありません。装置が開くまでの間があるためです（要件 FR-B.6）。
+      Elapsed second zero is the moment the first audio arrives, not the moment
+      the button was pressed: opening the device takes time (requirement
+      FR-B.6). }
+    if StartAt = 0 then
+    begin
+      FClockOrigin := Now;
+      FJournal.StartSession(FClockOrigin);
+    end;
     FStream.Append(Fresh, FCaptureRate);
     FHistory.Append(Fresh, FCaptureRate, StartAt);
     { ウォーターフォールには、同調も帯域制限も掛ける前の音を見せます。まだ

@@ -60,7 +60,20 @@ type
       (requirement FR-E.10). }
     FSelected: Integer;
     FOnCharChosen: TCharChosenEvent;
+    { 検索語と、見つかった位置（文字配列上の開始番号）。位置は昇順に並びます
+      （要件 FR-B.5）。
+      The search term and where it was found, as start indices into the
+      character array, in ascending order (requirement FR-B.5). }
+    FNeedle: string;
+    FMatches: array of Integer;
+    FMatchLength: Integer;
+    FCurrentMatch: Integer;
     procedure SetSelected(Value: Integer);
+    procedure Rescan;
+    procedure GoToMatch(Which: Integer);
+    { その文字が一致の中にあるか。無ければ -1、あれば何番目の一致か。
+      Whether the character is inside a hit: -1 if not, else which hit. }
+    function MatchAt(Index: Integer): Integer;
     function VisibleLines: Integer;
     procedure MeasureFont;
     procedure Relayout;
@@ -115,6 +128,26 @@ type
     { 選ばれている文字を、画面に見えるところまで送ります。
       Scrolls the chosen character into view. }
     procedure ScrollToSelected;
+
+    { 受信テキストの中を探します（要件 FR-B.5）。
+
+      大文字・小文字は区別しません。空文字を渡すと検索を解除します。受信が
+      続いていても、文字が増えるたびに探し直すので、あとから届いた分も見つかり
+      ます。
+
+      Searches the received text (requirement FR-B.5).
+
+      Case is ignored, and an empty term clears the search. The scan is redone
+      whenever characters arrive, so text that appears later is found too. }
+    procedure Search(const Needle: string);
+    procedure NextMatch;
+    procedure PreviousMatch;
+    { 見つかった数と、いま何番目にいるか（1 起点、0 はどこにもいない）。
+      How many were found and which one is current, counting from one, with zero
+      meaning none. }
+    function MatchCount: Integer;
+    function CurrentMatch: Integer;
+    property SearchTerm: string read FNeedle;
 
     { 選ばれている文字。設定すると、その文字が枠で囲まれます。
       The chosen character; setting it draws a box around that character. }
@@ -338,6 +371,12 @@ begin
     pointing outside the array would replay the wrong place. }
   if FSelected >= Length(FChars) then
     FSelected := -1;
+  { 文字が増えれば一致も変わります。探し直さないと、あとから届いた分は
+    いつまでも見つかりません（要件 FR-B.5）。
+    New characters change what matches; without a rescan, text that arrives
+    later would never be found (requirement FR-B.5). }
+  if FNeedle <> '' then
+    Rescan;
   Relayout;
   Invalidate;
 end;
@@ -349,6 +388,9 @@ begin
   FFollowTail := True;
   FTopLine := 0;
   FSelected := -1;
+  FMatches := nil;
+  FMatchLength := 0;
+  FCurrentMatch := -1;
   Relayout;
   Invalidate;
 end;
@@ -384,6 +426,145 @@ begin
     Exit;
   FSelected := Value;
   Invalidate;
+end;
+
+{ 検索語を探し直します。
+
+  文字配列を 1 度だけ走査します。受信中は文字が増えるたびに呼ばれるため、
+  20 万文字でも目に見える遅れにならないことを試験で押さえています
+  （`gui_probe`）。
+
+  Rescans for the search term with a single pass over the character array. It
+  runs on every arrival of new text, so that it stays imperceptible even at two
+  hundred thousand characters is held by a test (`gui_probe`). }
+procedure TTranscriptView.Rescan;
+var
+  Index, Offset, Count, Anchor: Integer;
+  Hit: Boolean;
+  Needle: string;
+begin
+  { いま見ている 1 件を、位置で覚えておきます。受信中は文字が届くたびに探し
+    直すので、覚えずに番号を捨てると、**見ている場所が 0.2 秒ごとに先頭へ
+    戻ります。**
+    The hit being looked at is remembered by position. The rescan runs on every
+    arrival of text while receiving, so discarding the index would **send the
+    operator back to the first hit five times a second.** }
+  Anchor := -1;
+  if (FCurrentMatch >= 0) and (FCurrentMatch <= High(FMatches)) then
+    Anchor := FMatches[FCurrentMatch];
+  FMatches := nil;
+  FMatchLength := 0;
+  FCurrentMatch := -1;
+  Needle := UpperCase(FNeedle);
+  if (Needle = '') or (Length(FChars) = 0) then
+    Exit;
+  FMatchLength := Length(Needle);
+  Count := 0;
+  for Index := 0 to Length(FChars) - FMatchLength do
+  begin
+    Hit := True;
+    for Offset := 0 to FMatchLength - 1 do
+      { 1 文字は 1 要素です。空白も 1 要素なので、語をまたぐ検索も素直に
+        当たります。
+        One character is one element, spaces included, so a term spanning a word
+        space matches as written. }
+      if UpperCase(FChars[Index + Offset].Text) <> Needle[Offset + 1] then
+      begin
+        Hit := False;
+        Break;
+      end;
+    if Hit then
+    begin
+      if Count = Length(FMatches) then
+        SetLength(FMatches, Max(16, Count * 2));
+      FMatches[Count] := Index;
+      if Index = Anchor then
+        FCurrentMatch := Count;
+      Inc(Count);
+    end;
+  end;
+  SetLength(FMatches, Count);
+end;
+
+procedure TTranscriptView.Search(const Needle: string);
+begin
+  FNeedle := Needle;
+  { 語を変えたら、前の語で見ていた位置は意味を失います。
+    A new term makes the position held for the old one meaningless. }
+  FCurrentMatch := -1;
+  Rescan;
+  Invalidate;
+  if Length(FMatches) > 0 then
+    { 探したら、まず最初の 1 件へ連れていきます。見つかったと言うだけでは、
+      どこにあるのか分かりません。
+      A search takes the operator to the first hit: saying that something was
+      found does not say where it is. }
+    GoToMatch(0);
+end;
+
+{ 何番目かの一致へ移ります。番号は端で折り返します。件数が少ないときに、
+  端で止まって進めなくなるより素直です。
+  Moves to one of the hits, wrapping at either end: wrapping reads better than
+  stopping dead at the end when there are only a few. }
+procedure TTranscriptView.GoToMatch(Which: Integer);
+begin
+  if Length(FMatches) = 0 then
+    Exit;
+  while Which < 0 do
+    Inc(Which, Length(FMatches));
+  FCurrentMatch := Which mod Length(FMatches);
+  SetSelected(FMatches[FCurrentMatch]);
+  ScrollToSelected;
+  Invalidate;
+end;
+
+procedure TTranscriptView.NextMatch;
+begin
+  GoToMatch(FCurrentMatch + 1);
+end;
+
+procedure TTranscriptView.PreviousMatch;
+begin
+  GoToMatch(FCurrentMatch - 1);
+end;
+
+{ 描くのは画面に見えている文字だけなので、1 文字ごとに二分探索しても軽いままです。
+  Only visible characters are painted, so a binary search per character stays
+  cheap. }
+function TTranscriptView.MatchAt(Index: Integer): Integer;
+var
+  Low_, High_, Middle: Integer;
+begin
+  Result := -1;
+  if (FMatchLength = 0) or (Length(FMatches) = 0) then
+    Exit;
+  Low_ := 0;
+  High_ := High(FMatches);
+  while Low_ <= High_ do
+  begin
+    Middle := (Low_ + High_) div 2;
+    if FMatches[Middle] > Index then
+      High_ := Middle - 1
+    else
+      Low_ := Middle + 1;
+  end;
+  { High_ は「開始が Index 以下」の最後の一致を指します。
+    High_ now points at the last hit starting at or before Index. }
+  if (High_ >= 0) and (Index < FMatches[High_] + FMatchLength) then
+    Result := High_;
+end;
+
+function TTranscriptView.MatchCount: Integer;
+begin
+  Result := Length(FMatches);
+end;
+
+function TTranscriptView.CurrentMatch: Integer;
+begin
+  if (FCurrentMatch < 0) or (Length(FMatches) = 0) then
+    Result := 0
+  else
+    Result := FCurrentMatch + 1;
 end;
 
 function TTranscriptView.IndexAt(X, Y: Integer): Integer;
@@ -456,7 +637,7 @@ end;
 
 procedure TTranscriptView.Paint;
 var
-  LineIndex, Index, Row, X, Y: Integer;
+  LineIndex, Index, Row, X, Y, Hit: Integer;
 begin
   Canvas.Brush.Color := Color;
   Canvas.Brush.Style := bsSolid;
@@ -475,6 +656,23 @@ begin
     for Index := FLines[LineIndex].First to FLines[LineIndex].Last do
     begin
       X := (Index - FLines[LineIndex].First) * FCharWidth + 4;
+      { 見つかった箇所は下地を塗ります。いま見ている 1 件は濃く、ほかは淡く
+        塗り分けます。どこにいるのかと、ほかにいくつあるのかが同時に分かる
+        ためです（要件 FR-B.5）。
+        Hits are given a background: the one being looked at strongly, the rest
+        faintly, so that where the operator is and how many others there are
+        read at the same time (requirement FR-B.5). }
+      Hit := MatchAt(Index);
+      if Hit >= 0 then
+      begin
+        if Hit = FCurrentMatch then
+          Canvas.Brush.Color := clHighlight
+        else
+          Canvas.Brush.Color := BlendColor(Color, clHighlight, 0.30);
+        Canvas.Brush.Style := bsSolid;
+        Canvas.FillRect(X, Y, X + FCharWidth, Y + FLineHeight);
+        Canvas.Brush.Style := bsClear;
+      end;
       { 選ばれた文字には枠を描きます。塗り潰すと、濃淡で示している確からしさ
         （要件 FR-B.4）が読めなくなるためです。
         The chosen character is boxed rather than filled: filling would hide
@@ -487,7 +685,12 @@ begin
       end;
       if FChars[Index].Text <> ' ' then
       begin
-        Canvas.Font.Color := ShadeFor(Index);
+        if Hit = FCurrentMatch then
+          { 濃く塗った上には、地と対になる色で描かないと読めません。
+            Text on the strong background needs the colour that pairs with it. }
+          Canvas.Font.Color := clHighlightText
+        else
+          Canvas.Font.Color := ShadeFor(Index);
         Canvas.TextOut(X, Y, FChars[Index].Text);
       end;
     end;

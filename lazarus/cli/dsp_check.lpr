@@ -16,8 +16,8 @@ program dsp_check;
 {$mode objfpc}{$H+}
 
 uses
-  SysUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
-  DeepCW.Tuner, DeepCW.Review;
+  Classes, SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
+  DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder;
 
 var
   Meta: TDeepCWMetadata;
@@ -365,10 +365,195 @@ begin
   end;
 end;
 
+{ 文字列を、時刻の付いた確定文字の並びへ直します。時刻は 1 文字 0.1 秒。
+  Turns a string into timed confirmed characters, a tenth of a second each. }
+function CharsOf(const Text: string; StartSeconds: Double): TDecodedChars;
+var
+  I: Integer;
+begin
+  SetLength(Result, Length(Text));
+  for I := 1 to Length(Text) do
+  begin
+    Result[I - 1].Text := Text[I];
+    Result[I - 1].Seconds := StartSeconds + (I - 1) * 0.1;
+    Result[I - 1].EndSeconds := Result[I - 1].Seconds + 0.08;
+    Result[I - 1].Confidence := 0.99;
+  end;
+end;
+
+{ ファイルの中身を読みます。記録の途中でも読めることを確かめるために使います。
+  Reads the file's contents, used to check that the record is readable while it
+  is still being written. }
+function ReadWhole(const FileName: string): string;
+var
+  Stream: TFileStream;
+begin
+  Result := '';
+  if not FileExists(FileName) then
+    Exit;
+  Stream := TFileStream.Create(FileName, fmOpenRead or fmShareDenyNone);
+  try
+    SetLength(Result, Stream.Size);
+    if Stream.Size > 0 then
+      Stream.ReadBuffer(Result[1], Stream.Size);
+  finally
+    Stream.Free;
+  end;
+end;
+
+procedure TestJournal;
+var
+  Dir: string;
+  Journal: TTranscriptJournal;
+  Origin: TDateTime;
+  Body: string;
+  Bad: TTranscriptJournal;
+begin
+  WriteLn('TTranscriptJournal');
+  Dir := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw-journal-test';
+  if DirectoryExists(Dir) then
+    DeleteFile(JournalFileFor(Dir, EncodeDate(2026, 9, 4)));
+
+  Origin := EncodeDate(2026, 9, 4) + EncodeTime(12, 0, 0, 0);
+  Journal := TTranscriptJournal.Create(Dir);
+  try
+    Journal.Enabled := True;
+    Journal.StartSession(Origin);
+
+    { 語間が来るまでは書きません。1 文字ずつ書いた記録は読めません。
+      Nothing is written until a word space: a record written character by
+      character would be unreadable. }
+    Journal.Add(CharsOf('CQ', 0));
+    Check('語の途中では書かない', Journal.LinesWritten = 0,
+      Format('(%d 行)', [Journal.LinesWritten]));
+
+    { **語間が来たら、その場でファイルに残っていること。**閉じるまで書かない
+      作りでは、強制終了したときに何も残らない（要件 FR-B.6）。
+      **A word space must put the line on disk there and then.** A design that
+      writes at close leaves nothing behind when the exit is not clean
+      (requirement FR-B.6). }
+    Journal.Add(CharsOf(' ', 0.3));
+    Body := ReadWhole(Journal.FileName);
+    Check('語間で 1 行が確定する', Journal.LinesWritten = 1,
+      Format('(%d 行)', [Journal.LinesWritten]));
+    Check('閉じる前にファイルへ残っている', Pos('CQ', Body) > 0,
+      Format('(中身: "%s")', [Trim(Body)]));
+
+    { 時刻は、受信開始の実時刻に経過秒を足したもの。書いた瞬間ではない。
+      The time is the reception's wall clock plus the elapsed seconds, not the
+      moment of writing. }
+    Check('行の時刻が受信開始からの経過で付く',
+      Pos('2026-09-04 12:00:00  CQ', Body) > 0,
+      Format('(中身: "%s")', [Trim(Body)]));
+
+    { 経過秒がそのまま時刻に効くこと。90 秒後の語は 12:01:30。
+      Elapsed seconds must reach the timestamp: a word at 90 seconds is
+      12:01:30. }
+    Journal.Add(CharsOf('DE JH2XYZ ', 90));
+    Body := ReadWhole(Journal.FileName);
+    Check('経過秒が時刻に反映される',
+      Pos('2026-09-04 12:01:30  DE', Body) > 0,
+      Format('(中身: "%s")', [Trim(Body)]));
+
+    { 語間で終わらない末尾は、Flush で出す。交信の最後がここに当たる。
+      A tail not ending on a word space is written by Flush, which is where the
+      end of a contact falls. }
+    Journal.Add(CharsOf('SK', 120));
+    Check('書き残しは Flush まで書かない', Journal.LinesWritten = 3,
+      Format('(%d 行)', [Journal.LinesWritten]));
+    Journal.Flush;
+    Body := ReadWhole(Journal.FileName);
+    Check('Flush で末尾が残る', Pos('SK', Body) > 0,
+      Format('(中身: "%s")', [Trim(Body)]));
+
+    { 記録を止めるときも、抱えている行は出す。捨てると 1 語だけ落ちる。
+      Switching off writes the waiting line: dropping it would lose exactly one
+      word. }
+    Journal.Add(CharsOf('TNX', 130));
+    Journal.Enabled := False;
+    Body := ReadWhole(Journal.FileName);
+    Check('記録を止めるときに書き残しを出す', Pos('TNX', Body) > 0,
+      Format('(中身: "%s")', [Trim(Body)]));
+    Journal.Add(CharsOf('NIL ', 140));
+    Body := ReadWhole(Journal.FileName);
+    Check('止めたあとは書かない', Pos('NIL', Body) = 0,
+      Format('(中身: "%s")', [Trim(Body)]));
+
+    { 語間が来ないまま延々と続いても、上限で折る。折らないと、落ちたときに
+      失われる量に限りがなくなる。
+      A run with no word space is broken at the limit; without one there would be
+      no bound on how much is lost. }
+    Journal.Enabled := True;
+    Journal.Add(CharsOf(StringOfChar('X', JOURNAL_MAX_LINE + 5), 200));
+    Check('語間が来なくても上限で折る', Journal.LinesWritten >= 5,
+      Format('(%d 行)', [Journal.LinesWritten]));
+  finally
+    Journal.Free;
+  end;
+
+  { 書けない場所を指されても、例外を投げずに理由を残すこと。受信の脈動のたびに
+    例外が上がると、受信そのものが続けられない。
+    An unwritable location must leave a reason rather than raise: an exception on
+    every pulse of the receive loop would stop reception itself. }
+  Bad := TTranscriptJournal.Create('/proc/deepcw-cannot-write-here');
+  try
+    Bad.Enabled := True;
+    Bad.StartSession(Origin);
+    try
+      Bad.Add(CharsOf('CQ ', 0));
+      Check('書けなくても例外を投げない', True);
+    except
+      on E: Exception do
+        Check('書けなくても例外を投げない', False, E.Message);
+    end;
+    Check('書けなかった理由を残す', Bad.LastError <> '', '(理由が空)');
+    Check('書けなくても行数は増えない', Bad.LinesWritten = 0,
+      Format('(%d 行)', [Bad.LinesWritten]));
+  finally
+    Bad.Free;
+  end;
+end;
+
 var
   ModelMeta, MetadataPath: string;
+{ 強制終了に耐えることを、本当に強制終了して確かめるための入口です。
+
+  「閉じる前にファイルに残っている」ところまでは通常の試験で押さえられますが、
+  **本当に kill されたときに残るか**は、プロセスを殺してみないと分かりません。
+  この引数を渡すと、記録を数行書いてから終わらずに待ちます。外から殺して、
+  ファイルの中身を見てください（要件 FR-B.6、`tools/journal_kill_test.sh`）。
+
+  The entry point for checking survival of a kill by actually being killed.
+
+  An ordinary test can show that the bytes reach the file before it is closed,
+  but **whether they survive a real kill** is only answered by killing the
+  process. Given this argument, a few lines are journalled and then the program
+  waits to be killed from outside and the file inspected (requirement FR-B.6,
+  `tools/journal_kill_test.sh`). }
+procedure RunUntilKilled(const Directory: string);
+var
+  Journal: TTranscriptJournal;
+begin
+  Journal := TTranscriptJournal.Create(Directory);
+  Journal.Enabled := True;
+  Journal.StartSession(EncodeDate(2026, 9, 4) + EncodeTime(12, 0, 0, 0));
+  Journal.Add(CharsOf('CQ CQ DE JH2XYZ K ', 0));
+  WriteLn(Journal.FileName);
+  Flush(Output);
+  { 意図的に閉じません。ここで殺されても行が残っていることが要件です。
+    Deliberately never closed: the requirement is that the lines are there even
+    when the process is killed at this point. }
+  while True do
+    Sleep(200);
+end;
+
 begin
   MetadataPath := '';
+  if ParamStr(1) = '--journal-until-killed' then
+  begin
+    RunUntilKilled(ParamStr(2));
+    Halt(0);
+  end;
   if ParamCount >= 1 then MetadataPath := ParamStr(1);
   if MetadataPath = '' then MetadataPath := LocateDataFile('model.onnx.json');
 
@@ -393,6 +578,7 @@ begin
     TestTrackTone;
     TestBandPass;
     TestHistory;
+    TestJournal;
   finally
     Meta.Free;
   end;
