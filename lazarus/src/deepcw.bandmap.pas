@@ -31,7 +31,8 @@ unit DeepCW.BandMap;
 interface
 
 uses
-  SysUtils, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Callsign, DeepCW.Multi;
+  SysUtils, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Callsign, DeepCW.Multi,
+  DeepCW.Exchange;
 
 const
   { CQ を出していると見なす、最後の根拠からの時間。要件は「根拠が消えたら区別も
@@ -164,154 +165,11 @@ function TrustCaption(Trust: TCallsignTrust): string;
 
 implementation
 
-type
-  { 受信文を語に切ったときの 1 語。/ One word of a transcript. }
-  TWord = record
-    Text: string;
-    { その語の文字のうち、いちばん低い確からしさ。1 文字でも怪しければ、その語は
-      怪しい。
-      The lowest character confidence in the word: one doubtful character makes
-      the word doubtful. }
-    Confidence: Single;
-    Seconds: Double;
-  end;
-  TWords = array of TWord;
-
-{ 受信文を語に切ります。空白が区切りです。
-  Splits a transcript into words at the spaces. }
-function SplitWords(const Chars: TDecodedChars): TWords;
-var
-  I, Count: Integer;
-  Current: TWord;
-
-  procedure Flush;
-  begin
-    if Current.Text = '' then
-      Exit;
-    if Count = Length(Result) then
-      SetLength(Result, Max(16, Count * 2));
-    Result[Count] := Current;
-    Inc(Count);
-    Current.Text := '';
-  end;
-
-begin
-  Result := nil;
-  Count := 0;
-  Current.Text := '';
-  Current.Confidence := 1;
-  Current.Seconds := 0;
-  for I := 0 to High(Chars) do
-    if Chars[I].Text = ' ' then
-      Flush
-    else
-    begin
-      if Current.Text = '' then
-      begin
-        Current.Confidence := 1;
-        Current.Seconds := Chars[I].Seconds;
-      end;
-      Current.Text := Current.Text + Chars[I].Text;
-      Current.Confidence := Min(Current.Confidence, Chars[I].Confidence);
-    end;
-  Flush;
-  SetLength(Result, Count);
-end;
-
-{ その局の呼出符号を選びます。
-
-  候補は、形の規則（要件 FR-K 第 1 段、ITU 無線通信規則 第 19 条）に合う語です。
-  複数あるときは **DE の直後を優先します。**交信では「相手 DE 自分」と送るのが
-  決まりなので、DE の後ろが送信している局です。DE が無ければ、いちばん多く出た
-  ものを採ります。
-
-  Chooses the station's call sign.
-
-  A candidate is a word fitting the shape rule (requirement FR-K, first stage;
-  ITU Radio Regulations Article 19). Where there are several, **the one after DE
-  wins**: a contact is sent as "them DE us", so what follows DE is the station
-  transmitting. With no DE, the most frequent candidate is taken. }
-procedure ChooseCallsign(const Words: TWords; out Callsign: string;
-  out Sightings: Integer; out Confidence: Single);
-type
-  { 候補ごとの集計。候補の種類は少数なので、これで足ります。
-    The tally for one candidate; there are only ever a few kinds. }
-  TCandidate = record
-    Text: string;
-    Count: Integer;
-    Best: Single;
-  end;
-var
-  Tally: array of TCandidate;
-  I, J, Found, Total: Integer;
-  Parsed: TCallsign;
-  AfterDe: string;
-begin
-  Callsign := '';
-  Sightings := 0;
-  Confidence := 0;
-  AfterDe := '';
-  Total := 0;
-
-  { 語を 1 度だけ走査して、形の合うものを数え上げます。候補ごとに数えるやり方
-    （候補の数 × 語の数）にすると、長い受信文で目に見えて遅くなります。
-    A single pass over the words tallies those that fit the shape. Counting each
-    candidate against every word instead would be visibly slow on a long
-    transcript. }
-  for I := 0 to High(Words) do
-  begin
-    if not ParseCallsign(Words[I].Text, Parsed) then
-      Continue;
-    Found := -1;
-    for J := 0 to Total - 1 do
-      if Tally[J].Text = Words[I].Text then
-      begin
-        Found := J;
-        Break;
-      end;
-    if Found < 0 then
-    begin
-      if Total = Length(Tally) then
-        SetLength(Tally, Max(8, Total * 2));
-      Tally[Total].Text := Words[I].Text;
-      Tally[Total].Count := 0;
-      Tally[Total].Best := 0;
-      Found := Total;
-      Inc(Total);
-    end;
-    Inc(Tally[Found].Count);
-    Tally[Found].Best := Max(Tally[Found].Best, Words[I].Confidence);
-    { DE の直後なら、送信している局の符号です。いちばん新しいものを覚えます。
-      Directly after a DE it is the transmitting station's own call sign; the most
-      recent one is remembered. }
-    if (I > 0) and (Words[I - 1].Text = 'DE') then
-      AfterDe := Words[I].Text;
-  end;
-
-  if Total = 0 then
-    Exit;
-
-  if AfterDe <> '' then
-    Callsign := AfterDe
-  else
-  begin
-    { DE が無ければ、いちばん多く出たもの。同数なら後から見つかったほう。
-      With no DE, the most frequent; the later one on a tie. }
-    Found := 0;
-    for J := 1 to Total - 1 do
-      if Tally[J].Count >= Tally[Found].Count then
-        Found := J;
-    Callsign := Tally[Found].Text;
-  end;
-
-  for J := 0 to Total - 1 do
-    if Tally[J].Text = Callsign then
-    begin
-      Sightings := Tally[J].Count;
-      Confidence := Tally[J].Best;
-      Break;
-    end;
-end;
+{ 語に切る規則と、相手の符号を選ぶ規則は DeepCW.Exchange が持ちます。交信モードの
+  記録も同じ規則で選ぶ必要があり、写しを 2 つ置くと食い違うためです。
+  Splitting into words and choosing the station's call sign live in
+  DeepCW.Exchange: the contact log has to choose by the same rule, and two
+  copies would drift apart. }
 
 { 最後に CQ を送った時刻。無ければ負の値を返します。
   When CQ was last sent, or a negative value if never. }

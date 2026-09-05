@@ -19,7 +19,7 @@ program gui_probe;
 uses
   SysUtils, DateUtils, Math, Classes, Interfaces, Forms, Controls, Graphics, LCLType,
   DeepCW.Types, DeepCW.Morse, DeepCW.Tuner, DeepCW.Decoder,
-  DeepCW.Review, DeepCW.Multi, DeepCW.BandMap,
+  DeepCW.Review, DeepCW.Multi, DeepCW.BandMap, DeepCW.Exchange,
   WaterfallView, TranscriptView, BandMapView;
 
 type
@@ -279,6 +279,55 @@ begin
   end;
 end;
 
+{ 決まった受信文から文字を作ります。BuildChars は乱数なので、呼出符号を狙って
+  置けません。
+  Builds characters from a fixed transcript: BuildChars is random, so a call
+  sign cannot be planted in it. }
+function CharsFrom(const Text: string): TDecodedChars;
+var
+  I: Integer;
+begin
+  SetLength(Result, Length(Text));
+  for I := 1 to Length(Text) do
+  begin
+    Result[I - 1].Text := Text[I];
+    Result[I - 1].Seconds := (I - 1) * 0.24;
+    Result[I - 1].EndSeconds := Result[I - 1].Seconds + 0.2;
+    Result[I - 1].Confidence := 0.99;
+  end;
+end;
+
+{ 文字 First〜Last の下端付近で、白でない画素を数えます。下線の太さを判じる
+  ためだけの補助です。文字そのものに掛からないよう、行の下 3 画素だけを見ます。
+  Counts the non-white pixels near the bottom of characters First..Last, purely
+  to judge the underline's weight. Only the lowest three pixels of the row are
+  examined so the glyphs themselves are not counted. }
+function DebugInk(Shot: TBitmap): Integer;
+var X, Y: Integer;
+begin
+  Result := 0;
+  for Y := 0 to Shot.Height - 1 do
+    for X := 0 to Shot.Width - 1 do
+      if Shot.Canvas.Pixels[X, Y] <> clWhite then Inc(Result);
+end;
+
+function InkedUnder(Shot: TBitmap; View: TTranscriptView;
+  First, Last: Integer): Integer;
+var
+  X, Y: Integer;
+  Head, Tail: TRect;
+begin
+  Result := 0;
+  Head := View.CharRect(First);
+  Tail := View.CharRect(Last);
+  if (Head.Right <= Head.Left) or (Tail.Right <= Tail.Left) then
+    Exit;
+  for Y := Max(0, Head.Bottom - 3) to Min(Shot.Height - 1, Head.Bottom - 1) do
+    for X := Max(0, Head.Left) to Min(Shot.Width - 1, Tail.Right - 1) do
+      if Shot.Canvas.Pixels[X, Y] <> clWhite then
+        Inc(Result);
+end;
+
 procedure SaveView(View: TWaterfallView; const FileName: string);
 var
   Shot: TBitmap;
@@ -333,6 +382,8 @@ var
   Replay: TSingleArray;
   GotFrom, GotTo: Double;
   PickedIndex, PlayRate: Integer;
+  Ex: TExchange;
+  Underlined, Marked, Thin, Thick, Y: Integer;
 
 begin
   OutDir := ParamStr(1);
@@ -650,6 +701,111 @@ begin
     same. **Sound comes out either way, so running it and listening does not
     reveal a mismatch.** The index is taken from a press, the store is read at
     that character's time, and the audio that comes back is checked by value. }
+  { ── 呼出符号の強調（要件 FR-E.1）──
+    描くのは部品、決めるのは呼ぶ側。ここでは「渡した位置のとおりに印が付くか」
+    と「押した場所がどの符号かを言えるか」を見ます。**画素を数えないのは、
+    下線の太さや位置を変えたときに試験が壊れるのを避けるためです。**見たいのは
+    見た目ではなく、どの文字が符号として扱われているかです。
+
+    Highlighting call signs (requirement FR-E.1). The control draws, the caller
+    decides; what is checked here is that the spans handed over are the ones
+    marked, and that a press can be told which call sign it landed on. **No
+    pixels are counted:** changing the underline's weight or position must not
+    break the test, because what matters is which characters are treated as a
+    call sign, not how they look. }
+  WriteLn;
+  WriteLn('呼出符号の強調の検証 / call sign highlight checks');
+  Chars := CharsFrom('JA1ABC DE JH2XYZ UR 599 K');
+  Ex := ReadExchange(Chars);
+  Transcript.FollowTail := False;
+  Transcript.SetChars(Chars);
+  Transcript.SetCallsigns(Ex.Callsigns, Ex.Chosen);
+  Application.ProcessMessages;
+
+  Check('符号の数だけ印が付く', Transcript.CallsignCount = 2,
+    Format('(%d)', [Transcript.CallsignCount]));
+  Check('相手と見た符号が印の中にある',
+    (Transcript.ChosenCallsign >= 0) and
+    (Transcript.CallsignSpan(Transcript.ChosenCallsign).Text = 'JH2XYZ'),
+    Transcript.CallsignSpan(Transcript.ChosenCallsign).Text);
+
+  { 符号の中の文字は符号と分かり、外の文字は分からないこと。0〜5 が JA1ABC、
+    7〜8 が DE、10〜15 が JH2XYZ です。
+    Characters inside a call sign are recognised and those outside are not:
+    0-5 is JA1ABC, 7-8 is DE and 10-15 is JH2XYZ. }
+  Check('符号の先頭の文字が符号と分かる', Transcript.CallsignAt(0) = 0,
+    Format('(%d)', [Transcript.CallsignAt(0)]));
+  Check('符号の末尾の文字が符号と分かる', Transcript.CallsignAt(5) = 0,
+    Format('(%d)', [Transcript.CallsignAt(5)]));
+  Check('語間の空白は符号でない', Transcript.CallsignAt(6) < 0,
+    Format('(%d)', [Transcript.CallsignAt(6)]));
+  Check('DE は符号でない', Transcript.CallsignAt(7) < 0,
+    Format('(%d)', [Transcript.CallsignAt(7)]));
+  Check('2 つ目の符号は 2 つ目と分かる', Transcript.CallsignAt(10) = 1,
+    Format('(%d)', [Transcript.CallsignAt(10)]));
+
+  { 印の付いた文字を数えて、符号の文字数と一致すること。取りこぼしも付けすぎも
+    ここで出ます。
+    Counting the marked characters against the call signs' length catches both a
+    miss and an overreach. }
+  Underlined := 0;
+  Marked := 0;
+  for X := 0 to High(Chars) do
+    if Transcript.CallsignAt(X) >= 0 then
+    begin
+      Inc(Underlined);
+      if Transcript.CallsignAt(X) = Transcript.ChosenCallsign then
+        Inc(Marked);
+    end;
+  Check('印の付いた文字数が符号の長さと合う', Underlined = 12,
+    Format('(%d)', [Underlined]));
+  Check('相手と見た符号の文字数が合う', Marked = 6, Format('(%d)', [Marked]));
+
+  { **見た目の違い（下線の太さ）はここでは確かめていません。**この試験用の
+    描画経路（PaintTo）はスクロールバーしか描かず、文字も線も画布に出ません。
+    画素を数える試験を書いて分かりました。見た目は実機の画面で確かめます。
+
+    **The visual difference (the underline's weight) is not checked here.** The
+    control's PaintTo path, as driven by this probe, renders only the scroll bar:
+    neither glyphs nor lines reach the canvas. Writing a pixel-counting test is
+    what revealed it. The appearance is checked on the real screen instead. }
+
+  { 文字を差し替えたら、古い位置は捨てられること。捨てないと、次の受信文の
+    無関係な文字に下線が残ります。
+    Replacing the characters must drop the old spans, or unrelated characters in
+    the next transcript would keep the underline. }
+  Transcript.SetChars(CharsFrom('CQ CQ K'));
+  Check('文字を差し替えたら印が消える', Transcript.CallsignCount = 0,
+    Format('(%d)', [Transcript.CallsignCount]));
+  Check('印が消えれば相手も無い', Transcript.ChosenCallsign < 0,
+    Format('(%d)', [Transcript.ChosenCallsign]));
+
+  { 受信をやり直したときも捨てられること。差し替えと消去は別の道なので、
+    片方だけ直しても気づけません。
+    Cleared for a fresh reception, the spans must go too: replacing and clearing
+    are separate paths, and fixing one would not show up in the other. }
+  Chars := CharsFrom('JA1ABC DE JH2XYZ K');
+  Ex := ReadExchange(Chars);
+  Transcript.SetChars(Chars);
+  Transcript.SetCallsigns(Ex.Callsigns, Ex.Chosen);
+  Check('消す前は印がある', Transcript.CallsignCount = 2,
+    Format('(%d)', [Transcript.CallsignCount]));
+  Transcript.Clear;
+  Check('消せば印も消える', Transcript.CallsignCount = 0,
+    Format('(%d)', [Transcript.CallsignCount]));
+  Check('消せば相手も無い', Transcript.ChosenCallsign < 0,
+    Format('(%d)', [Transcript.ChosenCallsign]));
+
+  { 符号が無い受信文でも落ちないこと。 }
+  Chars := CharsFrom('CQ CQ CQ K');
+  Ex := ReadExchange(Chars);
+  Transcript.SetChars(Chars);
+  Transcript.SetCallsigns(Ex.Callsigns, Ex.Chosen);
+  Check('符号が無ければ印も無い', Transcript.CallsignCount = 0,
+    Format('(%d)', [Transcript.CallsignCount]));
+  Check('符号が無ければどこを当てても符号でない',
+    (Transcript.CallsignAt(0) < 0) and (Transcript.CallsignAt(5) < 0));
+
   WriteLn;
   WriteLn('聴き直しの検証 / replay checks');
   Chars := BuildChars(400);

@@ -18,7 +18,7 @@ program dsp_check;
 uses
   Classes, SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
   DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder,
-  DeepCW.Multi, DeepCW.BandMap, DeepCW.Log;
+  DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange;
 
 var
   Meta: TDeepCWMetadata;
@@ -789,6 +789,167 @@ begin
     Format('(%.1f ms)', [Elapsed]));
 end;
 
+{ ---- 受信文の読み取り（要件 FR-E.1・FR-E.2） ---- }
+
+{ 位置が受信文と本当に合っているかを、文字を切り出して確かめます。番号を目視で
+  数えると、数え間違いが試験そのものを無意味にします。
+  Checks a span by cutting the characters out of the transcript. Counting indices
+  by eye would make the test itself meaningless if the count were wrong. }
+function TextAt(const Chars: TDecodedChars; Span: TExchangeSpan): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  if Span.First < 0 then
+    Exit;
+  for I := Span.First to Span.Last do
+    Result := Result + Chars[I].Text;
+end;
+
+procedure TestExchange;
+var
+  Chars: TDecodedChars;
+  Ex: TExchange;
+  I, Repeats: Integer;
+  Long_: string;
+  Started: TDateTime;
+  Elapsed: Double;
+begin
+  WriteLn('DeepCW.Exchange');
+
+  { 交信でいちばんよく現れる形。相手は DE の後ろです。
+    The commonest shape on the air; the station is the one after DE. }
+  Chars := CharsOf('JA1ABC DE JH2XYZ UR 599 599 QTH NAGOYA', 0);
+  Ex := ReadExchange(Chars);
+  Check('DE の直後を相手にする', Ex.Callsign = 'JH2XYZ', Ex.Callsign);
+  Check('符号を 2 つとも見つける', Length(Ex.Callsigns) = 2,
+    Format('(%d)', [Length(Ex.Callsigns)]));
+  Check('選んだ符号の位置が合っている',
+    TextAt(Chars, Ex.Callsigns[Ex.Chosen]) = 'JH2XYZ',
+    TextAt(Chars, Ex.Callsigns[Ex.Chosen]));
+  Check('相手でないほうの位置も合っている',
+    TextAt(Chars, Ex.Callsigns[0]) = 'JA1ABC', TextAt(Chars, Ex.Callsigns[0]));
+  Check('RST を読む', Ex.Rst.Text = '599', Ex.Rst.Text);
+  Check('RST の位置が合っている', TextAt(Chars, Ex.Rst) = '599',
+    TextAt(Chars, Ex.Rst));
+
+  { 最後の語を採る規則なら TU の後ろの局を相手にしてしまいます。ここが、交信
+    モードと待機モードで規則を揃えた理由そのものです。
+    A last-wins rule would take the station after TU. This case is exactly why
+    the contact mode and the waiting mode were put on one rule. }
+  Chars := CharsOf('CQ DE JH2XYZ K TU JA1ABC', 0);
+  Ex := ReadExchange(Chars);
+  Check('末尾に別の局が出ても DE の後ろを採る', Ex.Callsign = 'JH2XYZ',
+    Ex.Callsign);
+
+  { DE が無ければ、いちばん多く出たもの。 }
+  Chars := CharsOf('JH2XYZ JH2XYZ JA1ABC', 0);
+  Ex := ReadExchange(Chars);
+  Check('DE が無ければ最も多いものを採る', Ex.Callsign = 'JH2XYZ', Ex.Callsign);
+  Check('何回出たかを数えている', Ex.Sightings = 2,
+    Format('(%d)', [Ex.Sightings]));
+
+  { 1 回しか出ていないことが分かること。断定して見せないための根拠です。 }
+  Chars := CharsOf('CQ DE JH2XYZ K', 0);
+  Ex := ReadExchange(Chars);
+  Check('1 回きりなら 1 と分かる', Ex.Sightings = 1, Format('(%d)', [Ex.Sightings]));
+
+  { 形の壊れた語は符号にしません（要件 FR-K 第 1 段）。 }
+  Chars := CharsOf('CQ DE J1ADC K', 0);
+  Ex := ReadExchange(Chars);
+  Check('形の壊れた語は符号にしない', Length(Ex.Callsigns) = 0,
+    Format('(%d)', [Length(Ex.Callsigns)]));
+  Check('符号が無ければ選ばない', Ex.Chosen < 0, Format('(%d)', [Ex.Chosen]));
+
+  { 受入基準そのもの: 国内の前置符字を認識すること（要件 FR-E.1）。 }
+  Chars := CharsOf('JA1ABC JS1ABC 7K1ABC 7N1ABC 8J1ABC 8N1ABC', 0);
+  Ex := ReadExchange(Chars);
+  Check('JA〜JS・7J〜7N・8J・8N を拾う', Length(Ex.Callsigns) = 6,
+    Format('(%d)', [Length(Ex.Callsigns)]));
+
+  { 附加符号が付いていても符号です。 }
+  Chars := CharsOf('CQ DE 7K1TUV/1 K', 0);
+  Ex := ReadExchange(Chars);
+  Check('附加符号が付いた符号も拾う', Ex.Callsign = '7K1TUV/1', Ex.Callsign);
+
+  { 位置は語の両端を含み、空白を含みません。 }
+  Chars := CharsOf('DE JH2XYZ K', 0);
+  Ex := ReadExchange(Chars);
+  Check('位置の先頭が語の先頭', Ex.Callsigns[0].First = 3,
+    Format('(%d)', [Ex.Callsigns[0].First]));
+  Check('位置の末尾が語の末尾', Ex.Callsigns[0].Last = 8,
+    Format('(%d)', [Ex.Callsigns[0].Last]));
+
+  { RST の形。 }
+  Check('599 は RST', IsRst('599'));
+  Check('579 は RST', IsRst('579'));
+  Check('5NN は RST', IsRst('5NN'));
+  Check('339 は RST', IsRst('339'));
+  Check('100 は RST でない（強度 0 は無い）', not IsRst('100'));
+  Check('590 は RST でない（音調 0 は無い）', not IsRst('590'));
+  Check('699 は RST でない（了解度 6 は無い）', not IsRst('699'));
+  Check('NNN は RST でない（了解度 9 は無い）', not IsRst('NNN'));
+  Check('EEE は RST でない（訂正の合図）', not IsRst('EEE'));
+  Check('5999 は RST でない（4 文字）', not IsRst('5999'));
+  Check('59 は RST でない（2 文字）', not IsRst('59'));
+  Check('空は RST でない', not IsRst(''));
+
+  { UR の直後を優先します。 }
+  Chars := CharsOf('599 DE JH2XYZ UR 449 K', 0);
+  Ex := ReadExchange(Chars);
+  Check('UR の直後の RST を採る', Ex.Rst.Text = '449', Ex.Rst.Text);
+
+  { コンテストでは RST のあとに連続番号が続きます。番号のほうが後ろにあっても、
+    連なりの先頭へ戻って RST を採ります（要件 FR-I.5 で効きます）。
+    In a contest the serial follows the report; stepping back to the start of the
+    run takes the report even though the serial comes later. }
+  Chars := CharsOf('DE JH2XYZ 599 123 K', 0);
+  Ex := ReadExchange(Chars);
+  Check('連続番号を RST と取り違えない', Ex.Rst.Text = '599', Ex.Rst.Text);
+
+  { RST が無ければ「無い」と言えること。599 で埋めてはいけません。 }
+  Chars := CharsOf('CQ CQ DE JH2XYZ K', 0);
+  Ex := ReadExchange(Chars);
+  Check('RST が無ければ無いと分かる', Ex.Rst.First < 0,
+    Format('(%d)', [Ex.Rst.First]));
+
+  { 空でも落ちません。 }
+  Chars := nil;
+  Ex := ReadExchange(Chars);
+  Check('空の受信文で落ちない', (Ex.Callsign = '') and (Length(Ex.Callsigns) = 0)
+    and (Ex.Chosen < 0) and (Ex.Rst.First < 0));
+  Chars := CharsOf('   ', 0);
+  Ex := ReadExchange(Chars);
+  Check('空白だけでも落ちない', Ex.Callsign = '');
+
+  { 画面の更新に間に合うこと。受信中は文字が届くたびに読み直します。 }
+  Long_ := '';
+  while Length(Long_) < 4000 do
+    Long_ := Long_ + 'CQ CQ DE JH2XYZ JH2XYZ K JA1ABC DE JH2XYZ UR 599 599 ';
+  SetLength(Long_, 4000);
+  Chars := CharsOf(Long_, 0);
+  Started := Now;
+  for Repeats := 1 to 20 do
+    Ex := ReadExchange(Chars);
+  Elapsed := MilliSecondsBetween(Now, Started) / 20;
+  WriteLn(Format('    4000 文字の読み取り: %.2f ms（符号 %d 個）',
+    [Elapsed, Length(Ex.Callsigns)]));
+  Check('4000 文字の読み取りが 10 ms 未満', Elapsed < 10,
+    Format('(%.2f ms)', [Elapsed]));
+
+  { 語の位置は、長い受信文でも受信文そのものと合っていること。目で数えられない
+    ところこそ、機械に確かめさせます。
+    The spans must agree with the transcript on a long text too: what cannot be
+    counted by eye is exactly what the machine should check. }
+  for I := 0 to High(Ex.Callsigns) do
+    if TextAt(Chars, Ex.Callsigns[I]) <> Ex.Callsigns[I].Text then
+      Break;
+  Check('長い受信文でも位置がすべて合っている',
+    (Length(Ex.Callsigns) > 0) and (I = High(Ex.Callsigns)) and
+    (TextAt(Chars, Ex.Callsigns[I]) = Ex.Callsigns[I].Text),
+    Format('(%d 個目)', [I]));
+end;
+
 { 交信 1 件を組み立てます。/ Builds one contact. }
 function ContactOf(const Call, On_, At_: string): TAdifRecord;
 begin
@@ -1089,6 +1250,7 @@ begin
       Answers.Free;
     end;
     TestContactLog;
+    TestExchange;
   finally
     Meta.Free;
   end;

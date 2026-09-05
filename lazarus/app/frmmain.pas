@@ -31,6 +31,7 @@ uses
   Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls, Spin,
   LCLType,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
+  DeepCW.Exchange,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign,
@@ -179,6 +180,20 @@ type
       worked and being unable to log it.** A call sign read from the transcript
       takes precedence once there is one. }
     FChosenCallsign: string;
+    { 受信文から読み取ったもの。文字が入れ替わったときにだけ作り直します。
+      画面の更新（0.2 秒ごと）のたびに読み直すと、読み取りの費用がそのまま
+      毎秒 5 回の負担になります。
+      What was read out of the transcript, rebuilt only when the characters
+      change. Re-reading it on every display refresh (five times a second) would
+      turn the cost of reading into a five-times-a-second burden. }
+    FExchange: TExchange;
+    { 一覧の中身。作るのは毎秒 1 回（RefreshBandMap）で、記録の問い合わせは
+      ここを見ます。24 局 4000 文字で 1 回 10.6 ms かかる処理なので、0.2 秒ごとに
+      作り直してはいけません。
+      The list's contents, built once a second (RefreshBandMap); the log side
+      reads them from here. Rebuilding costs 10.6 ms at 24 stations of 4000
+      characters, so it must not happen five times a second. }
+    FBandEntries: TBandEntries;
     FClockOrigin: TDateTime;
     { 記録へ渡し終えた確定文字の数。ここまでは書いたという印で、同じ文字を
       二度書かないために要ります。
@@ -250,6 +265,7 @@ type
     FRxDoubtStrength: TTrackBar;
     FRxFontSize: TSpinEdit;
     FRxCopy: TButton;
+    FRxCopyCall: TButton;
     FRxLevel: TProgressBar;
     FRxSignal: TLabel;
     FRxDevice: TComboBox;
@@ -330,6 +346,8 @@ type
       The call sign that could be logged now: from the transcript in the contact
       mode and from the chosen row in the waiting mode, or empty. }
     function CallsignToLog: string;
+    procedure ReadTranscript;
+    procedure RxCopyCallClick(Sender: TObject);
 
     { 受信のしかた（要件 FR-I.6・FR-J） / how reception is used }
     procedure RxModeChanged(Sender: TObject);
@@ -1008,6 +1026,13 @@ begin
   AddLabel(TextTools, '文字の大きさ', 424, 9);
   FRxFontSize := AddSpin(TextTools, 512, 5, 9, 32, 14, @RxDisplayChanged);
   FRxCopy := AddButton(TextTools, 'コピー', 604, 2, 90, @RxCopyClick);
+  { 呼出符号と信号報告だけを送る口です（要件 FR-E.2）。全文をコピーしてから
+    目で探して切り出すのでは「操作 1 回」になりません。
+    Sends just the call sign and the report (requirement FR-E.2). Copying the
+    whole transcript and then hunting through it by eye is not "one press". }
+  FRxCopyCall := AddButton(TextTools, '符号と RST', 700, 2, 130,
+    @RxCopyCallClick);
+  FRxCopyCall.Enabled := False;
 
   { 検索と聴き直しは、表示の設定とは別の行に置きます。同じ行に並べると、窓を
     狭くしたときに右端の操作が画面の外へ出て、押せなくなります（最小幅 900）。
@@ -1596,6 +1621,7 @@ begin
       FLiveChars := Thread.Chars;
       FRxTranscript.PendingFrom := MaxInt;
       FRxTranscript.SetChars(FLiveChars);
+      ReadTranscript;
       SetStatus('', '', Format('デコード完了: %d 文字', [Length(Thread.Chars)]));
     end;
   end;
@@ -1874,6 +1900,7 @@ begin
   if not EnsureDecoder then
     Exit;
   FLiveChars := nil;
+  ReadTranscript;
   FAppendMode := False;
   { ファイルの復号は受信をやり直すのと同じ扱いにします。前の受信の続きとして
     時刻を数えたままだと、出てくる文字（0 秒から始まる）と保管庫の音が食い違い、
@@ -2026,6 +2053,7 @@ end;
 procedure TMainForm.RxClearClick(Sender: TObject);
 begin
   FLiveChars := nil;
+  ReadTranscript;
   if FStream <> nil then
     FStream.Reset;
   if FMulti <> nil then
@@ -2063,6 +2091,52 @@ begin
     [FRxTranscript.CharCount]));
 end;
 
+{ 受信文を読み直し、見つけた呼出符号の位置を画面へ渡します（要件 FR-E.1）。
+
+  **文字が入れ替わったときにだけ**呼びます。読み取りは 4000 文字で 0.2 ms と
+  安いのですが、安いものを 0.2 秒ごとに繰り返す理由はありません。
+
+  Re-reads the transcript and hands the call sign positions to the display
+  (requirement FR-E.1).
+
+  Called **only when the characters change.** Reading costs 0.2 ms at 4000
+  characters, which is cheap -- but there is no reason to repeat something cheap
+  five times a second. }
+procedure TMainForm.ReadTranscript;
+begin
+  FExchange := ReadExchange(FLiveChars);
+  FRxTranscript.SetCallsigns(FExchange.Callsigns, FExchange.Chosen);
+end;
+
+{ 呼出符号と信号報告だけをクリップボードへ送ります（要件 FR-E.2）。
+
+  RST が聞こえていなければ符号だけを送ります。**聞こえていないものを 599 と
+  補って送ってはいけません。**記録に残るのは実際に受けた報告であり、機械が
+  埋めた値ではありません。
+
+  Puts just the call sign and the report on the clipboard (requirement FR-E.2).
+
+  With no RST heard, only the call sign is sent. **A report that was not heard
+  must never be filled in as 599:** what goes into the log is the report that
+  was actually received, not one the machine invented. }
+procedure TMainForm.RxCopyCallClick(Sender: TObject);
+var
+  Call, Sent: string;
+begin
+  Call := CallsignToLog;
+  if Call = '' then
+    Exit;
+  Sent := Call;
+  if FExchange.Rst.First >= 0 then
+    Sent := Sent + ' ' + FExchange.Rst.Text;
+  Clipboard.AsText := Sent;
+  if FExchange.Rst.First >= 0 then
+    SetStatus('', '', Format('%s をコピーしました。', [Sent]))
+  else
+    SetStatus('', '', Format('%s をコピーしました（RST は聞こえていません）。',
+      [Sent]));
+end;
+
 { ---- 交信の記録（要件 FR-E.3・FR-J.4） ---- }
 
 function TMainForm.LogFileName: string;
@@ -2080,55 +2154,72 @@ end;
 
 { いま記録に残せる呼出符号を探します。
 
-  交信モードでは受信テキストの**末尾のほうから**探します。交信の相手は直前に
-  送られてきた符号であって、何分も前のものではないためです。待機モードでは、
-  一覧で選ばれている行の符号を使います。
+  **利用者が指し示した符号があれば、それを使います。**一覧の行を選んだとき、
+  受信テキストの符号を押したときに決まります。機械の判断が気に入らないときに
+  直せなければ、直せないものを見せているのと同じです。
+
+  指し示されていなければ、待機モードは一覧の行から、交信モードは受信文から
+  採ります。受信文から採る規則は DeepCW.Exchange が持つものと同じ、**DE の
+  直後を優先する規則**です。一覧と記録が別の規則で選ぶと、画面に出た符号と
+  記録した符号が食い違います。
 
   Finds the call sign that could be logged now.
 
-  In the contact mode the search runs **from the end** of the transcript: the
-  station being worked is the one that came in a moment ago, not one from minutes
-  back. In the waiting mode it is the call sign of the chosen row. }
+  **A call sign the operator pointed at wins**, whether by choosing a row in the
+  list or by pressing one in the received text. A judgement that cannot be
+  corrected is no better than one that cannot be seen.
+
+  With nothing pointed at, the waiting mode takes it from the chosen row and the
+  contact mode from the transcript, by the same rule DeepCW.Exchange holds --
+  **the one after DE.** Choosing by different rules in the list and in the log
+  would let the call sign on screen disagree with the call sign written down. }
 function TMainForm.CallsignToLog: string;
 var
-  Found: TCallsigns;
-  Entries: TBandEntries;
   I: Integer;
 begin
   Result := '';
+  if FChosenCallsign <> '' then
+    Exit(FChosenCallsign);
   if FMode = rmWatch then
   begin
-    if (FMulti = nil) or (FRxBandMap.SelectedId = 0) then
+    if FRxBandMap.SelectedId = 0 then
       Exit;
-    Entries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
-      @WorkedBefore);
-    for I := 0 to High(Entries) do
-      if (Entries[I].Id = FRxBandMap.SelectedId) and
-         (Entries[I].Trust >= ctAgreed) then
-        Exit(Entries[I].Callsign);
+    for I := 0 to High(FBandEntries) do
+      if (FBandEntries[I].Id = FRxBandMap.SelectedId) and
+         (FBandEntries[I].Trust >= ctAgreed) then
+        Exit(FBandEntries[I].Callsign);
     Exit;
   end;
-  Found := ExtractCallsigns(FRxTranscript.AsText);
-  if Length(Found) > 0 then
-    Exit(Found[High(Found)].Text);
-  Result := FChosenCallsign;
+  Result := FExchange.Callsign;
 end;
 
 procedure TMainForm.UpdateLogInfo;
 var
-  Call: string;
+  Call, Note: string;
 begin
   if FRxWorked = nil then
     Exit;
   Call := CallsignToLog;
   FRxWorked.Enabled := Call <> '';
+  FRxCopyCall.Enabled := Call <> '';
+  { 1 度しか聞こえていない符号は、そうと添えます。同じ顔で出すと、2 度一致した
+    ものと見分けが付きません（要件 FR-J.7 と同じ考え）。手で指したものには
+    付けません。利用者が見て決めたものだからです。
+    A call sign heard only once says so. Presented with the same face, it would
+    be indistinguishable from one confirmed twice (the reasoning of requirement
+    FR-J.7). A call sign the operator pointed at carries no such note: they
+    looked at it and decided. }
+  Note := '';
+  if (FChosenCallsign = '') and (FMode = rmContact) and
+     (FExchange.Sightings = 1) then
+    Note := '（1 回だけ）';
   if Call = '' then
     FRxLogInfo.Caption := '相手の符号が読めたら記録できます'
   else if WorkedBefore(Call) then
-    FRxLogInfo.Caption := Format('%s（%s に交信済み）',
-      [Call, FLog.LastWorkedOn(Call)])
+    FRxLogInfo.Caption := Format('%s%s（%s に交信済み）',
+      [Call, Note, FLog.LastWorkedOn(Call)])
   else
-    FRxLogInfo.Caption := Call;
+    FRxLogInfo.Caption := Call + Note;
   if FSetLogInfo <> nil then
     FSetLogInfo.Caption := Format('%d 件 / %s', [FLog.Count, FLog.FileName]);
 end;
@@ -2162,6 +2253,12 @@ begin
     SetStatus('', '', StatusLine(FLog.LastError));
     Exit;
   end;
+  { 記録したら、指し示していた符号は用済みです。持ち越すと、次の局を読み始めても
+    記録の候補が前の相手のままになります。
+    Once recorded, the pointed-at call sign has served its purpose; carried over,
+    the candidate to log would stay the previous station even as the next one
+    starts coming in. }
+  FChosenCallsign := '';
   UpdateLogInfo;
   FBandMapAt := 0;
   RefreshBandMap;
@@ -2278,6 +2375,7 @@ begin
   FJournalled := 0;
   FClockOrigin := 0;
   FLiveChars := nil;
+  ReadTranscript;
   FRxTranscript.Clear;
   FRxBandMap.Clear;
   { 一覧へ戻るなら、覚えていた符号は用済みです。持ち越すと、別の局を選ぶまで
@@ -2286,6 +2384,10 @@ begin
     over it would stand as the candidate to log until another is chosen. }
   if FMode = rmWatch then
     FChosenCallsign := '';
+  { 一覧の控えも捨てます。残しておくと、消えた一覧の中身で記録の相手が決まります。
+    The cached list goes too: kept, it would decide who to log from a list that
+    is no longer on screen. }
+  FBandEntries := nil;
 
   FRxTranscript.Visible := FMode = rmContact;
   FRxBandMap.Visible := FMode = rmWatch;
@@ -2315,26 +2417,30 @@ end;
   (requirement FR-J.3), in one gesture. }
 procedure TMainForm.RxStationChosen(Sender: TObject; Id: Int64; Hz: Double);
 var
-  Entries: TBandEntries;
+  Picked: string;
   I: Integer;
 begin
-  { 移る前に、選んだ行の呼出符号を控えます。ApplyMode が一覧を消すので、
-    あとからでは引けません。
-    The chosen row's call sign is taken before the move: ApplyMode clears the
-    list, and it could not be read afterwards. }
-  FChosenCallsign := '';
-  if FMulti <> nil then
-  begin
-    Entries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
-      @WorkedBefore);
-    for I := 0 to High(Entries) do
-      if (Entries[I].Id = Id) and (Entries[I].Trust >= ctAgreed) then
-        FChosenCallsign := Entries[I].Callsign;
-  end;
+  { 選んだ行の呼出符号を控えます。作り直さずに控えの一覧から引くのは、速いから
+    だけではありません。**利用者が押した行に出ていた符号そのもの**を採るため
+    です。作り直すと、押してから移るまでの間に届いた文字で別の符号に変わり得ます。
+    The chosen row's call sign is taken from the list already built, and not
+    only because that is faster: it is **the call sign that was on the row the
+    operator pressed.** Rebuilding could yield a different one, from characters
+    that arrived between the press and the move. }
+  Picked := '';
+  for I := 0 to High(FBandEntries) do
+    if (FBandEntries[I].Id = Id) and (FBandEntries[I].Trust >= ctAgreed) then
+      Picked := FBandEntries[I].Callsign;
   FRxWaterfall.TuneHz := Hz;
   FRxMode.ItemIndex := 0;
   FMode := rmContact;
   ApplyMode;
+  { 控えた符号を渡すのは最後です。同調も切り替えも、指し示した符号を消す側
+    なので、先に渡すと消されます。
+    The remembered call sign is handed over last: both the tuning and the mode
+    switch clear a pointed-at call sign, so handing it over earlier would lose
+    it. }
+  FChosenCallsign := Picked;
   UpdateLogInfo;
   if FStream <> nil then
     FStream.TuneHz := FRxWaterfall.TuneHz;
@@ -2354,9 +2460,13 @@ begin
   if MilliSecondsBetween(Now, FBandMapAt) < 1000 then
     Exit;
   FBandMapAt := Now;
-  FRxBandMap.SetEntries(
-    BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds, @WorkedBefore),
-    FMulti.ElapsedSeconds);
+  { 作った一覧は控えておきます。記録の側が同じものを作り直すと、10.6 ms の
+    処理が毎秒 5 回になります（dsp_check の実測）。
+    The list just built is kept: having the log side rebuild the same thing
+    would run a 10.6 ms job five times a second (measured in dsp_check). }
+  FBandEntries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
+    @WorkedBefore);
+  FRxBandMap.SetEntries(FBandEntries, FMulti.ElapsedSeconds);
 end;
 
 { ---- 検索（要件 FR-B.5） / search (requirement FR-B.5) ---- }
@@ -2621,8 +2731,29 @@ begin
      Trunc(GotFrom) div 60, Trunc(GotFrom) mod 60, GotTo - GotFrom]);
 end;
 
+{ 押された文字が呼出符号の上なら、その符号を相手として採ります（要件 FR-E.1）。
+
+  機械は DE の直後を相手と見ますが、外すことがあります。**外したときに指し直せる
+  ことが、強調して見せることの意味です。**符号の上でなければ、これまでどおり
+  聴き直しの起点になるだけです。
+
+  A press landing on a call sign adopts it as the station being worked
+  (requirement FR-E.1).
+
+  The machine takes the one after DE, and it can be wrong. **Being able to point
+  at the right one is what underlining them is for.** A press elsewhere still
+  just sets where a replay starts. }
 procedure TMainForm.RxCharChosen(Sender: TObject; Index: Integer);
+var
+  Which: Integer;
 begin
+  Which := FRxTranscript.CallsignAt(Index);
+  if Which >= 0 then
+  begin
+    FChosenCallsign := FRxTranscript.CallsignSpan(Which).Text;
+    FRxTranscript.SetCallsigns(FExchange.Callsigns, Which);
+    UpdateLogInfo;
+  end;
   ReplayFrom(Index);
   UpdateReplayInfo;
 end;
@@ -2733,6 +2864,19 @@ begin
     say it well enough (requirement FR-D.7). }
   if FRxWaterfall.AutoTuned then
     Exit;
+
+  { 自分で同調をやり直したなら、別の信号へ移ったということです。指し示していた
+    符号はもう相手ではありません。**持ち越すと、画面には別の局の文字が流れて
+    いるのに、記録の釦は前の局を出し続けます。**
+    A deliberate retune means a move to a different signal, so a call sign that
+    was pointed at is no longer the station being worked. **Carried over, the
+    log button would keep offering the previous station while another one's text
+    runs down the screen.** }
+  if FChosenCallsign <> '' then
+  begin
+    FChosenCallsign := '';
+    UpdateLogInfo;
+  end;
 
   { 求めた音程と実際の同調先が離れていれば、寄せたことになります。左端側を
     選ばれると求めた値は 0 に近づくため、0 を除外してはいけません。
@@ -2859,6 +3003,7 @@ begin
   FLiveChars := All;
   FRxTranscript.PendingFrom := ConfirmedCount;
   FRxTranscript.SetChars(All);
+  ReadTranscript;
   { 表示を更新したところで、確定した分を記録へ回します。画面と記録が同じ
     ところから出ていれば、食い違いません（要件 FR-B.6）。
     With the display updated, the newly confirmed text goes to the journal. Both

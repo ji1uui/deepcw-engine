@@ -22,7 +22,7 @@ interface
 
 uses
   SysUtils, Classes, Math, Controls, Graphics, Forms, StdCtrls, LCLType,
-  DeepCW.Types, DeepCW.Decoder, ViewColors;
+  DeepCW.Types, DeepCW.Decoder, DeepCW.Exchange, ViewColors;
 
 type
   { 文字がひとつ選ばれたことを知らせます。番号は文字配列上の位置です。
@@ -68,6 +68,13 @@ type
     FMatches: array of Integer;
     FMatchLength: Integer;
     FCurrentMatch: Integer;
+    { 呼出符号の位置と、そのうち相手と見たものの番号（要件 FR-E.1）。位置は
+      昇順に並び、重なりません。語を切って作るためです。
+      Where the call signs are, and which one was taken for the station being
+      worked (requirement FR-E.1). The spans are ascending and never overlap,
+      being made by splitting at spaces. }
+    FCallsigns: TExchangeSpans;
+    FChosenCallsign: Integer;
     procedure SetSelected(Value: Integer);
     procedure Rescan;
     procedure GoToMatch(Which: Integer);
@@ -125,6 +132,15 @@ type
       Fetches one character by index, returning False when out of range. }
     function CharItem(Index: Integer; out Value: TDecodedChar): Boolean;
 
+    { その文字が画面のどこに描かれるか。IndexAt の逆です。見えていない文字と
+      範囲外には空の矩形を返します。桁の割り付けを外から測れるようにするため、
+      寸法を個別に公開せずこれ 1 つにしています。
+      Where the character is drawn, the inverse of IndexAt. A character that is
+      not on screen, or an index out of range, gives an empty rectangle. It is
+      one method rather than separate metrics so that the column layout can be
+      measured from outside without exposing its parts. }
+    function CharRect(Index: Integer): TRect;
+
     { 選ばれている文字を、画面に見えるところまで送ります。
       Scrolls the chosen character into view. }
     procedure ScrollToSelected;
@@ -148,6 +164,30 @@ type
     function MatchCount: Integer;
     function CurrentMatch: Integer;
     property SearchTerm: string read FNeedle;
+
+    { 見つかった呼出符号の位置を渡します（要件 FR-E.1）。
+
+      形の検査も、どれを相手と見るかの判断も、この部品は行いません。**描くのが
+      仕事で、決めるのは呼ぶ側です。**そうしておくと、規則を直したときに画面を
+      触らずに済み、画面を試すのに復号器が要りません。
+
+      Hands over where the call signs were found (requirement FR-E.1).
+
+      This control neither checks the shape nor decides which one is the station
+      being worked: **its job is to draw, the caller's is to decide.** Keeping it
+      that way means a change to the rule does not touch the display, and testing
+      the display needs no decoder. }
+    procedure SetCallsigns(const Spans: TExchangeSpans; Chosen: Integer);
+
+    { その文字がどの呼出符号の中にあるか。無ければ -1 を返します。押された場所が
+      符号の上かを、呼ぶ側が判断するために使います。
+      Which call sign the character falls inside, or -1. The caller uses it to
+      tell whether a press landed on one. }
+    function CallsignAt(Index: Integer): Integer;
+    function CallsignCount: Integer;
+    function CallsignSpan(Which: Integer): TExchangeSpan;
+    { 相手と見た符号の番号。無ければ -1。/ The chosen call sign, or -1. }
+    property ChosenCallsign: Integer read FChosenCallsign;
 
     { 選ばれている文字。設定すると、その文字が枠で囲まれます。
       The chosen character; setting it draws a box around that character. }
@@ -187,6 +227,7 @@ begin
   FFollowTail := True;
   FPendingFrom := MaxInt;
   FSelected := -1;
+  FChosenCallsign := -1;
 
   FMeasure := TBitmap.Create;
   FMeasure.SetSize(1, 1);
@@ -362,6 +403,14 @@ begin
     later would never be found (requirement FR-B.5). }
   if FNeedle <> '' then
     Rescan;
+  { 文字が入れ替われば、前の文の符号の位置はもう当てになりません。呼ぶ側が
+    すぐ新しい位置を渡しますが、渡されなかったときに**古い位置へ下線を引く**より
+    は、何も引かないほうが正直です。
+    New characters make the previous text's spans meaningless. The caller hands
+    over fresh ones immediately, but if it ever did not, drawing nothing is more
+    honest than **underlining the old positions.** }
+  FCallsigns := nil;
+  FChosenCallsign := -1;
   Relayout;
   Invalidate;
 end;
@@ -376,6 +425,8 @@ begin
   FMatches := nil;
   FMatchLength := 0;
   FCurrentMatch := -1;
+  FCallsigns := nil;
+  FChosenCallsign := -1;
   Relayout;
   Invalidate;
 end;
@@ -516,6 +567,62 @@ end;
 { 描くのは画面に見えている文字だけなので、1 文字ごとに二分探索しても軽いままです。
   Only visible characters are painted, so a binary search per character stays
   cheap. }
+procedure TTranscriptView.SetCallsigns(const Spans: TExchangeSpans;
+  Chosen: Integer);
+begin
+  FCallsigns := Spans;
+  if (Chosen >= 0) and (Chosen <= High(FCallsigns)) then
+    FChosenCallsign := Chosen
+  else
+    FChosenCallsign := -1;
+  Invalidate;
+end;
+
+function TTranscriptView.CallsignCount: Integer;
+begin
+  Result := Length(FCallsigns);
+end;
+
+function TTranscriptView.CallsignSpan(Which: Integer): TExchangeSpan;
+begin
+  if (Which >= 0) and (Which <= High(FCallsigns)) then
+    Result := FCallsigns[Which]
+  else
+  begin
+    Result.First := -1;
+    Result.Last := -1;
+    Result.Text := '';
+  end;
+end;
+
+{ 位置は昇順で重ならないので、二分探索で足ります。描画は 1 文字ごとにこれを
+  呼ぶため、線形に探すと画面いっぱいの文字数 × 符号数になります。
+  The spans ascend and never overlap, so a binary search suffices. Painting
+  calls this once per character, and a linear scan would cost a screenful of
+  characters times the number of call signs. }
+function TTranscriptView.CallsignAt(Index: Integer): Integer;
+var
+  Low_, High_, Middle: Integer;
+begin
+  Result := -1;
+  if Length(FCallsigns) = 0 then
+    Exit;
+  Low_ := 0;
+  High_ := High(FCallsigns);
+  while Low_ <= High_ do
+  begin
+    Middle := (Low_ + High_) div 2;
+    if FCallsigns[Middle].First > Index then
+      High_ := Middle - 1
+    else
+      Low_ := Middle + 1;
+  end;
+  { High_ は「開始が Index 以下」の最後の符号を指します。
+    High_ now points at the last span starting at or before Index. }
+  if (High_ >= 0) and (Index <= FCallsigns[High_].Last) then
+    Result := High_;
+end;
+
 function TTranscriptView.MatchAt(Index: Integer): Integer;
 var
   Low_, High_, Middle: Integer;
@@ -550,6 +657,29 @@ begin
     Result := 0
   else
     Result := FCurrentMatch + 1;
+end;
+
+function TTranscriptView.CharRect(Index: Integer): TRect;
+var
+  LineIndex, Row: Integer;
+begin
+  Result := Rect(0, 0, 0, 0);
+  if (Index < 0) or (Index >= Length(FChars)) or (FCharWidth <= 0) then
+    Exit;
+  for LineIndex := FTopLine to High(FLines) do
+  begin
+    Row := LineIndex - FTopLine;
+    if Row >= VisibleLines then
+      Exit;
+    if (Index >= FLines[LineIndex].First) and (Index <= FLines[LineIndex].Last) then
+    begin
+      Result.Left := (Index - FLines[LineIndex].First) * FCharWidth + 4;
+      Result.Top := Row * FLineHeight + 1;
+      Result.Right := Result.Left + FCharWidth;
+      Result.Bottom := Result.Top + FLineHeight;
+      Exit;
+    end;
+  end;
 end;
 
 function TTranscriptView.IndexAt(X, Y: Integer): Integer;
@@ -622,7 +752,8 @@ end;
 
 procedure TTranscriptView.Paint;
 var
-  LineIndex, Index, Row, X, Y, Hit: Integer;
+  LineIndex, Index, Row, X, Y, Hit, Call, Rule: Integer;
+  Ink: TColor;
 begin
   Canvas.Brush.Color := Color;
   Canvas.Brush.Style := bsSolid;
@@ -668,15 +799,60 @@ begin
         Canvas.Brush.Style := bsClear;
         Canvas.Rectangle(X - 1, Y - 1, X + FCharWidth + 1, Y + FLineHeight);
       end;
+      { **`Hit >= 0` を落としてはいけません。**一致が無いとき Hit も FCurrentMatch
+        も -1 なので、条件だけでは「等しい」が成り立ち、どこも塗っていない文字まで
+        地と対になる色で描いてしまいます。そうなると確からしさの濃淡（要件
+        FR-B.4・FR-C.2）が働かず、配色によっては文字が地に沈みます。**検索を
+        一度使って消したあとに起きます**（初期値の 0 では起きないため、使うまで
+        表に出ません）。
+
+        **The `Hit >= 0` must not be dropped.** With no hits both Hit and
+        FCurrentMatch are -1, so the equality alone holds for characters with no
+        background at all, and they would be drawn in the colour meant to pair
+        with a filled one. The certainty shading (requirements FR-B.4, FR-C.2)
+        then does nothing, and on some palettes the text sinks into the
+        background. **It happens once a search has been used and cleared**: the
+        initial value of zero hides it until then. }
+      if (Hit >= 0) and (Hit = FCurrentMatch) then
+        { 濃く塗った上には、地と対になる色で描かないと読めません。
+          Text on the strong background needs the colour that pairs with it. }
+        Ink := clHighlightText
+      else
+        Ink := ShadeFor(Index);
       if FChars[Index].Text <> ' ' then
       begin
-        if Hit = FCurrentMatch then
-          { 濃く塗った上には、地と対になる色で描かないと読めません。
-            Text on the strong background needs the colour that pairs with it. }
-          Canvas.Font.Color := clHighlightText
-        else
-          Canvas.Font.Color := ShadeFor(Index);
+        Canvas.Font.Color := Ink;
         Canvas.TextOut(X, Y, FChars[Index].Text);
+      end;
+      { 呼出符号には下線を引きます（要件 FR-E.1）。色ではなく線で示すのは、
+        濃淡が確からしさを、塗りが検索の一致を既に使っているためです。3 つ目の
+        意味を色で足すと、色覚特性のある利用者に区別が残りません（NFR-5.4）。
+
+        相手と見た 1 つは太く引きます。**細いか太いかという形の違い**なので、
+        こちらも色に頼りません。文字と同じ色で引くため、確からしさの濃淡も
+        そのまま下線に乗ります。
+
+        Call signs are underlined (requirement FR-E.1). A line rather than a
+        colour, because shading already carries certainty and a filled
+        background already carries search hits: adding a third meaning in hue
+        would leave nothing to distinguish it for a colour-blind operator
+        (NFR-5.4).
+
+        The one taken for the station being worked is drawn thicker -- again a
+        difference in **shape, not hue.** Drawing in the text colour carries the
+        certainty shading onto the underline as well. }
+      Call := CallsignAt(Index);
+      if Call >= 0 then
+      begin
+        if Call = FChosenCallsign then
+          Rule := 2
+        else
+          Rule := 1;
+        Canvas.Pen.Color := Ink;
+        Canvas.Pen.Width := Rule;
+        Canvas.Line(X, Y + FLineHeight - Rule, X + FCharWidth,
+          Y + FLineHeight - Rule);
+        Canvas.Pen.Width := 1;
       end;
     end;
     Inc(Row);
