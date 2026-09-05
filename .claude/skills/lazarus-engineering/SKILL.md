@@ -1,80 +1,83 @@
 ---
-name: lazarus-engineering
-description: Lazarus / Free Pascal（Object Pascal）で書かれた無線通信アプリケーションの設計、実装、レビュー、検証、リリース判定を行うためのSkill。CW/RTTY/PSK/Olivia/FT8等のDSP・デコーダ、Windows/macOSクロスプラットフォーム対応、スレッド設計、状態遷移と時刻、ログ・設定のスキーマ互換性、Plugin/ABI、セキュリティとプライバシー、可観測性、UX、品質ゲートを扱う。ユーザーがLazarus、Free Pascal、Object Pascal、LCL、TThread、無線デコーダ、モデム、QSOログ、コンテストロガー、ハムログ、あるいはこれらのコードのレビューや設計相談に言及したら、「Skillを使って」と明示されなくても必ず使用する。
+description: Lazarus / Free Pascalでの調査、計画、実装、検証、レビュー、報告の共通手順。Object Pascalのリソース所有権、LCLとスレッド、テスト、git安全性、完了報告の形式を含む。Lazarus、Free Pascal、Object Pascal、LCL、TThread、.pas / .lpr / .lfm / .lpi ファイルの変更、レビュー、設計相談のときに使う。
+when_to_use: コードを読む前、変更方針を立てるとき、レビューを求められたとき、作業結果を報告するとき。
+allowed-tools: Bash(git status *) Bash(git diff *) Bash(git log *) Bash(fpc -i*) Bash(uname *)
 ---
 
-# Lazarus Radio Application Engineering
+# Lazarus Engineering
 
-## Mission
+## 現在の作業状態
 
-このアプリケーションの最上位目的は「復調器を実装すること」ではない。
-利用者が信号を見つけ、状況を理解し、適切に判断し、交信を成立させ、
-記録し、振り返り、学び、試行できることを支援する。
+- 変更ファイル: !`git status --short 2>&1 || true`
+- 差分規模: !`git diff --stat HEAD 2>&1 || true`
+- 直近コミット: !`git log --oneline -5 2>&1 || true`
+- コンパイラ: !`fpc -iV 2>&1 || true`
+- 実行環境: !`uname -srm 2>&1 || true`
 
-技術的最適化は、利用者価値、正しさ、安全性、可逆性、互換性を損なってはならない。
-
-## Target
-
-- Language: Object Pascal
-- IDE / Compiler: Lazarus 4.x / Free Pascal
-- Platforms: Windows / macOS
-- CPU architectures: x86_64 / ARM64 where supported
-- Baseline PC: Intel N150相当
-- Architecture: UI / Application / Modem / DSP / Audio-IQ
-- Cross-cutting foundations: X Computing / Y Intelligent Processing / Z Quality
-
-## Permanent Rules
-
-これらは下位のreference文書より優先する。
-
-- 実コード、caller/callee、test、build設定、architecture docsを確認してから変更する。
-- 存在しないAPI、型、unit、設定、仕様を推測しない。
-- 要求に必要な最小範囲を変更する。
-- 無関係なrefactor、整形、改名を混在させない。
-- Audio/IQなどの高頻度データをEvent Busへ流さない。
-- DSP hot pathにblocking I/O、UI同期、不要なheap allocation、長時間lockを追加しない。
-- Worker threadからLCL UIを直接操作しない。
-- Raw Observation / Physical Confidence / Decoder Consensus / FEC Evidence / Context Supportを混同しない。
-- Auto/AI/Context補正は利用者がReject / Undo / Restore Rawできる設計を優先する。
-- Receiveはfail-soft、Transmitはfail-safeを基本方針とする。
-- OS依存性は散在させず、Platform Boundaryへ限定する。
-- データ形式・Plugin API・外部ABIの互換性を意識する。
-- 実行していない検証を成功と報告しない。
-- 現在の実行OSだけで成功しても cross-platform verified と報告しない。
+上の未コミット変更は利用者の作業中の内容である。破棄も上書きもしない。
+`fpc -iV` が空、または実行環境が想定と異なる場合、ビルド結果を cross-platform verified と報告しない。
 
 ## Operating Model
 
 > Inspect → Model → Plan → Implement → Verify → Review → Report
 
-作業の性質に応じて、以下のreferenceを読んでから進める。
-常に `references/core-engineering.md` を最初に読むこと。それ以外は該当するものだけを読む。
+## Inspect
 
-| 状況 | 読むreference |
-| --- | --- |
-| すべての変更（必読） | `references/core-engineering.md` |
-| OS差異、ビルド、パス、フォント、署名、ARM64 | `references/cross-platform.md` |
-| 復調、フィルタ、AGC、同期、FEC、デコーダ、モデム | `references/radio-dsp.md` |
-| 機能設計、UI、自動化、AI補正、エラー提示 | `references/user-experience.md` |
-| 状態遷移、イベント順序、時刻、クロック、同期 | `references/state-and-time.md` |
-| ログ、設定、キャッシュ、schema、Plugin API、ABI | `references/data-and-compatibility.md` |
-| ログ出力、診断、計測、再現、トラブルシュート | `references/observability.md` |
-| 認証情報、位置情報、送信制御、外部ライブラリ、telemetry | `references/security-and-privacy.md` |
-| リリース判定、パッケージング、Smoke Test | `references/release-quality.md` |
-| タスク定義の雛形が必要なとき | `references/task-prompt-template.md` |
-| 製品固有仕様をどこに書くかの判断 | `references/architecture-docs.md`, `references/quality-model.md` |
+対象unit、caller/callee、関連型、test、build設定、類似実装を確認する。
+事実・推測・提案を区別して述べる。
 
-## Quality Gates
+## Model
 
-変更内容に応じ、以下を組み合わせて検証する。
+変更対象について最低限以下を把握する。
 
-Build / Unit Test / Integration Test / Golden WAV / Replay / Performance /
-Cross-platform / UX Scenario / Compatibility / Security / Privacy / Packaging / Smoke Test
+- responsibility
+- input / output
+- ownership / lifetime
+- thread context
+- state transitions
+- failure boundary
+- externally observable behavior
 
-未実施項目は **NOT VERIFIED** と明記する。実行していない検証を成功と報告しない。
+## Scope Control
+
+- 要求に必要な最小変更
+- 将来用途だけの抽象化禁止
+- 新依存は必要性、license、platform、maintenance、security、performanceを確認
+
+## Object Pascal
+
+- resource ownershipは原則 try..finally
+- try..exceptは回復境界で使用し、握りつぶさない
+- interface公開範囲を最小化
+- Integer / Int64 / NativeInt / Single / Double / signednessを確認
+- thread終了前の参照先破棄を防ぐ
+- FreeAndNilを機械的に使用しない
+
+## UI / Threading
+
+- UI threadをblockしない
+- workerからLCLを直接操作しない
+- 原則 TThread.Queue
+- lock中のI/O、UI通知、未知callbackを避ける
+- subscriber例外を障害分離する
+
+## Testing
+
+1. changed-unit test
+2. related integration test
+3. build
+4. regression
+5. diff review
+
+testを通すためにassertionを弱めたりskipしたりしない。
+
+## Git Safety
+
+既存の未commit変更を保護する。
+`reset --hard`、`clean -fd`、force push等を無断で行わない。
+要求されていないcommitを行わない。
 
 ## Completion Report
-
-作業の最後に、以下の見出しで報告する。
 
 - Changes
 - Design / Root cause
@@ -85,10 +88,14 @@ Cross-platform / UX Scenario / Compatibility / Security / Privacy / Packaging / 
 - Remaining risks
 - Not verified
 
-## Documentation Rule
+実行していない検証は **NOT VERIFIED** と明記する。
 
-- Skill = どう考え、どう実装・検証するか
-- Architecture Docs = この製品で何を実現するか
-- Task Prompt = 今回何を変えるか
+## References
 
-製品固有で変化する仕様はSkillに書かず、プロジェクト側の `docs/architecture/` に置く。
+必要になったときだけ読む。
+
+- 状態遷移、イベント順序、時刻、クロック → [references/state-and-time.md](references/state-and-time.md)
+- ログ出力、診断、計測、再現性 → [references/observability.md](references/observability.md)
+- 機能設計、UI、自動化、AI補正、エラー提示 → [references/user-experience.md](references/user-experience.md)
+- タスク定義の雛形 → [references/task-prompt-template.md](references/task-prompt-template.md)
+- 製品固有仕様の置き場所 → [references/architecture-docs.md](references/architecture-docs.md), [references/quality-model.md](references/quality-model.md)
