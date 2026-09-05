@@ -1,18 +1,7 @@
 ---
-description: QSOログ、設定、キャッシュ、Replay metadata、Plugin manifest、event schema、外部ABIの互換性とschema evolution。migration、破損耐性、決定性、設定項目の管理。
+name: lazarus-data-compat
+description: QSOログ、設定、キャッシュ、Replay metadata、Plugin manifest、event schema、外部ABIの互換性とschema evolution。migration、破損耐性、決定性、設定項目の管理。 保存形式、設定項目、ログファイル、ADIF、シリアライズ、schema version、migration、plugin API、DLL・dylibの公開インターフェースを変更するとき。 保存形式や境界の定義（schema・migrat・serial・config・settings・log・adif・plugin を名前に含むファイル）を読む・変更するときに使う。
 when_to_use: 保存形式、設定項目、ログファイル、ADIF、シリアライズ、schema version、migration、plugin API、DLL・dylibの公開インターフェースを変更するとき。
-paths:
-  - "**/*schema*"
-  - "**/*migrat*"
-  - "**/*config*"
-  - "**/*setting*"
-  - "**/*persist*"
-  - "**/*serial*"
-  - "**/*adif*"
-  - "**/*qso*"
-  - "**/*log*.pas"
-  - "**/*plugin*"
-user-invocable: true
 ---
 
 # Data & Compatibility

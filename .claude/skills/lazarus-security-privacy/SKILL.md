@@ -1,18 +1,7 @@
 ---
-description: 認証情報の取り扱い、コールサインや位置情報などのプライバシー、telemetry、Plugin信頼境界、依存関係とサプライチェーン、Rig/CAT制御の送信安全性。Receiveはfail-soft、Transmitはfail-safe。
+name: lazarus-security-privacy
+description: 認証情報の取り扱い、コールサインや位置情報などのプライバシー、telemetry、Plugin信頼境界、依存関係とサプライチェーン、Rig/CAT制御の送信安全性。Receiveはfail-soft、Transmitはfail-safe。 PTT、CAT制御、hamlib、送信系、APIキー、トークン、クラウド連携、telemetry、新規依存ライブラリの追加、plugin読み込みに触れるとき。 送信制御や資格情報に関わるファイル（rig・cat・ptt・hamlib・credential・token・telemetry・plugin を名前に含むファイル）を読む・変更するときに使う。
 when_to_use: PTT、CAT制御、hamlib、送信系、APIキー、トークン、クラウド連携、telemetry、新規依存ライブラリの追加、plugin読み込みに触れるとき。
-paths:
-  - "**/*rig*"
-  - "**/*cat*.pas"
-  - "**/*hamlib*"
-  - "**/*ptt*"
-  - "**/*transmit*"
-  - "**/*telemetry*"
-  - "**/*auth*"
-  - "**/*credential*"
-  - "**/*secret*"
-  - "**/*plugin*"
-user-invocable: true
 ---
 
 # Security & Privacy

@@ -1,18 +1,7 @@
 ---
-description: 無線DSP、モデム、デコーダの変更に適用する専門知識。Signal Contract、リアルタイム経路、hot pathの禁止事項、Evidence Model、受信状態推定、Algorithm Portfolio、Golden WAV、モード別（CW/RTTY/PSK/Olivia/FT8/FT4）の要点。
+name: lazarus-radio-dsp
+description: 無線DSP、モデム、デコーダの変更に適用する専門知識。Signal Contract、リアルタイム経路、hot pathの禁止事項、Evidence Model、受信状態推定、Algorithm Portfolio、Golden WAV、モード別（CW/RTTY/PSK/Olivia/FT8/FT4）の要点。 復調、フィルタ、AGC、同期、AFC、FEC、デコーダ、モデム、リングバッファ、FFT、サンプルレート、Golden WAVに触れるとき。 DSP・モデム・デコーダのファイル（dsp / modem / decoder ディレクトリ、demod・decode・modem・filter・fft・agc・afc を名前に含むファイル）を読む・変更するときに使う。
 when_to_use: 復調、フィルタ、AGC、同期、AFC、FEC、デコーダ、モデム、リングバッファ、FFT、サンプルレート、Golden WAVに触れるとき。
-paths:
-  - "**/dsp/**"
-  - "**/modem/**"
-  - "**/decoder/**"
-  - "**/*demod*"
-  - "**/*decode*"
-  - "**/*modem*"
-  - "**/*filter*"
-  - "**/*fft*"
-  - "**/*agc*"
-  - "**/*afc*"
-user-invocable: true
 ---
 
 # Radio / DSP

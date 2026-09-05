@@ -1,20 +1,7 @@
 ---
-description: Windows / macOS、x86_64 / ARM64の差異管理。Platform Boundary、Platform Matrix、ファイルシステムとUnicode、ネイティブライブラリ、オーディオデバイス、LCLのUI差異、CI Matrix、パッケージング。
+name: lazarus-cross-platform
+description: Windows / macOS、x86_64 / ARM64の差異管理。Platform Boundary、Platform Matrix、ファイルシステムとUnicode、ネイティブライブラリ、オーディオデバイス、LCLのUI差異、CI Matrix、パッケージング。 条件コンパイル、DLL / dylib、パス処理、DPI、IME、ダークモード、署名、notarization、ビルド設定、ARM64対応に触れるとき。 プラットフォーム依存のファイルやビルド設定（platform ディレクトリ、.lpi / .lpr / .cfg、win・mac・darwin・platform を名前に含むファイル）を読む・変更するときに使う。
 when_to_use: 条件コンパイル、DLL / dylib、パス処理、DPI、IME、ダークモード、署名、notarization、ビルド設定、ARM64対応に触れるとき。
-paths:
-  - "**/platform/**"
-  - "**/*.lpi"
-  - "**/*.lpk"
-  - "**/*.lpr"
-  - "**/*win*.pas"
-  - "**/*mswindows*"
-  - "**/*mac*.pas"
-  - "**/*darwin*"
-  - "**/*cocoa*"
-  - "**/*.plist"
-  - "**/*.iss"
-  - "**/Makefile"
-user-invocable: true
 ---
 
 # Cross-platform Engineering
