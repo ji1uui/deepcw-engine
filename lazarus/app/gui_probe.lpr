@@ -38,6 +38,9 @@ type
       Forces the image to be rebuilt on every paint, matching what a newly
       arrived row costs. }
     procedure Touch;
+    { 周波数から桁を引きます。試験のためだけの入口です。
+      Maps a frequency to a column; an entry point for the test alone. }
+    function ColumnFor(Hz: Double): Integer;
   end;
 
   { バンドマップの押下も、そのままでは外から呼べません。
@@ -100,6 +103,11 @@ end;
 procedure TProbeView.Touch;
 begin
   MarkImageStale;
+end;
+
+function TProbeView.ColumnFor(Hz: Double): Integer;
+begin
+  Result := FrequencyToX(Hz);
 end;
 
 procedure TProbeTranscript.Tap(X, Y: Integer);
@@ -396,6 +404,9 @@ var
   Ex: TExchange;
   Underlined, Marked, Thin, Thick, Y: Integer;
   Waiting: TWatchingFor;
+  Aligned: TDecodedChars;
+  Worst, Err, T, Fed: Double;
+  Step_, Shown_: Integer;
 
 begin
   OutDir := ParamStr(1);
@@ -422,7 +433,7 @@ begin
   Check('音声なしで描画できる', True);
 
   Audio := TestAudio(Rate);
-  View.PushSamples(Audio, Rate);
+  View.PushSamples(Audio, Rate, 0);
   Application.ProcessMessages;
   Check('標本化周波数を取り込む', View.SampleRate = Rate,
     Format('(%d)', [View.SampleRate]));
@@ -474,7 +485,7 @@ begin
   Check('右クリックで解除する', View.TuneHz = 0, Format('(%.1f Hz)', [View.TuneHz]));
 
   { 録音周波数が変わっても壊れないこと。/ It survives a change of rate. }
-  View.PushSamples(TestAudio(44100), 44100);
+  View.PushSamples(TestAudio(44100), 44100, 0);
   Application.ProcessMessages;
   Check('録音周波数の変更に耐える', View.SampleRate = 44100,
     Format('(%d)', [View.SampleRate]));
@@ -492,7 +503,7 @@ begin
   View.Tracking := True;
   View.TuneHz := 900;
   Watcher.Changes := 0;
-  View.PushSamples(SweptAudio(8000, 900, 1000, 12), 8000);
+  View.PushSamples(SweptAudio(8000, 900, 1000, 12), 8000, 0);
   Application.ProcessMessages;
   Check('動いた信号を追いかける', Abs(View.TuneHz - 1000) <= 60,
     Format('(%.1f Hz、目標 1000 Hz)', [View.TuneHz]));
@@ -506,7 +517,7 @@ begin
   View.Clear;
   View.Tracking := False;
   View.TuneHz := 900;
-  View.PushSamples(SweptAudio(8000, 900, 1000, 12), 8000);
+  View.PushSamples(SweptAudio(8000, 900, 1000, 12), 8000, 0);
   Application.ProcessMessages;
   Check('追跡を切れば動かない', Abs(View.TuneHz - 900) < 0.01,
     Format('(%.1f Hz)', [View.TuneHz]));
@@ -518,7 +529,7 @@ begin
   View.Clear;
   View.Tracking := True;
   View.TuneHz := 900;
-  View.PushSamples(NoiseOnly(8000, 12), 8000);
+  View.PushSamples(NoiseOnly(8000, 12), 8000, 0);
   Application.ProcessMessages;
   Check('無信号では動かない', Abs(View.TuneHz - 900) < 0.01,
     Format('(%.1f Hz)', [View.TuneHz]));
@@ -531,7 +542,7 @@ begin
     BGRABitmap turns on whether this is slow; if the plain LCL suffices there
     is no reason to add to what has to be distributed
     (requirements NFR-1.5, NFR-8). }
-  View.PushSamples(TestAudio(8000), 8000);
+  View.PushSamples(TestAudio(8000), 8000, 0);
   Application.ProcessMessages;
   Shot := TBitmap.Create;
   try
@@ -559,6 +570,182 @@ begin
     A shack runs for hours and the characters only accumulate. **If drawing and
     copying grow with what has accumulated, the display gets slower the longer
     it is used.** This is timed rather than assumed (requirement NFR-1.5). }
+  { ── 復号文字の時刻整列（要件 FR-D.6）──
+    受入基準は「位置誤差 100 ms 以内」。**時刻を画面の高さへ写し、そこから時刻へ
+    戻して、元と何秒ずれるかで測ります。**画素を数えないのは、この部品の
+    `PaintTo` が中身を描かないためです（付録 S.7）。
+
+    Aligning the decoded characters in time (requirement FR-D.6). The acceptance
+    is a position error within 100 ms: **a time is mapped to a height and back,
+    and the gap is measured.** No pixels are counted, because this control's
+    PaintTo draws no content (appendix S.7). }
+  WriteLn;
+  WriteLn('文字の時刻整列の検証 / time alignment checks');
+  View.Clear;
+  { 10 秒ぶんの音を、実際の受信と同じように 0.2 秒ずつ渡します。時刻は
+    呼び出し側が数えて渡します。
+    Ten seconds of audio handed over in 0.2 s pieces, as a real reception does,
+    with the caller counting the time. }
+  Fed := 0;
+  while Fed < 10.0 do
+  begin
+    View.PushSamples(NoiseOnly(8000, 0.2), 8000, Fed);
+    Fed := Fed + 0.2;
+  end;
+  Application.ProcessMessages;
+  Check('渡した時刻のぶんだけ行が進んでいる',
+    Abs(View.NewestSeconds - 10.0) < 0.2,
+    Format('(%.3f 秒、渡したのは %.1f 秒)', [View.NewestSeconds, Fed]));
+
+  { 時刻 → 画面の高さ → 時刻。往復のずれが受入基準そのものです。
+    Time to height and back; the round trip is the acceptance criterion. }
+  Worst := 0;
+  Shown_ := 0;
+  T := View.NewestSeconds;
+  while T > View.NewestSeconds - 9.0 do
+  begin
+    Y := View.SecondsToY(T);
+    if Y >= 0 then
+    begin
+      Err := Abs(View.SecondsAtY(Y) - T);
+      if Err > Worst then
+        Worst := Err;
+      Inc(Shown_);
+    end;
+    T := T - 0.05;
+  end;
+  WriteLn(Format('  %d 点で測った最大のずれ: %.0f ms', [Shown_, Worst * 1000]));
+  Check('測れた点がある', Shown_ > 100, Format('(%d 点)', [Shown_]));
+  Check('位置のずれが 100 ms 以内', Worst <= 0.1,
+    Format('(%.0f ms)', [Worst * 1000]));
+
+  { 画面の外は「無い」と言うこと。**古すぎる文字を端に貼り付けると、そこに
+    無かった音を指します。**
+    Anything off the display must say so: **pinning too old a character to the
+    edge would point at sound that was never there.** }
+  Check('新しすぎる時刻は画面に無い',
+    View.SecondsToY(View.NewestSeconds + 1.0) < 0,
+    Format('(%d)', [View.SecondsToY(View.NewestSeconds + 1.0)]));
+  Check('古すぎる時刻は画面に無い',
+    View.SecondsToY(View.NewestSeconds - 60.0) < 0,
+    Format('(%d)', [View.SecondsToY(View.NewestSeconds - 60.0)]));
+
+  { 新しい行ほど下にあること。順序が逆なら、読んだ順と見える順が食い違います。
+    Newer rows sit lower; reversed, the order read and the order seen would
+    disagree. }
+  Check('新しい文字ほど下に来る',
+    View.SecondsToY(View.NewestSeconds) >
+    View.SecondsToY(View.NewestSeconds - 5.0),
+    Format('(%d vs %d)', [View.SecondsToY(View.NewestSeconds),
+      View.SecondsToY(View.NewestSeconds - 5.0)]));
+
+  { 時刻が飛んだら数え直すこと。受信のやり直しやファイルの復号で起こります。
+    **黙って繋げると、以後ずっと文字が別の行を指します。**
+    A jump in the time restarts the count, as a fresh reception or a file decode
+    does. **Joining them silently would point every character at the wrong row
+    from then on.** }
+  View.PushSamples(NoiseOnly(8000, 0.2), 8000, 500.0);
+  Application.ProcessMessages;
+  Check('時刻が飛んだら数え直す', Abs(View.NewestSeconds - 500.0) < 0.3,
+    Format('(%.3f 秒)', [View.NewestSeconds]));
+
+  { ── ここからが受入基準そのもの ──
+    上の往復は、目盛りの粗さしか測っていません。**時刻の基準が丸ごとずれても
+    往復では相殺され、気づけません**（実際、窓の中心を採る補正を外しても上の
+    確認は 1 つも落ちませんでした）。
+
+    音が**画面のどこに出るか**で測り直します。無音・音・無音の順に渡し、明るく
+    なった行の中心が、その音を送った時刻と何秒ずれるかを見ます。これが
+    「復号文字をウォーターフォール上の対応時刻に整列表示する」の意味です。
+
+    ── the acceptance criterion itself ──
+    The round trip above measures only the coarseness of the grid. **A wholesale
+    shift of the time base cancels out in a round trip and goes unnoticed** --
+    and indeed, removing the correction that takes the middle of the window
+    broke none of the checks above.
+
+    So it is measured again by **where the sound lands on screen**: silence, a
+    tone, silence, and the middle of the band that brightens is compared with
+    the time the tone was sent. That is what aligning the characters means. }
+  View.Clear;
+  Fed := 0;
+  View.PushSamples(NoiseOnly(8000, 3.0), 8000, Fed);
+  Fed := Fed + 3.0;
+  { 音の**真ん中**の時刻。文字もここへ置かれます。
+    The middle of the tone; a character would be placed here too. }
+  T := Fed + 0.25;
+  View.PushSamples(SweptAudio(8000, 700, 700, 0.5), 8000, Fed);
+  Fed := Fed + 0.5;
+  View.PushSamples(NoiseOnly(8000, 3.0), 8000, Fed);
+  Fed := Fed + 3.0;
+  Application.ProcessMessages;
+
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(View.Width, View.Height);
+    View.PaintTo(Shot.Canvas, 0, 0);
+    { 700 Hz の列だけを、いちばん新しい行から上へ見ます。明るさで重みを付けた
+      中心を採るのは、音の端がぼやけるためです。
+      Only the 700 Hz column is read, from the newest row upwards. The centre is
+      weighted by brightness because the tone's edges blur. }
+    X := View.ColumnFor(700);
+    Thick := View.SecondsToY(View.NewestSeconds);
+    Worst := 0;
+    Err := 0;
+    for Y := 0 to Thick do
+    begin
+      { 受信が始まる前の高さは見ません。まだ音の来ていない範囲で、**測る対象が
+        ありません。**（画面の最上端 1 画素には、画布へ写したときの端の差が
+        出ます。）
+        Heights from before the reception began are not read: no sound has
+        arrived there, so **there is nothing to measure.** (The topmost pixel
+        also carries an edge difference from copying onto a canvas.) }
+      if View.SecondsAtY(Y) < 0 then
+        Continue;
+      Marked := Shot.Canvas.Pixels[X, Y];
+      { 明るさは緑成分で見ます。この配色では信号が緑〜黄で出ます。
+        Brightness is read from the green channel: signals come out green to
+        yellow in this palette. }
+      Underlined := (Marked shr 8) and $FF;
+      if Underlined > 120 then
+      begin
+        Worst := Worst + Underlined;
+        Err := Err + Underlined * Y;
+      end;
+    end;
+    Check('音の出た行が見つかる', Worst > 0, Format('(重み %.0f)', [Worst]));
+    if Worst > 0 then
+    begin
+      Y := Round(Err / Worst);
+      WriteLn(Format('  送った時刻 %.2f 秒 / 画面が示す時刻 %.2f 秒（ずれ %.0f ms）',
+        [T, View.SecondsAtY(Y), Abs(View.SecondsAtY(Y) - T) * 1000]));
+      Check('音の出た位置と送った時刻のずれが 100 ms 以内',
+        Abs(View.SecondsAtY(Y) - T) <= 0.1,
+        Format('(%.0f ms)', [Abs(View.SecondsAtY(Y) - T) * 1000]));
+    end;
+  finally
+    Shot.Free;
+  end;
+
+  { 文字を渡しても落ちないこと。同調していなければ何も重ねません。
+    Handing over characters must not break anything; untuned, nothing is laid
+    over. }
+  SetLength(Aligned, 3);
+  for Step_ := 0 to 2 do
+  begin
+    Aligned[Step_].Text := Chr(Ord('A') + Step_);
+    Aligned[Step_].Seconds := View.NewestSeconds - Step_ * 0.5;
+    Aligned[Step_].EndSeconds := Aligned[Step_].Seconds;
+    Aligned[Step_].Confidence := 0.99;
+  end;
+  View.SetCharacters(Aligned);
+  View.ShowCharacters := True;
+  Application.ProcessMessages;
+  SaveView(View, IncludeTrailingPathDelimiter(OutDir) + 'waterfall_aligned.png');
+  Check('文字を渡しても描画できる', True);
+  View.ShowCharacters := False;
+  View.SetCharacters(nil);
+
   WriteLn;
   WriteLn('受信テキストの検証 / transcript checks');
   Transcript := TProbeTranscript.Create(Form);
@@ -1050,14 +1237,14 @@ begin
       A warm-up first, so the initial allocations are not counted as growth. }
     for Repeats := 1 to 50 do
     begin
-      View.PushSamples(Audio, 8000);
+      View.PushSamples(Audio, 8000, 0);
       View.Touch;
       View.PaintTo(Shot.Canvas, 0, 0);
     end;
     BeforeKb := ResidentKb;
     for Repeats := 1 to 500 do
     begin
-      View.PushSamples(Audio, 8000);
+      View.PushSamples(Audio, 8000, 0);
       View.Touch;
       View.PaintTo(Shot.Canvas, 0, 0);
     end;

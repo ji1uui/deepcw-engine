@@ -33,7 +33,7 @@ interface
 uses
   SysUtils, Classes, Math, Controls, Graphics, Forms, LCLType, IntfGraphics,
   GraphType, FPimage,
-  DeepCW.Types, DeepCW.Dsp, DeepCW.Tuner;
+  DeepCW.Types, DeepCW.Dsp, DeepCW.Tuner, DeepCW.Decoder;
 
 const
   { ウォーターフォールの高さ（行数）。8000 Hz の録音で約 10 秒ぶんです。
@@ -101,6 +101,18 @@ type
       transform of its own (requirement FR-D.7). }
     FAverage: TDoubleArray;
     FRowsSinceTrack: Integer;
+    { 行の時刻を決めるための帳簿。**独自の時計ではありません。**FBaseSeconds は
+      呼び出し側から受け取った基準で、FConsumed は基準からいくつ標本を行に
+      変えたかです。
+      The books that give a row its time. **Not a clock of its own**:
+      FBaseSeconds is the origin handed in by the caller and FConsumed counts the
+      samples turned into rows since it. }
+    FBaseSeconds: Double;
+    FNextSeconds: Double;
+    FConsumed: Int64;
+    FNewestRowSeconds: Double;
+    FChars: TDecodedChars;
+    FShowChars: Boolean;
     FTracking: Boolean;
     { 直前の同調点の変化が、利用者の操作ではなく追跡によるものか。画面側が
       案内文を出すかどうかを決めるのに使います。
@@ -118,10 +130,11 @@ type
     FOnTuneChanged: TNotifyEvent;
     FMessage: string;
 
+    procedure SetShowChars(Value: Boolean);
+    procedure DrawCharacters(ScaleTop: Integer);
+    function SurfaceHeight: Integer;
     procedure Configure(ASampleRate: Integer);
     procedure PushRow(const Magnitudes: TDoubleArray);
-    function XToFrequency(X: Integer): Double;
-    function FrequencyToX(Hz: Double): Integer;
     procedure RefreshImage;
     procedure NudgeTune(Steps: Integer);
     { 1 秒に 1 度、信号のいる位置へ同調点を寄せます。
@@ -137,6 +150,12 @@ type
     procedure SetTuneHz(Value: Double);
     procedure SetHalfWidthHz(Value: Double);
   protected
+    { 周波数と桁の対応。派生クラス（試験の覆い）からも要ります。公開まで広げず、
+      protected に留めています。
+      The mapping between frequency and column, needed by a descendant (the
+      test's shim) as well. Kept protected rather than widened to public. }
+    function XToFrequency(X: Integer): Double;
+    function FrequencyToX(Hz: Double): Integer;
     { 次の描画で画像を作り直させます。検証用の測定から呼びます。
       Forces the image to be rebuilt on the next paint; called from the
       verification harness. }
@@ -153,8 +172,44 @@ type
 
     { 受信した音声を足します。表示できるだけの行が溜まるたびに 1 行進みます。
       Adds received audio; one row is produced whenever enough has arrived. }
-    procedure PushSamples(const Samples: TSingleArray; ASampleRate: Integer);
+    { 音を渡します。StartSeconds は**その先頭の標本が受信開始から何秒目か**です。
+
+      **この部品に時計を持たせません。**渡された時刻が前回の続きでなければ、
+      呼び出し側が数え直した（受信のやり直し・ファイルの復号）と見て、こちらも
+      数え直します。保管庫（`DeepCW.Review`）と同じ規則です。独自に数えると、
+      文字の時刻と行の時刻がいつの間にか食い違い、**重ねた文字が別の場所を指し
+      ます**（要件 FR-D.6）。
+
+      Hands over audio. StartSeconds is **how many seconds into the reception
+      its first sample falls.**
+
+      **This control keeps no clock of its own.** A time that does not continue
+      the last one means the caller restarted its count — a fresh reception, a
+      file decode — so counting restarts here too, by the same rule the audio
+      store uses (`DeepCW.Review`). Counting independently would let the
+      characters' times and the rows' times drift apart, and **the characters
+      laid over the display would point at the wrong place**
+      (requirement FR-D.6). }
+    procedure PushSamples(const Samples: TSingleArray; ASampleRate: Integer;
+      StartSeconds: Double);
     procedure Clear;
+
+    { 復号した文字を重ねます（要件 FR-D.6）。時刻を持つ文字だけを、その時刻の
+      行へ描きます。渡さなければ何も重なりません。
+      Lays the decoded characters over the display (requirement FR-D.6): each
+      character is drawn on the row for its own time. Handing over nothing
+      overlays nothing. }
+    procedure SetCharacters(const Value: TDecodedChars);
+
+    { いちばん新しい行の時刻。受信開始からの秒です。
+      The newest row's time, in seconds since reception began. }
+    function NewestSeconds: Double;
+    { その時刻の行が画面のどこに来るか。見えていなければ負を返します。
+      Where the row for that time falls on screen, or negative when off it. }
+    function SecondsToY(Seconds: Double): Integer;
+    { 画面のその高さが、どの時刻の行か。
+      Which row's time falls at that height on screen. }
+    function SecondsAtY(Y: Integer): Double;
 
     { 同調している音程。0 で同調なし。設定すると OnTuneChanged を呼びます。
       The tuned pitch, or 0 for none. Setting it raises OnTuneChanged. }
@@ -171,6 +226,10 @@ type
     { 動いていく信号を自動で追いかけるか。既定で有効です（要件 FR-D.7）。
       Whether to follow a signal that moves; on by default (FR-D.7). }
     property Tracking: Boolean read FTracking write FTracking;
+    { 文字を重ねるか。重ねた文字は信号を隠すので、切れるようにしてあります。
+      Whether to overlay the characters. They cover the signals, so they can be
+      turned off. }
+    property ShowCharacters: Boolean read FShowChars write SetShowChars;
     { 直前の変化が追跡によるものか。/ Whether the last change came from
       tracking rather than the operator. }
     property AutoTuned: Boolean read FAutoTuned;
@@ -412,7 +471,7 @@ begin
 end;
 
 procedure TWaterfallView.PushSamples(const Samples: TSingleArray;
-  ASampleRate: Integer);
+  ASampleRate: Integer; StartSeconds: Double);
 var
   Frame: TDoubleArray;
   Magnitudes: TDoubleArray;
@@ -424,6 +483,22 @@ begin
     Configure(ASampleRate);
   if FFFT = nil then
     Exit;
+
+  { 渡された時刻が前回の続きか。半標本より離れていれば数え直します。**黙って
+    繋げると、以後ずっと文字が別の行を指します。**途中まで溜めた標本も、前の
+    時間軸のものなので手放します。
+    Whether the time handed in continues the last. More than half a sample apart
+    means counting restarts. **Joining them silently would point every character
+    at the wrong row from then on.** The partly filled carry belongs to the old
+    timeline, so it goes too. }
+  if (FFilled = 0) or (Abs(StartSeconds - FNextSeconds) > 0.5 / FSampleRate) then
+  begin
+    FBaseSeconds := StartSeconds;
+    FConsumed := 0;
+    FCarryCount := 0;
+    FNewestRowSeconds := StartSeconds;
+  end;
+  FNextSeconds := StartSeconds + Length(Samples) / FSampleRate;
 
   SetLength(Frame, FFFTSize);
   Offset := 0;
@@ -440,6 +515,14 @@ begin
       for I := 0 to FFFTSize - 1 do
         Frame[I] := FCarry[I] * FWindow[I];
       FFFT.MagnitudeSpectrum(Frame, 0, FColumns, Magnitudes);
+      { この行が表すのは、いま使った窓の**真ん中**の時刻です。端を採ると、
+        窓の長さ（8000 Hz で 128 ms）の半分だけ系統的にずれます。
+        The row stands for the time at the **middle** of the window just used.
+        Taking an edge would bias every row by half the window — 128 ms at
+        8000 Hz. }
+      FNewestRowSeconds := FBaseSeconds +
+        (FConsumed + FFFTSize / 2) / FSampleRate;
+      Inc(FConsumed, FHop);
       PushRow(Magnitudes);
       { ホップぶんだけ捨てます。/ Discard one hop. }
       for I := 0 to FCarryCount - FHop - 1 do
@@ -482,6 +565,114 @@ begin
   FImageStale := True;
 end;
 
+procedure TWaterfallView.SetShowChars(Value: Boolean);
+begin
+  if FShowChars = Value then
+    Exit;
+  FShowChars := Value;
+  Invalidate;
+end;
+
+procedure TWaterfallView.SetCharacters(const Value: TDecodedChars);
+begin
+  FChars := Value;
+  if FShowChars then
+    Invalidate;
+end;
+
+function TWaterfallView.NewestSeconds: Double;
+begin
+  Result := FNewestRowSeconds;
+end;
+
+{ 目盛りを除いた、滝の高さ。行から画面への割り付けはここを使います。
+  The waterfall's height without the scale; the rows are laid out over it. }
+function TWaterfallView.SurfaceHeight: Integer;
+begin
+  Result := Height - Canvas.TextHeight('0') - 4;
+  if Result < 10 then
+    Result := Height;
+end;
+
+function TWaterfallView.SecondsToY(Seconds: Double): Integer;
+var
+  RowsBack, Surface: Integer;
+begin
+  Result := -1;
+  Surface := SurfaceHeight;
+  if (FFilled = 0) or (Surface <= 0) then
+    Exit;
+  RowsBack := Round((FNewestRowSeconds - Seconds) * WATERFALL_ROWS_PER_SECOND);
+  if (RowsBack < 0) or (RowsBack >= Min(FFilled, WATERFALL_ROWS)) then
+    Exit;
+  Result := Surface - 1 - Round(RowsBack * Surface / WATERFALL_ROWS);
+  if (Result < 0) or (Result >= Surface) then
+    Result := -1;
+end;
+
+function TWaterfallView.SecondsAtY(Y: Integer): Double;
+var
+  Surface: Integer;
+begin
+  Surface := SurfaceHeight;
+  if Surface <= 1 then
+    Exit(FNewestRowSeconds);
+  Result := FNewestRowSeconds -
+    ((Surface - 1 - Y) * WATERFALL_ROWS / Surface) / WATERFALL_ROWS_PER_SECOND;
+end;
+
+{ 復号した文字を、その時刻の行へ重ねます（要件 FR-D.6）。
+
+  横の位置は同調線の右です。**同調していないときは重ねません。**そのときの
+  受信文は受信機の音程のまま読んだもので、どの周波数に属するとも言えないため、
+  どこに置いても嘘になります。
+
+  Lays the characters over the rows for their own times (requirement FR-D.6).
+
+  They sit just right of the tuning line. **Nothing is drawn while untuned**:
+  the text then comes from whatever pitch the receiver produces and belongs to
+  no frequency in particular, so any position would be a lie. }
+procedure TWaterfallView.DrawCharacters(ScaleTop: Integer);
+var
+  I, X, Y, Last: Integer;
+begin
+  if (not FShowChars) or (Length(FChars) = 0) or (FTuneHz <= 0) then
+    Exit;
+  X := FrequencyToX(FTuneHz) + 6;
+  Canvas.Brush.Style := bsClear;
+  Canvas.Font.Color := clWhite;
+  Last := -1000;
+  for I := High(FChars) downto 0 do
+  begin
+    if FChars[I].Text = ' ' then
+      Continue;
+    Y := SecondsToY(FChars[I].Seconds);
+    if Y < 0 then
+    begin
+      { 並びは時刻の順なので、画面から出たらそれより前も出ています。
+        The characters are in time order, so once one is off the top the rest
+        are too. }
+      if FChars[I].Seconds < FNewestRowSeconds then
+        Break
+        else
+        Continue;
+    end;
+    { 同調の数字は上端に出ます。そこへ文字を描くと重なって、どちらも読めなく
+      なります。上端のその高さぶんは空けます。
+      The tuned frequency is written at the top; a character there overprints it
+      and neither can be read. That much of the top is left alone. }
+    if Y < Canvas.TextHeight('M') + 4 then
+      Continue;
+    { 同じ行に重ねて描くと潰れます。1 文字ぶんの高さを空けます。
+      Two characters on one row would overprint; a character's height is kept
+      between them. }
+    if Abs(Y - Last) < Canvas.TextHeight('M') then
+      Continue;
+    Canvas.TextOut(X, Y - Canvas.TextHeight('M') div 2, FChars[I].Text);
+    Last := Y;
+  end;
+end;
+
 procedure TWaterfallView.Paint;
 var
   TickHz: Double;
@@ -515,6 +706,8 @@ begin
       Canvas.CopyRect(Rect(0, Split, Width, ScaleTop), FBitmap.Canvas,
         Rect(0, 0, FColumns, FRow));
   end;
+
+  DrawCharacters(ScaleTop);
 
   { 目盛り。500 Hz ごとに刻みます。/ Ticks every 500 Hz. }
   Canvas.Pen.Color := clGray;

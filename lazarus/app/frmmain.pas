@@ -267,6 +267,7 @@ type
     FRxAntiAlias: TCheckBox;
     FRxTranscript: TTranscriptView;
     FRxShowDoubt: TCheckBox;
+    FRxAlign: TCheckBox;
     FRxDoubtStrength: TTrackBar;
     FRxFontSize: TSpinEdit;
     FRxCopy: TButton;
@@ -1064,6 +1065,17 @@ begin
     @RxCopyCallClick);
   FRxCopyCall.Enabled := False;
 
+  { 読んだ文字をウォーターフォールに重ねるか（要件 FR-D.6）。重ねた文字は信号を
+    隠すので、切れるようにしてあります。
+    Whether to lay the characters over the waterfall (requirement FR-D.6). They
+    cover the signals, so they can be turned off. }
+  FRxAlign := TCheckBox.Create(TextTools);
+  FRxAlign.Parent := TextTools;
+  FRxAlign.SetBounds(840, 6, 200, 24);
+  FRxAlign.Caption := '文字を波形に重ねる';
+  FRxAlign.Checked := True;
+  FRxAlign.OnChange := @RxDisplayChanged;
+
   { 検索と聴き直しは、表示の設定とは別の行に置きます。同じ行に並べると、窓を
     狭くしたときに右端の操作が画面の外へ出て、押せなくなります（最小幅 900）。
     Search and replay go on their own row: on the same row as the display
@@ -1333,6 +1345,7 @@ begin
       Ini.ReadInteger('receive', 'confirm_speed', 1), 0, 2);
     FRxAntiAlias.Checked := Ini.ReadBool('receive', 'anti_alias', True);
     FRxShowDoubt.Checked := Ini.ReadBool('receive', 'show_doubt', True);
+    FRxAlign.Checked := Ini.ReadBool('receive', 'align_characters', True);
     FRxDoubtStrength.Position := ClampInt(
       Ini.ReadInteger('receive', 'doubt_strength', 100), 0, 100);
     FRxFontSize.Value := ClampInt(Ini.ReadInteger('receive', 'font_size', 14), 9, 32);
@@ -1396,6 +1409,7 @@ begin
       Ini.WriteInteger('receive', 'confirm_speed', FRxConfirmSpeed.ItemIndex);
       Ini.WriteBool('receive', 'anti_alias', FRxAntiAlias.Checked);
       Ini.WriteBool('receive', 'show_doubt', FRxShowDoubt.Checked);
+      Ini.WriteBool('receive', 'align_characters', FRxAlign.Checked);
       Ini.WriteInteger('receive', 'doubt_strength', FRxDoubtStrength.Position);
       Ini.WriteInteger('receive', 'font_size', FRxFontSize.Value);
       Ini.WriteInteger('receive', 'tune_hz', Round(FRxWaterfall.TuneHz));
@@ -1988,6 +2002,23 @@ begin
     The file's own audio is stored, so characters read from a file can be
     replayed too. A file longer than the retention keeps only its tail. }
   FHistory.Append(Samples, SampleRate, 0);
+  { 同じ音を波形にも流します。**保管庫と同じ時刻の基準を渡すこと**が肝心で、
+    別々に数えさせると、重ねた文字が別の行を指します（要件 FR-D.6）。
+
+    ファイルの復号でも波形を出すのは、**そうしないと、読んだ文字がどの音から
+    出たのかを確かめる手立てが、音声装置のある機械でしか使えなくなる**ためです。
+    画面に収まるのは末尾の 10 秒ぶんで、それより古い文字は重なりません。
+
+    The same audio goes to the waterfall. **Handing it the store's own time
+    origin** is what matters: counted separately, the characters laid over it
+    would point at the wrong row (requirement FR-D.6).
+
+    A file decode draws the waterfall too, because otherwise **the means of
+    seeing which sound a character came from would exist only on a machine with
+    audio hardware.** The display holds the last ten seconds; characters older
+    than that are not laid over it. }
+  FRxWaterfall.Clear;
+  FRxWaterfall.PushSamples(Samples, SampleRate, 0);
   UpdateReplayInfo;
   { 待機モードでは、録音も帯域として読みます。混み合ったバンドを録った音から
     一覧を作れますし、**音声装置の無い機械でもこの経路を確かめられます。**
@@ -2164,6 +2195,11 @@ procedure TMainForm.ReadTranscript;
 begin
   FExchange := ReadExchange(FLiveChars);
   FRxTranscript.SetCallsigns(FExchange.Callsigns, FExchange.Chosen);
+  { 同じ文字をウォーターフォールへも渡します（要件 FR-D.6）。読んだ文字が音の
+    どこから出たのかが、目で辿れるようになります。
+    The same characters go to the waterfall (requirement FR-D.6), so that where
+    in the sound each one came from can be followed by eye. }
+  FRxWaterfall.SetCharacters(FLiveChars);
 end;
 
 { 呼出符号と信号報告だけをクリップボードへ送ります（要件 FR-E.2）。
@@ -3132,6 +3168,7 @@ begin
   FRxTranscript.ShowDoubt := FRxShowDoubt.Checked;
   FRxTranscript.DoubtStrength := FRxDoubtStrength.Position / 100;
   FRxTranscript.Font.Size := FRxFontSize.Value;
+  FRxWaterfall.ShowCharacters := FRxAlign.Checked;
   if Sender <> nil then
     MarkSettingsDirty;
 end;
@@ -3249,7 +3286,12 @@ begin
       選んでいない信号も見えていなければ、選びようがないためです。
       The waterfall is fed the audio before any tuning or filtering: a signal
       that has not been chosen yet still has to be visible to be chosen. }
-    FRxWaterfall.PushSamples(Fresh, FCaptureRate);
+    { 保管庫へ渡すのと同じ時刻を渡します。**別々に数えさせると、重ねた文字が
+      別の行を指します**（要件 FR-D.6）。
+      The same time the store is given. **Counted separately, the characters
+      laid over the display would point at the wrong row**
+      (requirement FR-D.6). }
+    FRxWaterfall.PushSamples(Fresh, FCaptureRate, StartAt);
   end;
 
   if DecoderBusy then
