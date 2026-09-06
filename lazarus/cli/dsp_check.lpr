@@ -1128,6 +1128,15 @@ begin
   begin
     DeleteFile(Path);
     DeleteFile(Other);
+    { 版 2.28 で足した 2 つも消します。**消し忘れると、走らせるたびに件数が
+      増え、2 度目から落ちます。**実際にそうなり、壊して確かめている最中に
+      気づきました。
+      The two added in version 2.28 go too: **left behind, the counts grow with
+      every run and the second one fails.** That is exactly what happened, and it
+      surfaced while mutation testing. }
+    DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'bands.adi');
+    DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'lastband.adi');
+    DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'rate.adi');
   end;
 
   { --- 読み書きそのもの --- }
@@ -1263,6 +1272,162 @@ begin
     Log.Free;
   end;
 
+  { ---- バンドごとの重複判定（要件 FR-I.5）----
+    **コンテストの重複判定はバンドごとです。**7 MHz で交信した局を 14 MHz で
+    「交信済み」と示すと、有効な交信を見送らせます。
+    ---- The duplicate check, band by band (requirement FR-I.5) ----
+    **A contest counts duplicates band by band**: marking a station worked on
+    7 MHz as worked on 14 MHz would have the operator pass over a valid
+    contact. }
+  Path := IncludeTrailingPathDelimiter(Dir) + 'bands.adi';
+  Log := TContactLog.Create(Path);
+  try
+    Log.Load;
+    Check('バンドを書かなければ欄が無い',
+      Pos('BAND', UpperCase(FormatAdifRecord(BuildContact('JA1ABC', 45000)))) = 0);
+    Item := BuildContact('JA1ABC', 45000, 'CW', '40M');
+    Check('バンドを書けば欄に入る', AdifValue(Item, 'BAND') = '40M',
+      AdifValue(Item, 'BAND'));
+    Check('小文字で渡しても大文字で残る',
+      AdifValue(BuildContact('JA1ABC', 45000, 'CW', '40m'), 'BAND') = '40M');
+    Log.Add(Item);
+    Check('そのバンドでは交信済み', Log.WorkedCountOn('JA1ABC', '40M') = 1,
+      Format('(%d)', [Log.WorkedCountOn('JA1ABC', '40M')]));
+    Check('別のバンドでは交信済みでない',
+      Log.WorkedCountOn('JA1ABC', '20M') = 0,
+      Format('(%d)', [Log.WorkedCountOn('JA1ABC', '20M')]));
+    Check('バンドを問わなければ交信済み', Log.WorkedCount('JA1ABC') = 1,
+      Format('(%d)', [Log.WorkedCount('JA1ABC')]));
+    Check('バンドを空で問えば全バンドの数',
+      Log.WorkedCountOn('JA1ABC', '') = 1,
+      Format('(%d)', [Log.WorkedCountOn('JA1ABC', '')]));
+    Log.Add(BuildContact('JA1ABC', 45000.5, 'CW', '20M'));
+    Check('別バンドで交信すればそちらも数に入る',
+      Log.WorkedCountOn('JA1ABC', '20M') = 1,
+      Format('(%d)', [Log.WorkedCountOn('JA1ABC', '20M')]));
+    Check('元のバンドの数は変わらない',
+      Log.WorkedCountOn('JA1ABC', '40M') = 1,
+      Format('(%d)', [Log.WorkedCountOn('JA1ABC', '40M')]));
+    Check('全バンドでは 2 回', Log.WorkedCount('JA1ABC') = 2,
+      Format('(%d)', [Log.WorkedCount('JA1ABC')]));
+    Log.Add(BuildContact('JH2XYZ', 45000.6));
+    Check('バンドの無い交信も全バンドでは数に入る',
+      Log.WorkedCount('JH2XYZ') = 1, Format('(%d)', [Log.WorkedCount('JH2XYZ')]));
+    Check('バンドの無い交信は、特定のバンドでは数に入らない',
+      Log.WorkedCountOn('JH2XYZ', '40M') = 0,
+      Format('(%d)', [Log.WorkedCountOn('JH2XYZ', '40M')]));
+  finally
+    Log.Free;
+  end;
+  { 開き直しても、バンドごとの数が残ること。**読み込みで数え直せていなければ、
+    アプリを開き直した瞬間に重複判定が壊れます。**
+    The per-band counts must survive a reopen: **rebuilt wrongly on load, the
+    duplicate check breaks the moment the application is restarted.** }
+  Log := TContactLog.Create(Path);
+  try
+    Log.Load;
+    Check('開き直してもバンドごとの数が残る',
+      (Log.WorkedCountOn('JA1ABC', '40M') = 1) and
+      (Log.WorkedCountOn('JA1ABC', '20M') = 1) and
+      (Log.WorkedCountOn('JA1ABC', '15M') = 0),
+      Format('(40M %d / 20M %d / 15M %d)',
+        [Log.WorkedCountOn('JA1ABC', '40M'), Log.WorkedCountOn('JA1ABC', '20M'),
+         Log.WorkedCountOn('JA1ABC', '15M')]));
+  finally
+    Log.Free;
+  end;
+
+  { ---- 「交信済み」と示す日付も、そのバンドのもの（要件 FR-I.5）----
+
+    回数をバンドごとに答えながら日付を全バンドから採ると、**そのバンドでは
+    交信していない日付を、重複の証拠として示すことになります。**
+
+    ---- The date shown for a duplicate belongs to the same band (FR-I.5) ----
+
+    Answering the count band by band while taking the date from every band would
+    **offer, as the evidence of a duplicate, a date on which that band was never
+    worked.** }
+  Path := IncludeTrailingPathDelimiter(Dir) + 'lastband.adi';
+  Log := TContactLog.Create(Path);
+  try
+    Log.Load;
+    Log.Add(BuildContact('JA1ABC', 45000, 'CW', '40M'));
+    Log.Add(BuildContact('JA1ABC', 45010, 'CW', '20M'));
+    Check('バンドを問わなければ最後に交信した日',
+      Log.LastWorkedOn('JA1ABC') = FormatDateTime('yyyymmdd', 45010),
+      Format('("%s")', [Log.LastWorkedOn('JA1ABC')]));
+    Check('そのバンドで最後に交信した日を答える',
+      Log.LastWorkedOn('JA1ABC', '40M') = FormatDateTime('yyyymmdd', 45000),
+      Format('("%s")', [Log.LastWorkedOn('JA1ABC', '40M')]));
+    Check('別のバンドはそちらの日を答える',
+      Log.LastWorkedOn('JA1ABC', '20M') = FormatDateTime('yyyymmdd', 45010),
+      Format('("%s")', [Log.LastWorkedOn('JA1ABC', '20M')]));
+    Check('交信していないバンドは空を返す',
+      Log.LastWorkedOn('JA1ABC', '15M') = '',
+      Format('("%s")', [Log.LastWorkedOn('JA1ABC', '15M')]));
+    Log.Add(BuildContact('JA1ABC', 45005, 'CW', '40M'));
+    Check('同じバンドで新しく交信すれば日が進む',
+      Log.LastWorkedOn('JA1ABC', '40M') = FormatDateTime('yyyymmdd', 45005),
+      Format('("%s")', [Log.LastWorkedOn('JA1ABC', '40M')]));
+    { 取り込んだ記録は日付の順とはかぎりません。古いものを後から足しても、
+      新しい日が残らなければなりません。
+      An imported log is not necessarily in date order: adding an older contact
+      afterwards must leave the later date in place. }
+    Log.Add(BuildContact('JA1ABC', 44990, 'CW', '40M'));
+    Check('古い交信を後から足しても日は戻らない',
+      Log.LastWorkedOn('JA1ABC', '40M') = FormatDateTime('yyyymmdd', 45005),
+      Format('("%s")', [Log.LastWorkedOn('JA1ABC', '40M')]));
+  finally
+    Log.Free;
+  end;
+  Log := TContactLog.Create(Path);
+  try
+    Log.Load;
+    Check('開き直してもバンドごとの日が残る',
+      (Log.LastWorkedOn('JA1ABC', '40M') = FormatDateTime('yyyymmdd', 45005)) and
+      (Log.LastWorkedOn('JA1ABC', '20M') = FormatDateTime('yyyymmdd', 45010)),
+      Format('(40M "%s" / 20M "%s")',
+        [Log.LastWorkedOn('JA1ABC', '40M'), Log.LastWorkedOn('JA1ABC', '20M')]));
+  finally
+    Log.Free;
+  end;
+
+  { ---- 時間あたりの交信数（要件 FR-I.5）----
+    ---- Contacts per hour (requirement FR-I.5) ---- }
+  Path := IncludeTrailingPathDelimiter(Dir) + 'rate.adi';
+  Log := TContactLog.Create(Path);
+  try
+    Log.Load;
+    Log.Add(BuildContact('JA1ABC', 45000 + 12 / 24));
+    Log.Add(BuildContact('JH2XYZ', 45000 + 11.5 / 24));
+    Log.Add(BuildContact('JR3KLM', 45000 + 10 / 24));
+    Check('直近 1 時間に 2 局', Log.CountSince(45000 + 11 / 24) = 2,
+      Format('(%d)', [Log.CountSince(45000 + 11 / 24)]));
+    Check('直近 3 時間なら 3 局', Log.CountSince(45000 + 9 / 24) = 3,
+      Format('(%d)', [Log.CountSince(45000 + 9 / 24)]));
+    Check('先の時刻なら 0 局', Log.CountSince(45000 + 13 / 24) = 0,
+      Format('(%d)', [Log.CountSince(45000 + 13 / 24)]));
+    Check('境目の時刻は数に入る', Log.CountSince(45000 + 10 / 24) = 3,
+      Format('(%d)', [Log.CountSince(45000 + 10 / 24)]));
+    { **時刻の欄が無い記録は数えません。**取り込んだログには日付だけの記録が
+      あり得ます。日付だけで比べると、先の日付の記録が「直近 1 時間」に入り、
+      速さを水増しします。
+      **A record with no time field is not counted.** An imported log can hold
+      one dated but not timed; compared on the date alone, a later date would
+      fall inside "the last hour" and inflate the rate. }
+    Item := Default(TAdifRecord);
+    SetAdifValue(Item, 'CALL', '7K1TUV');
+    SetAdifValue(Item, 'QSO_DATE', '20991231');
+    SetAdifValue(Item, 'MODE', 'CW');
+    Log.Add(Item);
+    Check('時刻の欄が無い記録は数えない', Log.CountSince(45000 + 11 / 24) = 2,
+      Format('(%d)', [Log.CountSince(45000 + 11 / 24)]));
+    Check('それでも記録そのものは残る', Log.Count = 4,
+      Format('(%d)', [Log.Count]));
+  finally
+    Log.Free;
+  end;
+
   { 1 万件でも引くのが遅くならないこと。索引を持たずに毎回走査すると、
     バンドマップの 1 行ごとにこれを引くので目に見えて遅くなる。 }
   DeleteFile(Path);
@@ -1292,6 +1457,20 @@ begin
     Elapsed := MilliSecondsBetween(Now, Started);
     WriteLn(Format('    交信済みの問い合わせ 1 万回: %.0f ms', [Elapsed]));
     Check('問い合わせ 1 万回が 200 ms 未満', Elapsed < 200,
+      Format('(%.0f ms)', [Elapsed]));
+    { バンドを指定した問い合わせも測ります。**画面が毎秒引くのはこちらです**
+      （要件 FR-I.5）。バンドごとの回数はバンドの数だけ並べて持つので、全バンドを
+      引くのと同じ桁で収まるはずですが、測らずに「はず」で済ませません。
+      The band-specific query is measured too: **this is the one the display asks
+      once a second** (requirement FR-I.5). The per-band counts are held as a list
+      one entry per band, so it should cost the same order as the all-band query
+      -- but "should" is not a measurement. }
+    Started := Now;
+    for I := 1 to 10000 do
+      Log.WorkedCountOn('JA1ABC', '40M');
+    Elapsed := MilliSecondsBetween(Now, Started);
+    WriteLn(Format('    バンドを指定した問い合わせ 1 万回: %.0f ms', [Elapsed]));
+    Check('バンドを指定した問い合わせ 1 万回が 200 ms 未満', Elapsed < 200,
       Format('(%.0f ms)', [Elapsed]));
   finally
     Log.Free;

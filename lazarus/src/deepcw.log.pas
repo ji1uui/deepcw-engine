@@ -118,11 +118,29 @@ type
       The index for the worked-before question, keyed on the **base** call sign
       with any appended designator removed. JA1ABC and JA1ABC/P are the same
       station, and counting them apart would show a worked station as new. }
+    { バンドごとの回数。**コンテストの重複判定はバンドごとです。**7 MHz で交信した
+      局を 14 MHz で聞いたときに「交信済み」と出すと、有効な交信を見送らせます。
+      Per-band counts. **A contest counts duplicates band by band**: marking a
+      station worked on 7 MHz as worked when it turns up on 14 MHz would have the
+      operator pass over a valid contact. }
+    TBandTally = record
+      Band: string;
+      Count: Integer;
+      { そのバンドで最後に交信した日と時刻。**日付を全バンドから採ると、
+        バンドごとに答えているのに、別のバンドの日付を示すことになります。**
+        The date and time of the last contact on that band. **Taking the date
+        across all bands would answer band by band and then show a date from a
+        different band.** }
+      LastOn: string;
+      LastAt: string;
+    end;
+
     TWorkedEntry = record
       Base: string;
       Count: Integer;
       LastOn: string;
       LastAt: string;
+      Bands: array of TBandTally;
     end;
   private
     FFileName: string;
@@ -135,6 +153,12 @@ type
       A string identifying one contact: station, date and time are enough, since
       the same station cannot be worked twice in the same second. }
     function IdentityOf(const Item: TAdifRecord): string;
+    { バンドごとの回数を 1 つ増やします。バンドが空でも 1 つの区分として数えます。
+      **空を捨てると、バンドを設定せずに残した交信が重複判定から消えます。**
+      Adds one to a band's count, an empty band counted as a category of its own:
+      **discarding it would drop from the duplicate check every contact recorded
+      without a band set.** }
+    procedure TallyBand(Index: Integer; const Band, On_, At_: string);
     procedure Remember(const Item: TAdifRecord);
     procedure Reindex;
     function Append(const Text: string): Boolean;
@@ -175,9 +199,41 @@ type
       How many times this call sign was worked, ignoring any appended
       designator. }
     function WorkedCount(const Callsign: string): Integer;
+
+    { そのバンドで何回交信したか。**コンテストの重複判定はこちらです。**
+
+      バンドを空で渡すと、全バンドの回数を返します。バンドが分からないときに
+      **「交信済みでない」と答えるのは嘘**で、分かる範囲で答えるほうが正直です。
+
+      How many times worked on that band. **This is the count a contest's
+      duplicate check needs.**
+
+      An empty band gives the count across all of them: with no band known,
+      **answering "not worked" would be a lie**, and answering as far as is known
+      is the honest alternative. }
+    function WorkedCountOn(const Callsign, Band: string): Integer;
+
+    { その時刻以降に記録した交信の数。コンテストの「時間あたり何局」を出すのに
+      使います。時刻は協定世界時で、記録の欄と同じ形（yyyymmdd と hhnnss）で
+      比べます。
+      How many contacts were recorded at or after that moment, for a contest's
+      contacts-per-hour. The time is UTC and is compared in the same shape the
+      record's fields use. }
+    function CountSince(MomentUtc: TDateTime): Integer;
     { 最後に交信した日付（YYYYMMDD）。無ければ空です。
-      The date of the last contact as YYYYMMDD, or empty. }
-    function LastWorkedOn(const Callsign: string): string;
+
+      バンドを渡すと、そのバンドで最後に交信した日付を返します。**回数を
+      バンドごとに答えるなら、日付も同じバンドで答えなければ、画面の 2 つの
+      表示が食い違います。**空を渡せば全バンドから採ります。
+
+      The date of the last contact as YYYYMMDD, or empty.
+
+      Given a band, it is the date of the last contact on that band: **answering
+      the count band by band and the date across all of them would have two
+      statements on the same screen disagree.** An empty band takes the date
+      across all of them. }
+    function LastWorkedOn(const Callsign: string;
+      const Band: string = ''): string;
 
     function Count: Integer;
     function Records: TAdifRecords;
@@ -204,7 +260,7 @@ type
   (`LocalTimeToUniversal(Now)`); doing it here would convert twice on any path
   that already holds a UTC moment, such as rebuilding an imported record. }
 function BuildContact(const Callsign: string; MomentUtc: TDateTime;
-  const Mode: string = 'CW'): TAdifRecord;
+  const Mode: string = 'CW'; const Band: string = ''): TAdifRecord;
 
 { 呼出符号を索引に使う形へ直します。附加符号を落とし、大文字にします。
   形として成立しないものは、そのまま大文字にして返します。**記録は運用者のもので
@@ -219,13 +275,22 @@ function LogKeyOf(const Callsign: string): string;
 implementation
 
 function BuildContact(const Callsign: string; MomentUtc: TDateTime;
-  const Mode: string): TAdifRecord;
+  const Mode: string; const Band: string): TAdifRecord;
 begin
   Result := Default(TAdifRecord);
   SetAdifValue(Result, 'CALL', UpperCase(Trim(Callsign)));
   SetAdifValue(Result, 'QSO_DATE', FormatDateTime('yyyymmdd', MomentUtc));
   SetAdifValue(Result, 'TIME_ON', FormatDateTime('hhnnss', MomentUtc));
   SetAdifValue(Result, 'MODE', Mode);
+  { バンドは分かるときだけ書きます。**この機械は電波の周波数を知りません**
+    （受信機との連携は別仕様）。運用者が選んだものをそのまま残します。空欄を
+    書くより、欄ごと無いほうがログソフトの扱いは素直です。
+    The band is written only when it is known: **this machine does not know the
+    radio's frequency** (the receiver link is a separate specification), so what
+    the operator chose is what is kept. Leaving the field out entirely sits
+    better with a logger than writing it empty. }
+  if Trim(Band) <> '' then
+    SetAdifValue(Result, 'BAND', UpperCase(Trim(Band)));
 end;
 
 function LogKeyOf(const Callsign: string): string;
@@ -409,9 +474,37 @@ begin
   Result := -(Low_ + 1);
 end;
 
+procedure TContactLog.TallyBand(Index: Integer; const Band, On_, At_: string);
+var
+  I, Slot: Integer;
+begin
+  for I := 0 to System.Length(FWorked[Index].Bands) - 1 do
+    if FWorked[Index].Bands[I].Band = Band then
+    begin
+      Inc(FWorked[Index].Bands[I].Count);
+      { 新しいほうを覚えます。取り込んだ記録は日付の順とはかぎりません。
+        The later one is kept: an imported log is not necessarily in date
+        order. }
+      if (On_ > FWorked[Index].Bands[I].LastOn) or
+         ((On_ = FWorked[Index].Bands[I].LastOn) and
+          (At_ > FWorked[Index].Bands[I].LastAt)) then
+      begin
+        FWorked[Index].Bands[I].LastOn := On_;
+        FWorked[Index].Bands[I].LastAt := At_;
+      end;
+      Exit;
+    end;
+  Slot := System.Length(FWorked[Index].Bands);
+  SetLength(FWorked[Index].Bands, Slot + 1);
+  FWorked[Index].Bands[Slot].Band := Band;
+  FWorked[Index].Bands[Slot].Count := 1;
+  FWorked[Index].Bands[Slot].LastOn := On_;
+  FWorked[Index].Bands[Slot].LastAt := At_;
+end;
+
 procedure TContactLog.Remember(const Item: TAdifRecord);
 var
-  Base, On_, At_: string;
+  Base, On_, At_, Band: string;
   Index, I: Integer;
 begin
   Base := LogKeyOf(AdifValue(Item, 'CALL'));
@@ -419,10 +512,12 @@ begin
     Exit;
   On_ := AdifValue(Item, 'QSO_DATE');
   At_ := AdifValue(Item, 'TIME_ON');
+  Band := UpperCase(AdifValue(Item, 'BAND'));
   Index := IndexOfBase(Base);
   if Index >= 0 then
   begin
     Inc(FWorked[Index].Count);
+    TallyBand(Index, Band, On_, At_);
     { 新しいほうを覚えます。取り込んだ記録は日付の順とはかぎりません。
       The later one is kept: an imported log is not necessarily in date order. }
     if (On_ > FWorked[Index].LastOn) or
@@ -439,6 +534,8 @@ begin
     FWorked[I] := FWorked[I - 1];
   FWorked[Index].Base := Base;
   FWorked[Index].Count := 1;
+  FWorked[Index].Bands := nil;
+  TallyBand(Index, Band, On_, At_);
   FWorked[Index].LastOn := On_;
   FWorked[Index].LastAt := At_;
 end;
@@ -651,15 +748,59 @@ begin
     Result := 0;
 end;
 
-function TContactLog.LastWorkedOn(const Callsign: string): string;
+function TContactLog.WorkedCountOn(const Callsign, Band: string): Integer;
 var
-  Index: Integer;
+  Index, I: Integer;
 begin
+  Result := 0;
   Index := IndexOfBase(LogKeyOf(Callsign));
-  if Index >= 0 then
-    Result := FWorked[Index].LastOn
-  else
-    Result := '';
+  if Index < 0 then
+    Exit;
+  if Band = '' then
+    Exit(FWorked[Index].Count);
+  for I := 0 to System.Length(FWorked[Index].Bands) - 1 do
+    if FWorked[Index].Bands[I].Band = Band then
+      Exit(FWorked[Index].Bands[I].Count);
+end;
+
+function TContactLog.CountSince(MomentUtc: TDateTime): Integer;
+var
+  I: Integer;
+  Since, On_, At_: string;
+begin
+  Result := 0;
+  Since := FormatDateTime('yyyymmdd', MomentUtc) +
+    FormatDateTime('hhnnss', MomentUtc);
+  for I := 0 to System.Length(FRecords) - 1 do
+  begin
+    On_ := AdifValue(FRecords[I], 'QSO_DATE');
+    At_ := AdifValue(FRecords[I], 'TIME_ON');
+    { 日付も時刻も桁の揃った数字なので、文字列のまま比べられます。欄が無い
+      記録は数えません。**「いつか分からない交信」を直近の 1 時間に入れると、
+      速さを水増しします。**
+      Both fields are fixed-width digits, so they compare as text. A record
+      missing them is not counted: **putting a contact of unknown time into the
+      last hour would inflate the rate.** }
+    if (System.Length(On_) = 8) and (System.Length(At_) >= 6) and
+       (On_ + Copy(At_, 1, 6) >= Since) then
+      Inc(Result);
+  end;
+end;
+
+function TContactLog.LastWorkedOn(const Callsign: string;
+  const Band: string = ''): string;
+var
+  Index, I: Integer;
+begin
+  Result := '';
+  Index := IndexOfBase(LogKeyOf(Callsign));
+  if Index < 0 then
+    Exit;
+  if Band = '' then
+    Exit(FWorked[Index].LastOn);
+  for I := 0 to System.Length(FWorked[Index].Bands) - 1 do
+    if FWorked[Index].Bands[I].Band = Band then
+      Exit(FWorked[Index].Bands[I].LastOn);
 end;
 
 function TContactLog.Count: Integer;

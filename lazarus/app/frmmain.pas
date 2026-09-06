@@ -68,7 +68,23 @@ type
     { 帯域内の全局を同時に読み、一覧に出す（要件 FR-I ①）。
       Reads every station in the band at once and lists them
       (requirement FR-I, first mode). }
-    rmWatch);
+    rmWatch,
+    { 得点になる局と、既に交信した局を区別して並べる（要件 FR-I ②・FR-I.5）。
+
+      読み方は待機モードと同じで、**見せ方が違います。**交信済みの局を隠せる
+      ことと、時間あたりの交信数を出すことが、コンテスト中に見たいものです。
+      得点計算には踏み込みません（未解決 #9）。規約は大会ごとに違い、**間違った
+      得点を出すのは、何も出さないより悪い**ためです。
+
+      Distinguishes the stations that score and the ones already worked
+      (requirement FR-I, second mode; FR-I.5).
+
+      It reads the same way the waiting mode does and **shows it differently**:
+      being able to hide the stations already worked, and seeing the contacts
+      per hour, are what a contest wants on screen. Scoring is left alone
+      (unresolved #9): the rules differ from contest to contest, and **a wrong
+      score is worse than none.** }
+    rmContest);
 
   { 復号 1 件を UI スレッドの外で実行し、結果を Synchronize で返します。
     デコーダはフォームが所有したままですが、生きているスレッドは常に 1 つだけ
@@ -287,6 +303,13 @@ type
     FWatchTools: TPanel;
     FRxWatch: TEdit;
     FRxWatchInfo: TLabel;
+    { コンテストモードでだけ現れる行（要件 FR-I.5）。
+      A row that appears only in the contest mode (requirement FR-I.5). }
+    FFindTools: TPanel;
+    FContestTools: TPanel;
+    FRxBand: TComboBox;
+    FRxHideWorked: TCheckBox;
+    FRxRate: TLabel;
     FRxTuneInfo: TLabel;
     FRxTuneClear: TButton;
     FRxTrack: TCheckBox;
@@ -357,9 +380,20 @@ type
       選ばれている行から取ります。無ければ空です。
       The call sign that could be logged now: from the transcript in the contact
       mode and from the chosen row in the waiting mode, or empty. }
+    { 帯域全体を読むモードか。待機とコンテストは読み方が同じで、見せ方だけが
+      違います。**分岐を「待機か」で書くと、コンテストモードで受信そのものが
+      止まります。**
+      Whether the whole band is read. The waiting and contest modes read the same
+      way and differ only in what they show; **branching on "is it the waiting
+      mode" would stop reception itself in the contest mode.** }
+    function BandMode: Boolean;
     function CallsignToLog: string;
     procedure ReadTranscript;
     procedure ShowStationLabels;
+    function SelectedBand: string;
+    function WithoutWorked(const Entries: TBandEntries): TBandEntries;
+    procedure RxContestChanged(Sender: TObject);
+    procedure UpdateRate;
     function WatchedCall(const Callsign: string): string;
     procedure RxWatchChanged(Sender: TObject);
     procedure AnnounceWatched;
@@ -589,10 +623,12 @@ begin
   FJournal.Enabled := FSetJournal.Checked;
   { 読み込んだモードを画面へ反映します。控えるだけでは効きません。
     Apply the mode that was loaded; holding it in a control is not enough. }
-  if FRxMode.ItemIndex = 1 then
-    FMode := rmWatch
+  case FRxMode.ItemIndex of
+    1: FMode := rmWatch;
+    2: FMode := rmContest;
   else
     FMode := rmContact;
+  end;
   ApplyMode;
   UpdateFindInfo;
   { 設定に装置名が無かった場合でも一覧は用意します。
@@ -966,6 +1002,7 @@ begin
     line instead. }
   FRxMode.Items.Add('交信モード');
   FRxMode.Items.Add('待機モード');
+  FRxMode.Items.Add('コンテスト');
   FRxMode.ItemIndex := 0;
   { 通知は設定を読み終えてから繋ぎます。読み込みの代入で通知が走ると、起動した
     だけで「モードにしました」という身に覚えのない案内が出ます。
@@ -1088,6 +1125,9 @@ begin
   StackBelow(FindTools);
   FindTools.Align := alTop;
   FindTools.BevelOuter := bvNone;
+  { モードによって出し入れするので、この行だけは手元に控えます。
+    This row is shown and hidden by mode, so a reference to it is kept. }
+  FFindTools := FindTools;
 
   { 検索（要件 FR-B.5）。溜まった受信テキストから、呼出符号や符丁を探すための
     ものです。入力しながら探し、Enter で次へ進みます。
@@ -1164,6 +1204,57 @@ begin
   FRxWatchInfo := TLabel.Create(FWatchTools);
   FRxWatchInfo.Parent := FWatchTools;
   FRxWatchInfo.SetBounds(352, 9, 600, 20);
+
+  { コンテスト中に見たいものを 1 行に置きます。**運用バンド・交信済みを隠す・
+    時間あたりの交信数**の 3 つです。
+
+    バンドを運用者が選ぶのは、**この機械が電波の周波数を知らない**ためです
+    （受信機との連携は別仕様）。世界のコンテストソフトは無線機から周波数を
+    受け取りますが、それが無い環境では手で選ばせるのが通例です。
+
+    What a contest wants on one row: the band being worked, hiding what is
+    already worked, and the contacts per hour.
+
+    The operator chooses the band because **this machine does not know the
+    radio's frequency** (the receiver link is a separate specification). Contest
+    software elsewhere takes it from the radio; without that, choosing by hand is
+    the usual arrangement. }
+  FContestTools := TPanel.Create(TextPanel);
+  FContestTools.Parent := TextPanel;
+  FContestTools.Height := 34;
+  StackBelow(FContestTools);
+  FContestTools.Align := alTop;
+  FContestTools.BevelOuter := bvNone;
+  AddLabel(FContestTools, '運用バンド', 6, 9);
+  FRxBand := TComboBox.Create(FContestTools);
+  FRxBand.Parent := FContestTools;
+  FRxBand.SetBounds(96, 4, 130, 26);
+  FRxBand.Style := csDropDownList;
+  { 表記は運用者の言葉（MHz）で、記録には ADIF の名前で残します。
+    Shown in the operator's terms (MHz) and recorded under the ADIF name. }
+  FRxBand.Items.Add('指定なし');
+  FRxBand.Items.Add('1.9 MHz');
+  FRxBand.Items.Add('3.5 MHz');
+  FRxBand.Items.Add('7 MHz');
+  FRxBand.Items.Add('14 MHz');
+  FRxBand.Items.Add('21 MHz');
+  FRxBand.Items.Add('28 MHz');
+  FRxBand.Items.Add('50 MHz');
+  FRxBand.Items.Add('144 MHz');
+  FRxBand.Items.Add('430 MHz');
+  FRxBand.ItemIndex := 0;
+  FRxBand.OnChange := @RxContestChanged;
+
+  FRxHideWorked := TCheckBox.Create(FContestTools);
+  FRxHideWorked.Parent := FContestTools;
+  FRxHideWorked.SetBounds(240, 6, 190, 24);
+  FRxHideWorked.Caption := '交信済みを隠す';
+  FRxHideWorked.Checked := True;
+  FRxHideWorked.OnChange := @RxContestChanged;
+
+  FRxRate := TLabel.Create(FContestTools);
+  FRxRate.Parent := FContestTools;
+  FRxRate.SetBounds(444, 9, 500, 20);
 
   FRxBandMap := TBandMapView.Create(TextPanel);
   FRxBandMap.Parent := TextPanel;
@@ -1352,7 +1443,10 @@ begin
     FRxFontSize.Value := ClampInt(Ini.ReadInteger('receive', 'font_size', 14), 9, 32);
     FSetRetention.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'retention', 1), 0, 3);
     FSetJournal.Checked := Ini.ReadBool('receive', 'journal', True);
-    FRxMode.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'mode', 0), 0, 1);
+    FRxMode.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'mode', 0), 0, 2);
+    FRxBand.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'band', 0),
+      0, FRxBand.Items.Count - 1);
+    FRxHideWorked.Checked := Ini.ReadBool('receive', 'hide_worked', True);
     { 待つ符号は覚えておきます。待っている相手は、アプリを閉じたくらいでは
       変わらないためです。
       The call signs waited for are remembered: closing the application is not a
@@ -1419,6 +1513,8 @@ begin
       Ini.WriteBool('receive', 'journal', FSetJournal.Checked);
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('receive', 'watch', FRxWatch.Text);
+      Ini.WriteInteger('receive', 'band', FRxBand.ItemIndex);
+      Ini.WriteBool('receive', 'hide_worked', FRxHideWorked.Checked);
       Ini.WriteString('audio', 'input_device', SelectedDeviceName);
       Ini.WriteBool('receive', 'track_signal', FRxTrack.Checked);
     finally
@@ -1678,7 +1774,7 @@ begin
     LogDiagnostic('デコード', Thread.Error);
     SetStatus('', '', StatusLine(Thread.Error));
   end
-  else if FMode = rmWatch then
+  else if BandMode then
     { 待機モードでは、局ごとの受信文ではなく一覧を出します。
       In the waiting mode the list is shown, not a per-station transcript. }
     RefreshBandMap
@@ -1709,7 +1805,7 @@ begin
         いないほうを触ると、何も無いところを確定させることになります。
         Which machine was running decides which one reads out the remainder;
         touching the other would commit from nothing. }
-      if FMode = rmWatch then
+      if BandMode then
       begin
         if FMulti <> nil then
         begin
@@ -2026,7 +2122,7 @@ begin
     In the waiting mode a recording is read as a band: a list can be built from a
     recording of a crowded band, and **the path can be checked on a machine with
     no sound hardware.** }
-  if FMode = rmWatch then
+  if BandMode then
   begin
     if FMulti = nil then
       FMulti := TMultiStationDecoder.Create(FDecoder);
@@ -2125,7 +2221,7 @@ begin
     In the waiting mode the remainder shorter than a window is read out here;
     without it the last ten seconds would be missing from every station
     (requirement FR-I.1). }
-  if (FMode = rmWatch) and (FMulti <> nil) and not DecoderBusy then
+  if BandMode and (FMulti <> nil) and not DecoderBusy then
     try
       FMulti.Finish;
       FBandMapAt := 0;
@@ -2242,9 +2338,78 @@ begin
     ExtractFilePath(ConfigFileName)) + 'contacts.adi';
 end;
 
+{ 選ばれている運用バンドの ADIF 名。「指定なし」なら空を返します。
+  The ADIF name of the band selected, or empty for "not set". }
+function TMainForm.SelectedBand: string;
+const
+  { 選択肢の並びと同じ順です。ADIF の名前をそのまま使います。
+    In the same order as the choices, using ADIF's own names. }
+  NAMES: array[0..9] of string = ('', '160M', '80M', '40M', '20M', '15M',
+    '10M', '6M', '2M', '70CM');
+begin
+  if (FRxBand = nil) or (FRxBand.ItemIndex < Low(NAMES)) or
+     (FRxBand.ItemIndex > High(NAMES)) then
+    Exit('');
+  Result := NAMES[FRxBand.ItemIndex];
+end;
+
+{ 交信済みか。**運用バンドを選んでいれば、そのバンドだけを見ます。**7 MHz で
+  交信した局を 14 MHz で「交信済み」と示すと、有効な交信を見送らせます。
+
+  モードでは分けません。記録に残るバンドは `SelectedBand` ですから、**残す
+  バンドと、問うバンドが違えば、記録と画面が食い違います。**一覧で「まだ」と
+  出た局を選んだ次の画面で「交信済み」と出るのは、そのずれです。
+
+  「指定なし」のままなら、バンドを問わず「かつて交信したか」を答えます。バンドを
+  選んでいない運用者にとっては、それが「知っている局か」だからです。
+
+  Whether the station has been worked. **With an operating band chosen, only that
+  band counts**: marking a station worked on 7 MHz as worked on 14 MHz would have
+  the operator pass over a valid contact.
+
+  The mode does not enter into it. The band a contact is recorded under is
+  `SelectedBand`, so **asking about a different band than the one it will be
+  recorded under would let the record and the screen disagree** -- which is
+  exactly what "not yet" in the list followed by "worked" on the next screen
+  would be.
+
+  Left at "not set", the answer covers every band, because to an operator who has
+  not chosen one that is what "do I know this station" means. }
 function TMainForm.WorkedBefore(const Callsign: string): Boolean;
 begin
-  Result := (FLog <> nil) and (FLog.WorkedCount(Callsign) > 0);
+  if FLog = nil then
+    Exit(False);
+  Result := FLog.WorkedCountOn(Callsign, SelectedBand) > 0;
+end;
+
+procedure TMainForm.RxContestChanged(Sender: TObject);
+begin
+  { バンドを変えれば交信済みの判定が変わります。一覧を作り直さないと、前の
+    バンドの印が残ります。
+    Changing the band changes what counts as worked; without rebuilding, the
+    previous band's marks would stay on screen. }
+  FBandMapAt := 0;
+  RefreshBandMap;
+  UpdateLogInfo;
+  if Sender <> nil then
+    MarkSettingsDirty;
+end;
+
+{ 直近 1 時間の交信数。コンテスト中に運用者が最も見る数字です。**得点ではなく、
+  自分の記録から数えられるものだけを出します**（未解決 #9）。
+  Contacts in the last hour, the number a contest operator watches most.
+  **Not a score: only what can be counted from the operator's own log**
+  (unresolved #9). }
+procedure TMainForm.UpdateRate;
+var
+  Hour, Total: Integer;
+begin
+  if (FRxRate = nil) or (FLog = nil) then
+    Exit;
+  Hour := FLog.CountSince(IncHour(LocalTimeToUniversal(Now), -1));
+  Total := FLog.Count;
+  FRxRate.Caption := Format('直近 1 時間: %d 局 ／ 記録全体: %d 局',
+    [Hour, Total]);
 end;
 
 { いま記録に残せる呼出符号を探します。
@@ -2275,7 +2440,7 @@ begin
   Result := '';
   if FChosenCallsign <> '' then
     Exit(FChosenCallsign);
-  if FMode = rmWatch then
+  if BandMode then
   begin
     if FRxBandMap.SelectedId = 0 then
       Exit;
@@ -2311,8 +2476,13 @@ begin
   if Call = '' then
     FRxLogInfo.Caption := '相手の符号が読めたら記録できます'
   else if WorkedBefore(Call) then
+    { 日付も同じバンドから採ります。回数だけをバンドごとに答えて日付を全体から
+      採ると、そのバンドで交信していない日付を「交信済み」の証拠として示します。
+      The date comes from the same band: answering the count band by band while
+      taking the date from every band would offer, as the evidence of a duplicate,
+      a date on which that band was not worked. }
     FRxLogInfo.Caption := Format('%s%s（%s に交信済み）',
-      [Call, Note, FLog.LastWorkedOn(Call)])
+      [Call, Note, FLog.LastWorkedOn(Call, SelectedBand)])
   else
     FRxLogInfo.Caption := Call + Note;
   if FSetLogInfo <> nil then
@@ -2341,7 +2511,7 @@ begin
     these two fields as UTC, and left local the logger that reads them would
     treat them as a different moment. }
   Moment := LocalTimeToUniversal(Now);
-  Item := BuildContact(Call, Moment);
+  Item := BuildContact(Call, Moment, 'CW', SelectedBand);
   if not FLog.Add(Item) then
   begin
     LogDiagnostic('交信記録', FLog.LastError);
@@ -2355,11 +2525,21 @@ begin
     starts coming in. }
   FChosenCallsign := '';
   UpdateLogInfo;
+  UpdateRate;
   FBandMapAt := 0;
   RefreshBandMap;
   RefreshInfo;
-  SetStatus('', '', Format('%s との交信を記録しました（%s UTC）。',
-    [Call, FormatDateTime('yyyy-mm-dd hh:nn', Moment)]));
+  { どのバンドで残したかも言います。**運用バンドを選ぶ操作はコンテストの行に
+    しかないので、ほかのモードでは何で残したのかが画面から読めません。**
+    The band it was recorded under is said too: **the control that chooses it is
+    only on the contest row, so in the other modes the screen would not say what
+    the contact was filed under.** }
+  if SelectedBand <> '' then
+    SetStatus('', '', Format('%s との交信を %s で記録しました（%s UTC）。',
+      [Call, FRxBand.Text, FormatDateTime('yyyy-mm-dd hh:nn', Moment)]))
+  else
+    SetStatus('', '', Format('%s との交信を記録しました（%s UTC）。',
+      [Call, FormatDateTime('yyyy-mm-dd hh:nn', Moment)]));
 end;
 
 procedure TMainForm.SetLogImportClick(Sender: TObject);
@@ -2380,6 +2560,7 @@ begin
       Exit;
     end;
     UpdateLogInfo;
+    UpdateRate;
     FBandMapAt := 0;
     RefreshBandMap;
     RefreshInfo;
@@ -2420,9 +2601,14 @@ end;
 
 { ---- 受信のしかた（要件 FR-I.6・FR-J） ---- }
 
+function TMainForm.BandMode: Boolean;
+begin
+  Result := FMode in [rmWatch, rmContest];
+end;
+
 function TMainForm.ActiveElapsedSeconds: Double;
 begin
-  if (FMode = rmWatch) and (FMulti <> nil) then
+  if BandMode and (FMulti <> nil) then
     Result := FMulti.ElapsedSeconds
   else if FStream <> nil then
     Result := FStream.ElapsedSeconds
@@ -2446,7 +2632,7 @@ end;
   continuity on screen. }
 procedure TMainForm.ApplyMode;
 begin
-  if FMode = rmWatch then
+  if BandMode then
   begin
     if (FMulti = nil) and (FDecoder <> nil) then
       FMulti := TMultiStationDecoder.Create(FDecoder);
@@ -2477,7 +2663,7 @@ begin
     前の相手が記録の候補として残ります。
     Back to the list, the remembered call sign has served its purpose; carried
     over it would stand as the candidate to log until another is chosen. }
-  if FMode = rmWatch then
+  if BandMode then
     FChosenCallsign := '';
   { 一覧の控えも捨てます。残しておくと、消えた一覧の中身で記録の相手が決まります。
     The cached list goes too: kept, it would decide who to log from a list that
@@ -2490,8 +2676,19 @@ begin
     mode's station names would float over the contact mode's waterfall. }
   FRxWaterfall.SetStations(nil);
   FRxTranscript.Visible := FMode = rmContact;
-  FRxBandMap.Visible := FMode = rmWatch;
-  FWatchTools.Visible := FMode = rmWatch;
+  FRxBandMap.Visible := BandMode;
+  { 検索・記録・聴き直しの行は受信テキストと一緒に出し入れします。**この行の
+    操作はすべて受信テキストに対するもので、一覧を出している間はどれも押せません。**
+    押せない操作を並べたまま、一覧を 1 行に狭めるのは逆です。コンテストでは
+    一覧が主役なので、その分をここから返します。
+    The row of search, log and replay controls appears with the transcript.
+    **Every control on it acts on the transcript, and none of them can be pressed
+    while the list is shown.** Keeping a row of dead controls and squeezing the
+    list down to a single row would be the wrong way round: in a contest the list
+    is the tool, and this is where the room for it comes from. }
+  FFindTools.Visible := FMode = rmContact;
+  FWatchTools.Visible := BandMode;
+  FContestTools.Visible := FMode = rmContest;
   { 受信をやり直せば局の番号も振り直されるので、知らせた覚えは捨てます。
     残すと、番号を使い回した別の局が黙ったままになります。
     Restarting reception renumbers the stations, so what was announced is
@@ -2500,17 +2697,28 @@ begin
   UpdateReplayInfo;
   UpdateFindInfo;
   UpdateWatchInfo;
+  { 交信数はモードを移した時点で出します。**受信を始めるまで空欄のままでは、
+    数えていないのか 0 局なのかが分かりません。**
+    The contact count is shown the moment the mode is entered: **left blank
+    until reception starts, it would not say whether nothing is counted or
+    nothing has been worked.** }
+  UpdateRate;
 end;
 
 procedure TMainForm.RxModeChanged(Sender: TObject);
 begin
-  if FRxMode.ItemIndex = 1 then
-    FMode := rmWatch
+  case FRxMode.ItemIndex of
+    1: FMode := rmWatch;
+    2: FMode := rmContest;
   else
     FMode := rmContact;
+  end;
   ApplyMode;
   MarkSettingsDirty;
-  if FMode = rmWatch then
+  if FMode = rmContest then
+    SetStatus('', '', 'コンテストモードにしました。交信済みの局を隠せます。' +
+      '得点計算は行いません。')
+  else if FMode = rmWatch then
     SetStatus('', '', '待機モードにしました。帯域内の局を一覧に出します。' +
       '受信文は改めて取り直します。')
   else
@@ -2640,7 +2848,7 @@ end;
   times a second, and copying every transcript that often would be waste. }
 procedure TMainForm.RefreshBandMap;
 begin
-  if (FMulti = nil) or (FMode <> rmWatch) then
+  if (FMulti = nil) or not BandMode then
     Exit;
   if MilliSecondsBetween(Now, FBandMapAt) < 1000 then
     Exit;
@@ -2651,9 +2859,36 @@ begin
     would run a 10.6 ms job five times a second (measured in dsp_check). }
   FBandEntries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
     @WorkedBefore, @WatchedCall);
+  { コンテストモードでは、交信済みの局を一覧から外せます。**世界のコンテスト
+    ソフトが例外なく持つ機能で、混み合った帯域では、呼ぶ相手だけが残ることに
+    値打ちがあります。**外した局も記録には残っており、印を外せば戻ります。
+    In the contest mode the stations already worked can be dropped from the
+    list. **Contest software everywhere has this**, and on a crowded band the
+    value is in what remains: only the stations worth calling. What is dropped
+    is still in the log and comes back when the box is cleared. }
+  if (FMode = rmContest) and FRxHideWorked.Checked then
+    FBandEntries := WithoutWorked(FBandEntries);
   FRxBandMap.SetEntries(FBandEntries, FMulti.ElapsedSeconds);
   ShowStationLabels;
   AnnounceWatched;
+  UpdateRate;
+end;
+
+{ 交信済みの行を除いた一覧。
+  The list without the rows already worked. }
+function TMainForm.WithoutWorked(const Entries: TBandEntries): TBandEntries;
+var
+  I, Count: Integer;
+begin
+  SetLength(Result, Length(Entries));
+  Count := 0;
+  for I := 0 to High(Entries) do
+    if not Entries[I].Worked then
+    begin
+      Result[Count] := Entries[I];
+      Inc(Count);
+    end;
+  SetLength(Result, Count);
 end;
 
 { 一覧と同じ内容を、ウォーターフォールの音程の上へも渡します（要件 FR-J.5）。
@@ -3245,7 +3480,7 @@ var
 begin
   if FCapture = nil then
     Exit;
-  if (FMode = rmWatch) and (FMulti = nil) then
+  if BandMode and (FMulti = nil) then
     Exit;
   if (FMode = rmContact) and (FStream = nil) then
     Exit;
