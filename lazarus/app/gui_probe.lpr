@@ -557,6 +557,76 @@ begin
   finally
     Shot.Free;
   end;
+  { 文字を重ねたときの描画（要件 FR-D.6 を入れたあと）。**長い受信で溜まった
+    文字を毎回すべて見ていたら、時間が経つほど画面が重くなります。**画面に入る
+    のは 10 秒ぶんだけなので、溜まった量に関わらず変わらないはずです。
+
+    Drawing with the characters laid over (after requirement FR-D.6). **Walking
+    every character accumulated over a long session on every paint would make
+    the display heavier the longer it ran.** Only ten seconds' worth is ever on
+    screen, so the cost should not follow how much has piled up. }
+  Aligned := BuildChars(200000);
+  for Frame := 0 to High(Aligned) do
+    { 受信開始からの時刻を、画面が持つ 10 秒よりずっと古いところから並べます。
+      Times laid out from long before the ten seconds the display holds. }
+    Aligned[Frame].Seconds := View.NewestSeconds - (High(Aligned) - Frame) * 0.04;
+  View.SetCharacters(Aligned);
+  View.ShowCharacters := True;
+  View.TuneHz := 700;
+  Application.ProcessMessages;
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(View.Width, View.Height);
+    Started := Now;
+    for Frame := 1 to 100 do
+    begin
+      View.Touch;
+      View.PaintTo(Shot.Canvas, 0, 0);
+    end;
+    PaintMs := MilliSecondsBetween(Now, Started) / 100;
+  finally
+    Shot.Free;
+  end;
+  WriteLn(Format('  20 万文字を重ねた描画: %.2f ms', [PaintMs]));
+  { 30 fps（要件 NFR-1.6）は 1 枚 33 ms。文字を重ねてもそこへ届くこと。
+    Thirty frames a second (requirement NFR-1.6) is 33 ms a frame; the overlay
+    must not put it past that. }
+  Check('文字を重ねても 1 枚 33 ms 未満', PaintMs < 33,
+    Format('(%.2f ms)', [PaintMs]));
+  Check('文字を重ねても、重ねない場合の 3 倍を超えない', PaintMs < Elapsed * 3 + 1,
+    Format('(%.2f ms 対 %.2f ms)', [PaintMs, Elapsed]));
+
+  { **画面より新しい文字ばかりのとき。**受信のあとにファイルを読ませると、
+    波形は 0 秒から数え直し、手元の文字は前の受信の時刻を持ったまま、という
+    瞬間があり得ます。そこで 1 文字ずつ全部を見ていたら、20 万文字ぶん歩きます。
+    **All the characters newer than the display.** Reading a file after a live
+    reception leaves the waterfall counting from zero for a moment while the
+    characters still carry the previous reception's times. Walking them one by
+    one would walk all two hundred thousand. }
+  for Frame := 0 to High(Aligned) do
+    Aligned[Frame].Seconds := View.NewestSeconds + 1000 + Frame * 0.04;
+  View.SetCharacters(Aligned);
+  Application.ProcessMessages;
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(View.Width, View.Height);
+    Started := Now;
+    for Frame := 1 to 20 do
+    begin
+      View.Touch;
+      View.PaintTo(Shot.Canvas, 0, 0);
+    end;
+    PaintMs := MilliSecondsBetween(Now, Started) / 20;
+  finally
+    Shot.Free;
+  end;
+  WriteLn(Format('  画面より新しい 20 万文字での描画: %.2f ms', [PaintMs]));
+  Check('画面に無い文字ばかりでも 1 枚 33 ms 未満', PaintMs < 33,
+    Format('(%.2f ms)', [PaintMs]));
+  View.ShowCharacters := False;
+  View.SetCharacters(nil);
+  View.TuneHz := 0;
+
   WriteLn(Format('  1 回の描画: %.2f ms（毎秒 25 行の更新で %.1f %%）',
     [Elapsed, Elapsed * 25 / 10]));
   Check('描画が 1 行あたり 5 ms 未満', Elapsed < 5.0,
@@ -570,6 +640,39 @@ begin
     A shack runs for hours and the characters only accumulate. **If drawing and
     copying grow with what has accumulated, the display gets slower the longer
     it is used.** This is timed rather than assumed (requirement NFR-1.5). }
+  { 長いファイルを一度に流したときの費用。版 2.25 で、ファイルの復号でも波形を
+    出すようにしました。**画面に残るのは末尾の 10 秒ぶんだけなのに、渡された
+    ぶんすべてに FFT を掛けていたら、長いファイルで画面が止まります。**
+    利用者が「デコード」を押してから絵が出るまでの間、操作を受け付けません。
+
+    The cost of one long file at once. Since version 2.25 a file decode draws the
+    waterfall too. **Only the last ten seconds survive on screen, so running an
+    FFT over everything handed in would freeze the display on a long file** --
+    the operator gets no response between pressing decode and the picture
+    appearing. }
+  View.Clear;
+  SetLength(Audio, 8000 * 600);
+  for Frame := 0 to High(Audio) do
+    Audio[Frame] := 0;
+  Started := Now;
+  View.PushSamples(Audio, 8000, 0);
+  Elapsed := MilliSecondsBetween(Now, Started);
+  WriteLn(Format('  10 分の音を一度に流す: %.0f ms', [Elapsed]));
+  { 押してから 200 ms を超えると、止まったと感じます（画面の更新間隔と同じ）。
+    Past 200 ms -- the display's own refresh interval -- it reads as a freeze. }
+  Check('10 分の音でも 200 ms 未満', Elapsed < 200, Format('(%.0f ms)', [Elapsed]));
+  { **飛ばした分だけ基準を進めていること。**進め忘れると、10 分のファイルの
+    末尾の行が「10 秒目」になり、文字がまったく別の場所へ並びます。速くする
+    ついでに時刻を壊すのが、いちばんありがちな失敗です。
+    **The origin must move forward by what was skipped.** Forgetting it would
+    date the last row of a ten-minute file at ten seconds, and the characters
+    would line up somewhere else entirely. Breaking the time while making it
+    faster is the easiest mistake to make. }
+  Check('飛ばしても末尾の行の時刻が合っている',
+    Abs(View.NewestSeconds - 600.0) < 0.3,
+    Format('(%.2f 秒、渡したのは 0〜600 秒)', [View.NewestSeconds]));
+  Audio := nil;
+
   { ── 復号文字の時刻整列（要件 FR-D.6）──
     受入基準は「位置誤差 100 ms 以内」。**時刻を画面の高さへ写し、そこから時刻へ
     戻して、元と何秒ずれるかで測ります。**画素を数えないのは、この部品の

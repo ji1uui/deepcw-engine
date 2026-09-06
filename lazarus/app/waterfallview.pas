@@ -475,7 +475,7 @@ procedure TWaterfallView.PushSamples(const Samples: TSingleArray;
 var
   Frame: TDoubleArray;
   Magnitudes: TDoubleArray;
-  I, Taken, Offset: Integer;
+  I, Taken, Offset, Room, Skip: Integer;
 begin
   if Length(Samples) = 0 then
     Exit;
@@ -500,8 +500,33 @@ begin
   end;
   FNextSeconds := StartSeconds + Length(Samples) / FSampleRate;
 
+  { 画面に残るのは末尾のぶんだけです。**それを超える量が一度に来たら、超えた分は
+    初めから読みません。**書いてすぐ上書きするために FFT を掛けるのは、そのまま
+    画面が止まる時間になります（10 分の録音で 1.9 秒）。保管庫が
+    「一度に容量を超える量が来たら、その末尾だけを残す」のと同じ考えです。
+
+    Only the tail ever survives on screen. **When more than that arrives at
+    once, the excess is never read.** Running an FFT over audio that is
+    overwritten immediately turns straight into time the display is frozen --
+    1.9 seconds for a ten-minute recording. It is the same reasoning by which
+    the audio store keeps only the tail of an oversized block.
+
+    飛ばした分だけ基準を進めるので、行の時刻はずれません。
+    The origin moves forward by what was skipped, so the rows keep their
+    times. }
+  Room := WATERFALL_ROWS * FHop + FFFTSize;
+  Skip := 0;
+  if Length(Samples) > Room then
+  begin
+    Skip := Length(Samples) - Room;
+    FBaseSeconds := StartSeconds + Skip / FSampleRate;
+    FConsumed := 0;
+    FCarryCount := 0;
+    FNewestRowSeconds := FBaseSeconds;
+  end;
+
   SetLength(Frame, FFFTSize);
-  Offset := 0;
+  Offset := Skip;
   while Offset < Length(Samples) do
   begin
     Taken := Min(Length(Samples) - Offset, Length(FCarry) - FCarryCount);
