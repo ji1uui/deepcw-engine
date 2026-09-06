@@ -38,6 +38,29 @@ const
   { 解析を回す最小の間隔。/ Shortest interval between analyses. }
   STREAM_MIN_INTERVAL_SECONDS = 1.0;
 
+  { 画面が音声を渡してくる刻み。
+
+    **これは復号器の都合ではなく、受信経路の動作点です。**暫定文字の遅延
+    （要件 NFR-1.1）はこの刻みでほぼ決まり、実測では 0.2 秒で 0.47〜0.88 秒、
+    0.5 秒で 1.09〜1.44 秒、1.0 秒で 1.71〜1.95 秒（目標 1.5 秒を超える）でした。
+
+    **測る道具と画面が別の刻みを使うと、目標を満たしているかどうかを
+    実際の動作点で測っていないことになります。**そこで値をここ 1 つに置き、
+    画面（取り込みの間隔）も `cw_stream` の既定もこれを使います。
+
+    The interval at which the display hands audio over.
+
+    **This is an operating point of the receive path, not a property of the
+    decoder.** The provisional-character latency (requirement NFR-1.1) follows
+    almost entirely from it: measured at 0.47-0.88 s with 0.2 s chunks,
+    1.09-1.44 s with 0.5 s, and 1.71-1.95 s with 1.0 s -- past the 1.5 s target.
+
+    **A harness feeding at a different interval from the display is not
+    measuring at the operating point that has to meet the target.** So the value
+    lives here once, and both the display's capture interval and `cw_stream`'s
+    default are taken from it. }
+  STREAM_FEED_SECONDS = 0.2;
+
   { 溜めておく音声の上限。解析にかける長さの倍を持ちます。
 
     **これを超えた分は捨てます。**入ってくる速さが解析の速さを上回ることは

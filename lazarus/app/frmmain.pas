@@ -682,7 +682,12 @@ begin
   FPages.OnChange := @PagesChanged;
 
   FPollTimer := TTimer.Create(Self);
-  FPollTimer.Interval := 200;
+  { 取り込みの間隔は、受信経路の動作点そのものです（要件 NFR-1.1）。
+    測る道具と同じ値を使うため、`DeepCW.Stream` の定数から決めます。
+    The capture interval is the receive path's operating point (requirement
+    NFR-1.1). It is taken from the constant in `DeepCW.Stream` so that the
+    harness measures at the same point. }
+  FPollTimer.Interval := Round(STREAM_FEED_SECONDS * 1000);
   FPollTimer.OnTimer := @PollTimer;
   FPollTimer.Enabled := True;
 end;

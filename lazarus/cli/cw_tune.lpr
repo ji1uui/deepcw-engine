@@ -180,6 +180,32 @@ begin
       Result[I] := Wanted[I];
 end;
 
+{ 試験全体で通らなかった数。
+
+  **これが無かったため、91 件の検査を持ちながら、落ちても終了コードは 0 でした。**
+  出力を人が読まない限り、遅延や精度の劣化は誰にも気づかれません。`dsp_check` は
+  最初から終了コードへ反映しており、こちらだけが漏れていました。
+
+  How many checks failed across the whole run.
+
+  **Without this, ninety-one checks could all fail and the exit code stayed
+  zero**: a regression in latency or accuracy went unnoticed unless a human read
+  the output. `dsp_check` has always reported through its exit code; only this
+  one was missing it. }
+var
+  TotalFailures: Integer = 0;
+
+{ 試験ごとの締めくくり。数を全体へ足したうえで結果を出します。
+  A test's closing line: the count is added to the whole before it is printed. }
+procedure Summary(Failures: Integer);
+begin
+  Inc(TotalFailures, Failures);
+  if Failures = 0 then
+    WriteLn('  すべて通った')
+  else
+    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+end;
+
 procedure RunSweep;
 var
   ToneHz, Error, Best, BestTone: Double;
@@ -825,9 +851,17 @@ begin
         WriteLn(Format('  ok   %-10s → 不成立   %s', [CASES[I].Token, CASES[I].Why]));
     end
     else
+    begin
       WriteLn(Format('  NG   %-10s → %s（期待は %s）  %s',
         [CASES[I].Token, BoolToStr(Got, '成立', '不成立'),
          BoolToStr(CASES[I].Expect, '成立', '不成立'), CASES[I].Why]));
+      { 写し間違いは他の試験に表れません（要件 NFR-7.7）。ここで数えなければ、
+        ITU の規定を写し損ねても全体は通ったことになります。
+        A transcription slip shows up in no other test (requirement NFR-7.7);
+        uncounted here, getting the ITU provision wrong would leave the run
+        green. }
+      Inc(TotalFailures);
+    end;
   end;
   WriteLn(Format('  %d / %d', [Passed, Length(CASES)]));
 end;
@@ -1267,10 +1301,7 @@ begin
     Stream.Free;
   end;
 
-  if Failures = 0 then
-    WriteLn('  すべて通った')
-  else
-    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+  Summary(Failures);
 end;
 
 { 聴き直しの時刻が受信文と揃っているかを確かめます。
@@ -1543,10 +1574,7 @@ begin
     Stream.Free;
   end;
 
-  if Failures = 0 then
-    WriteLn('  すべて通った')
-  else
-    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+  Summary(Failures);
 end;
 
 { 局の自動検出を測ります（要件 FR-I.2・FR-I.3）。
@@ -1931,10 +1959,7 @@ begin
   Verdict('見つけた音程と決めた幅だけで 4 局とも完全に読める', J = 4,
     Format('(%d / %d 局)', [J, Length(Found)]));
 
-  if Failures = 0 then
-    WriteLn('  すべて通った')
-  else
-    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+  Summary(Failures);
 end;
 
 { 多局同時受信の、窓をまたぐ継ぎ合わせを測ります（要件 FR-I.1・FR-I.7）。
@@ -2367,10 +2392,7 @@ begin
     Multi.Free;
   end;
 
-  if Failures = 0 then
-    WriteLn('  すべて通った')
-  else
-    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+  Summary(Failures);
 end;
 
 {$IFDEF LINUX}
@@ -2701,10 +2723,7 @@ begin
     Format('(%d 回)', [ExactHits]));
 
   Waiting.Free;
-  if Failures = 0 then
-    WriteLn('  すべて通った')
-  else
-    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+  Summary(Failures);
 end;
 
 procedure RunScale;
@@ -2969,10 +2988,7 @@ begin
     Multi.Free;
   end;
 
-  if Failures = 0 then
-    WriteLn('  すべて通った')
-  else
-    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+  Summary(Failures);
 end;
 
 var
@@ -3069,4 +3085,15 @@ begin
   finally
     Decoder.Free;
   end;
+  { 通らなかったものがあれば、そう終わります。**画面に NG と出るだけでは、
+    回帰試験として働きません。**
+    A run with failures ends as one. **Printing NG is not enough to make this a
+    regression test.** }
+  if TotalFailures > 0 then
+    WriteLn(Format('%d 件が通りませんでした。', [TotalFailures]));
+  { Halt ではなく ExitCode で返します。Halt は後始末の道筋が変わり、この
+    プログラムでは ONNX を積んだまま終わるときに落ちました。
+    ExitCode rather than Halt: Halt takes a different teardown path, and in this
+    program that crashed while the ONNX runtime was still loaded. }
+  ExitCode := Ord(TotalFailures > 0);
 end.
