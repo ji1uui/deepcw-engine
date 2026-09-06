@@ -19,7 +19,7 @@ program gui_probe;
 uses
   SysUtils, DateUtils, Math, Classes, Interfaces, Forms, Controls, Graphics, LCLType,
   DeepCW.Types, DeepCW.Morse, DeepCW.Tuner, DeepCW.Decoder,
-  DeepCW.Review, DeepCW.Multi, DeepCW.BandMap, DeepCW.Exchange,
+  DeepCW.Review, DeepCW.Multi, DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch,
   WaterfallView, TranscriptView, BandMapView;
 
 type
@@ -45,6 +45,12 @@ type
   TProbeBandMap = class(TBandMapView)
   public
     procedure Tap(Y: Integer);
+  end;
+
+  { 待ち符号の引き当て。/ The watch lookup. }
+  TWatchingFor = class
+    List: TWatchedCalls;
+    function Lookup(const Callsign: string): string;
   end;
 
   { 選ばれた局を控えます。/ Records the station that was chosen. }
@@ -104,6 +110,11 @@ end;
 procedure TProbeBandMap.Tap(Y: Integer);
 begin
   MouseDown(mbLeft, [], 10, Y);
+end;
+
+function TWatchingFor.Lookup(const Callsign: string): string;
+begin
+  Result := MatchedWatch(Callsign, List);
 end;
 
 procedure TStationWatcher.Choose(Sender: TObject; AId: Int64; AHz: Double);
@@ -384,6 +395,7 @@ var
   PickedIndex, PlayRate: Integer;
   Ex: TExchange;
   Underlined, Marked, Thin, Thick, Y: Integer;
+  Waiting: TWatchingFor;
 
 begin
   OutDir := ParamStr(1);
@@ -923,6 +935,46 @@ begin
     (Pos('JH3DEF', BandMap.NameCaption(1)) > 0) and
     (BandMap.NameCaption(1) <> 'JH3DEF'),
     Format('("%s")', [BandMap.NameCaption(1)]));
+  { 待っていた局には印が付き、待っていない局には付かないこと（要件 FR-I.4）。
+    **知らせは一度きりで流れてしまうので、行にも残ります。**席を外していて案内を
+    見逃しても、一覧を見ればどれが待っていた局か分かります。
+    The station waited for is marked and the others are not (requirement FR-I.4).
+    **An announcement goes by once, so the row carries it too**: an operator who
+    was away can still see which row it was. }
+  Check('待っていなければ印は付かない',
+    Pos('★', BandMap.NameCaption(0)) = 0,
+    Format('("%s")', [BandMap.NameCaption(0)]));
+  Waiting := TWatchingFor.Create;
+  try
+    Waiting.List := ParseWatchList('JH2XYZ');
+    Entries := BuildBandEntries(Logs, 320, nil, @Waiting.Lookup);
+    BandMap.SetEntries(Entries, 320);
+    Application.ProcessMessages;
+    Check('待っていた局に印が付く',
+      (Pos('★', BandMap.NameCaption(0)) > 0) and
+      (Pos('JH2XYZ', BandMap.NameCaption(0)) > 0),
+      Format('("%s")', [BandMap.NameCaption(0)]));
+    Check('待っていない局には印が付かない',
+      Pos('★', BandMap.NameCaption(1)) = 0,
+      Format('("%s")', [BandMap.NameCaption(1)]));
+    { 確かでない符号には付かないこと。JH3DEF は 1 度きりなので、待っていても
+      印は付きません。
+      An uncertain call sign carries no mark: JH3DEF was seen once, so even when
+      waited for it stays unmarked. }
+    Waiting.List := ParseWatchList('JH3DEF');
+    Entries := BuildBandEntries(Logs, 320, nil, @Waiting.Lookup);
+    BandMap.SetEntries(Entries, 320);
+    Check('確かでない符号には印が付かない',
+      Pos('★', BandMap.NameCaption(1)) = 0,
+      Format('("%s")', [BandMap.NameCaption(1)]));
+  finally
+    Waiting.Free;
+  end;
+  { 元に戻してから続けます。/ Restored before going on. }
+  Entries := BuildBandEntries(Logs, 320);
+  BandMap.SetEntries(Entries, 320);
+  Application.ProcessMessages;
+
   { 密集している範囲は、1 局として読んだふりをしない（要件 FR-J.6）。 }
   Check('密集は呼出符号を出さずに密集と示す',
     (Pos('密集', BandMap.NameCaption(2)) > 0) and

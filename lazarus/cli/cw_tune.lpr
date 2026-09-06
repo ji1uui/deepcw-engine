@@ -27,7 +27,8 @@ program cw_tune;
 uses
   SysUtils, Classes, DateUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Decoder, DeepCW.Dsp, DeepCW.Morse, DeepCW.Tuner, DeepCW.Stream,
-  DeepCW.Callsign, DeepCW.Review, DeepCW.Stations, DeepCW.Multi;
+  DeepCW.Callsign, DeepCW.Review, DeepCW.Stations, DeepCW.Multi,
+  DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch;
 
 const
   { 試験に使う本文。実際の交信に出てくる形をなぞっています。
@@ -2426,6 +2427,286 @@ end;
   extrapolation is not a measurement.** Here the band is filled with stations and
   what is measured is how long a window actually takes, whether it fits inside
   the step of 7.5 seconds, and whether the stations still read. }
+{ 待っている呼出符号を見逃さないか、そして誤って知らせないか（要件 FR-I.4）。
+
+  受入基準は「見逃さない。誤検知は確信度で抑える」の 2 つで、逆を向きます。
+  **どちらへ倒すかを決める前に測ります。**
+
+  並べる 3 局は、待っている符号から**わざと 1 文字ずつ違えて**あります。
+  JH1ABC を待つとき、正しく読めた JH2ABC は 1 文字違いです。1 文字違いまで
+  知らせる規則を採ると、**正しく読めた隣の局が誤報になります。**その代償が
+  どれだけかを、見逃しがどれだけ減るかと並べて測ります。
+
+  Whether the call sign waited for is missed, and whether others are announced
+  by mistake (requirement FR-I.4).
+
+  The two acceptance criteria -- do not miss it, hold false alarms down -- pull
+  opposite ways. **This measures before the choice is made.**
+
+  The three stations are **deliberately one character apart** from the one
+  waited for. Waiting for JH1ABC, a correctly read JH2ABC is one character away,
+  so a rule that announces anything within one character **turns a correctly
+  read neighbour into a false alarm.** What that costs is measured next to what
+  it saves in misses. }
+type
+  TWatchingFor = class
+    List: TWatchedCalls;
+    function Lookup(const Callsign: string): string;
+  end;
+
+function TWatchingFor.Lookup(const Callsign: string): string;
+begin
+  Result := MatchedWatch(Callsign, List);
+end;
+
+procedure RunWatch;
+const
+  RATE = 8000;
+  CHUNK_SECONDS = 0.5;
+  STATIONS = 3;
+  ROUNDS_SENT = 4;
+  WANTED = 'JH1ABC';
+  NOISES: array[0..8] of Double = (0.0, 2.0, 4.0, 6.0, 9.0, 12.0, 14.0, 18.0, 24.0);
+var
+  Multi: TMultiStationDecoder;
+  Tones: array[0..STATIONS - 1] of Double;
+  Mixed, Piece: TSingleArray;
+  Entries: TBandEntries;
+  Watched: TWatchedCalls;
+  I, N, Position, Taken, Failures: Integer;
+  ExactHits, NearHits, Misses, FalseNear, AgreedHits: Integer;
+  FirstAlert, SlowestAlert: Double;
+  GotExact, GotNear: Boolean;
+  Wrong, Spurious: Integer;
+  Trust: TCallsignTrust;
+  Alerted, Sent, OneRound: Double;
+  Waiting: TWatchingFor;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
+  function Sentence(Station: Integer): string;
+  begin
+    Result := Format('CQ CQ DE JH%dABC JH%dABC K ', [Station + 1, Station + 1]);
+  end;
+
+  procedure Build(NoiseLevel: Double);
+  var
+    A, B: Integer;
+    Body: string;
+    Audio: TSingleArray;
+  begin
+    Mixed := nil;
+    for A := 0 to STATIONS - 1 do
+    begin
+      Body := '';
+      for B := 1 to ROUNDS_SENT do
+        Body := Body + Sentence(A);
+      Audio := Synthesise(NormalizeText(Body), RATE, Tones[A], 0, 8100 + A);
+      if Length(Audio) > Length(Mixed) then
+      begin
+        B := Length(Mixed);
+        SetLength(Mixed, Length(Audio));
+        while B <= High(Mixed) do
+        begin
+          Mixed[B] := 0;
+          Inc(B);
+        end;
+      end;
+      for B := 0 to High(Audio) do
+        Mixed[B] := Mixed[B] + 0.5 * Audio[B];
+    end;
+    RandSeed := 8200;
+    for A := 0 to High(Mixed) do
+      Mixed[A] := Mixed[A] + NoiseLevel * 0.25 * (Random + Random - 1);
+  end;
+
+begin
+  WriteLn;
+  WriteLn('watch: 待っている符号の見逃しと誤報 / missed and false watch alarms');
+  Failures := 0;
+  Tones[0] := 800;
+  Tones[1] := 1100;
+  Tones[2] := 1400;
+  Watched := ParseWatchList(WANTED);
+  Waiting := TWatchingFor.Create;
+  Waiting.List := Watched;
+  { 1 回の呼び出しを送るのにかかる時間。この中で呼出符号は 2 回送られるので、
+    確かさの条件が満たされるのはここまでです。
+    How long one call takes to send. The call sign goes out twice inside it, so
+    this is where the trust condition can first be met. }
+  OneRound := Length(Synthesise(NormalizeText(Sentence(0)), RATE, Tones[0], 0, 1))
+    / RATE;
+
+  WriteLn('    待つ符号: ', WANTED, '（並ぶ 3 局は 1 文字ずつ違う）');
+  WriteLn('    雑音   完全一致  1 文字違いまで含めると  誤報    当たった行の確かさ  湧いた符号  知らせるまで');
+  ExactHits := 0;
+  NearHits := 0;
+  Misses := 0;
+  FalseNear := 0;
+  AgreedHits := 0;
+  FirstAlert := -1;
+  SlowestAlert := -1;
+  for N := Low(NOISES) to High(NOISES) do
+  begin
+    Build(NOISES[N]);
+    Multi := TMultiStationDecoder.Create(Decoder);
+    try
+      Position := 0;
+      Alerted := -1;
+      while Position < Length(Mixed) do
+      begin
+        Taken := Min(Round(CHUNK_SECONDS * RATE), Length(Mixed) - Position);
+        Piece := Copy(Mixed, Position, Taken);
+        Multi.Append(Piece, RATE);
+        Inc(Position, Taken);
+        while Multi.Ready do
+        begin
+          Multi.Step;
+          { 知らせが出るのはいつか。**待機モードの値打ちは、呼ばれてから知らせる
+            までの短さにあります。**窓を 10 秒にしたのもそのためです（付録 O）。
+            When the announcement comes. **The waiting mode is worth what it is
+            only if the gap between being called and being told is short**, which
+            is why the window is ten seconds (appendix O). }
+          if Alerted < 0 then
+          begin
+            Entries := BuildBandEntries(Multi.Logs, Multi.ElapsedSeconds,
+              nil, @Waiting.Lookup);
+            for I := 0 to High(Entries) do
+              if Entries[I].Watched <> '' then
+              begin
+                Alerted := Multi.ElapsedSeconds;
+                Break;
+              end;
+          end;
+        end;
+      end;
+      Multi.Finish;
+      Entries := BuildBandEntries(Multi.Logs, Multi.ElapsedSeconds);
+      Sent := Length(Mixed) / RATE;
+    finally
+      Multi.Free;
+    end;
+
+    { 待っている局に一番よく当たった度合いと、待っていない局が誤って
+      当たった数を数えます。
+      The best grade reached on the station waited for, and how many stations
+      not waited for matched by mistake. }
+    { 採った規則（完全一致）と、採らなかった規則（1 文字違いまで）を並べて
+      数えます。**採らなかったほうがどれだけの誤報と引き換えだったかが、
+      数字で残ります。**
+      The rule adopted (exact) and the one rejected (within one character) are
+      counted side by side, so **what the rejected one would have cost in false
+      alarms stays on the record as a number.** }
+    GotExact := False;
+    GotNear := False;
+    Wrong := 0;
+    for I := 0 to High(Entries) do
+    begin
+      if Entries[I].Callsign = '' then
+        Continue;
+      if MatchedWatch(Entries[I].Callsign, Watched) <> '' then
+        GotExact := True
+      else if CallsignDistance(Entries[I].Callsign, WANTED) = 1 then
+      begin
+        GotNear := True;
+        { 待っていない局が 1 文字違いで当たれば、それは誤報です。 }
+        Inc(Wrong);
+      end;
+    end;
+
+    if GotExact then
+      Inc(ExactHits)
+    else if GotNear then
+      Inc(NearHits)
+    else
+      Inc(Misses);
+    Inc(FalseNear, Wrong);
+    { 当たった行の確からしさと、実在しない符号がいくつ湧いたかも見ます。
+      「誤検知は確信度で抑える」の、抑える側の材料です。
+      The trust of the row that matched, and how many call signs appeared that
+      no station actually sent: the material for holding false alarms down. }
+    Trust := ctNone;
+    Spurious := 0;
+    for I := 0 to High(Entries) do
+    begin
+      if Entries[I].Callsign = '' then
+        Continue;
+      if Entries[I].Callsign = WANTED then
+        if Entries[I].Trust > Trust then
+          Trust := Entries[I].Trust;
+      if (Entries[I].Callsign <> 'JH1ABC') and
+         (Entries[I].Callsign <> 'JH2ABC') and
+         (Entries[I].Callsign <> 'JH3ABC') then
+        Inc(Spurious);
+    end;
+    if Trust >= ctAgreed then
+      Inc(AgreedHits);
+    WriteLn(Format('    %4.1f   %-9s %-23s %-7d %-12s %-6d %s',
+      [NOISES[N],
+       BoolToStr(GotExact, '見つけた', '見逃した'),
+       BoolToStr(GotExact or GotNear, '見つけた', '見逃した'),
+       Wrong, TrustCaption(Trust), Spurious,
+       BoolToStr(Alerted >= 0, Format('%.1f 秒', [Alerted]), '—')]));
+    if (Alerted >= 0) and ((FirstAlert < 0) or (Alerted < FirstAlert)) then
+      FirstAlert := Alerted;
+    if (Alerted >= 0) and (Alerted > SlowestAlert) then
+      SlowestAlert := Alerted;
+  end;
+
+  WriteLn(Format('    完全一致だけ: %d / %d 回  1 文字違いまで: %d / %d 回  誤報 %d 件',
+    [ExactHits, Length(NOISES), ExactHits + NearHits, Length(NOISES),
+     FalseNear]));
+  WriteLn(Format('    そのうち「2 回一致」に達していた回: %d / %d',
+    [AgreedHits, ExactHits]));
+  { 知らせるまでの時間は 2 つに分かれます。**分けずに測ると、機械が遅いのか
+    相手がまだ送り終えていないのかが混ざります。**
+
+      相手の取り分  呼出符号を 2 回送り終えるまで（CQ を 1 回出す長さ）
+      機械の取り分  そこから知らせるまで
+
+    確かさの条件（2 回一致）を課している以上、相手の取り分は縮められません。
+    **縮められるのは機械の取り分だけで、そこを測ります。**設計上の上限は
+    窓の送り 7.5 秒と、その窓を読み終えるまでで、合わせて 10 秒です（付録 O）。
+
+    The time to the notice splits in two. **Measured together, a slow machine and
+    a station that has not finished sending are indistinguishable.**
+
+      the station's share  until the call sign has been sent twice (one CQ)
+      the machine's share  from there to the notice
+
+    With the trust condition in force the station's share cannot be shortened.
+    **Only the machine's share can, so that is what is measured**; its design
+    bound is the window advance of 7.5 seconds plus reading that window, ten
+    seconds in all (appendix O). }
+  WriteLn(Format('    知らせるまで %.1f 秒 ＝ 相手が 2 回送り終えるまで %.1f 秒 ＋ 機械 %.1f 秒',
+    [SlowestAlert, OneRound, SlowestAlert - OneRound]));
+  Verdict('相手が送り終えてから知らせるまでが 10 秒以内',
+    (SlowestAlert >= 0) and (SlowestAlert - OneRound <= 10),
+    Format('(%.1f 秒)', [SlowestAlert - OneRound]));
+
+  { 判定はここでは行いません。**測ってから決めます。**数字が出ることだけを
+    確かめます。
+    No verdict is reached here: **the decision follows the measurement.** Only
+    that the numbers were produced is checked. }
+  Verdict('静かなときは完全一致で見つかる', ExactHits >= 1,
+    Format('(%d 回)', [ExactHits]));
+
+  Waiting.Free;
+  if Failures = 0 then
+    WriteLn('  すべて通った')
+  else
+    WriteLn(Format('  %d 件が通らなかった', [Failures]));
+end;
+
 procedure RunScale;
 const
   RATE = 8000;
@@ -2765,6 +3046,8 @@ begin
       RunDetect;
     if Pos('multi', Tests) > 0 then
       RunMulti;
+    if Pos('watch', Tests) > 0 then
+      RunWatch;
     if Pos('scale', Tests) > 0 then
       RunScale;
     if Pos('soak', Tests) > 0 then

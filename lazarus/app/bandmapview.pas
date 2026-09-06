@@ -291,6 +291,14 @@ begin
     call is decided from the list alone. }
   if FEntries[Index].Worked then
     Result := Result + ' ✓';
+  { 待っていた局には印を付けます（要件 FR-I.4）。**知らせは一度きりで流れて
+    しまうので、行にも残します。**席を外していて案内を見逃しても、一覧を見れば
+    どれが待っていた局か分かります。
+    A mark for the station being waited for (requirement FR-I.4). **An
+    announcement goes by once, so the row carries it too**: an operator who was
+    away and missed the notice can still see which row it was. }
+  if FEntries[Index].Watched <> '' then
+    Result := Result + ' ★';
 end;
 
 procedure TBandMapView.DrawRow(Index, AtY: Integer);

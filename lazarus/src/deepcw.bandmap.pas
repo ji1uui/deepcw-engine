@@ -138,6 +138,22 @@ type
       layer knows nothing of the log's contents — which is where the further
       stages of FR-K will attach. }
     Worked: Boolean;
+
+    { 待っている呼出符号に当たったか（要件 FR-I.4）。当たっていれば、待っていた
+      ほうの符号が入ります。空なら当たっていません。
+
+      **交信済みと同じ条件で、確かな符号にだけ付けます。**1 文字違いの別人を
+      「待っていた局です」と知らせるのは、黙っているより悪いためです。付録 T.2 の
+      実測では、この条件を課しても見逃しは増えませんでした。
+
+      The watched call sign this row matched (requirement FR-I.4), or empty for
+      none.
+
+      **It is drawn only on a certain call sign, on the same condition as the
+      worked mark**: announcing whoever is one letter away as the station waited
+      for is worse than staying silent. The measurement in appendix T.2 found
+      that requiring it costs no misses. }
+    Watched: string;
   end;
   TBandEntries = array of TBandEntry;
 
@@ -151,13 +167,19 @@ type
     nil draws no such distinction. }
   TWorkedLookup = function(const Callsign: string): Boolean of object;
 
+  { 待っている符号のどれに当たるかを引く手続き。当たらなければ空を返します。
+    一覧が待ち符号そのものを持たないのは、交信記録を持たないのと同じ理由です。
+    The lookup for which watched call sign a row matches, empty for none. The
+    list holds no watch list itself, for the same reason it holds no log. }
+  TWatchLookup = function(const Callsign: string): string of object;
+
 { 局ごとの読み取り結果を、一覧の行へ翻訳します。渡された引き当て以外に状態を
   持たず、同じ入力からは必ず同じ行が出ます。
 
   Translates the per-station results into rows. Beyond the lookup it is handed it
   holds no state, and the same input always gives the same rows. }
 function BuildBandEntries(const Logs: TStationLogs; NowSeconds: Double;
-  Worked: TWorkedLookup = nil): TBandEntries;
+  Worked: TWorkedLookup = nil; Watch: TWatchLookup = nil): TBandEntries;
 
 { 確からしさを、運用者に見せる短い言葉にします。
   Puts the trust into the few words shown to the operator. }
@@ -184,7 +206,7 @@ begin
 end;
 
 function BuildBandEntries(const Logs: TStationLogs; NowSeconds: Double;
-  Worked: TWorkedLookup): TBandEntries;
+  Worked: TWorkedLookup; Watch: TWatchLookup): TBandEntries;
 var
   I: Integer;
   Words: TWords;
@@ -225,6 +247,14 @@ begin
       on an uncertain one draws it on whoever is one letter away.** }
     Result[I].Worked := Assigned(Worked) and
       (Result[I].Trust >= ctAgreed) and Worked(Result[I].Callsign);
+
+    { 待っている符号との照合も、同じ確かさの条件で行います。条件を 2 つに分けると、
+      一覧に出ていない符号で知らせが鳴りうることになります。
+      The watch is matched on the same trust condition. Two different conditions
+      would let an announcement fire on a call sign the list is not showing. }
+    Result[I].Watched := '';
+    if Assigned(Watch) and (Result[I].Trust >= ctAgreed) then
+      Result[I].Watched := Watch(Result[I].Callsign);
 
     Text := DecodedText(Logs[I].Chars);
     if Length(Text) > BANDMAP_RECENT_CHARS then

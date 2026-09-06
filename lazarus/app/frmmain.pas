@@ -31,7 +31,7 @@ uses
   Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls, Spin,
   LCLType,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
-  DeepCW.Exchange,
+  DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign,
@@ -194,6 +194,11 @@ type
       reads them from here. Rebuilding costs 10.6 ms at 24 stations of 4000
       characters, so it must not happen five times a second. }
     FBandEntries: TBandEntries;
+    { 待っている呼出符号と、すでに知らせた局（要件 FR-I.4）。
+      The call signs being waited for and the stations already announced
+      (requirement FR-I.4). }
+    FWatched: TWatchedCalls;
+    FAlerts: TWatchAlerts;
     FClockOrigin: TDateTime;
     { 記録へ渡し終えた確定文字の数。ここまでは書いたという印で、同じ文字を
       二度書かないために要ります。
@@ -275,6 +280,12 @@ type
     FRxMode: TComboBox;
     FRxWorked: TButton;
     FRxLogInfo: TLabel;
+    { 待機モードでだけ現れる行。待つ符号を書くところです（要件 FR-I.4）。
+      A row that appears only in the waiting mode, holding the call signs waited
+      for (requirement FR-I.4). }
+    FWatchTools: TPanel;
+    FRxWatch: TEdit;
+    FRxWatchInfo: TLabel;
     FRxTuneInfo: TLabel;
     FRxTuneClear: TButton;
     FRxTrack: TCheckBox;
@@ -347,6 +358,10 @@ type
       mode and from the chosen row in the waiting mode, or empty. }
     function CallsignToLog: string;
     procedure ReadTranscript;
+    function WatchedCall(const Callsign: string): string;
+    procedure RxWatchChanged(Sender: TObject);
+    procedure AnnounceWatched;
+    procedure UpdateWatchInfo;
     procedure RxCopyCallClick(Sender: TObject);
 
     { 受信のしかた（要件 FR-I.6・FR-J） / how reception is used }
@@ -531,6 +546,7 @@ begin
   FRing := TAudioRing.Create(FCaptureRate * 30);
   FPlayback := TAudioPlayback.Create;
   FReviewPlay := TAudioPlayback.Create;
+  FAlerts := TWatchAlerts.Create;
   FHistory := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, FCaptureRate);
   FJournal := TTranscriptJournal.Create(JournalDirectory);
   FLog := TContactLog.Create(LogFileName);
@@ -547,6 +563,14 @@ begin
     Apply the loaded display settings; assigning the controls is not enough. }
   RxDisplayChanged(nil);
   FRxMode.OnChange := @RxModeChanged;
+  { 読み込んだ待ち符号を実際に反映します。設定は代入だけでは効きません。通知は
+    反映のあとで繋ぎます。読み込みの代入で走らせると、起動しただけで設定が
+    変わったことになります（モードの選択で同じ罠を踏んでいます）。
+    Apply the watch list that was loaded; assigning the control is not enough. The
+    notification is attached afterwards: run during the load it would mark the
+    settings dirty on startup alone -- the same trap the mode selector fell into. }
+  RxWatchChanged(nil);
+  FRxWatch.OnChange := @RxWatchChanged;
   { 読み込んだ保持時間を保管庫へ反映します。設定を読むだけでは効きません。
     Apply the retention that was loaded; reading the setting is not enough. }
   FHistory.SetRetention(SelectedRetention);
@@ -612,6 +636,7 @@ begin
   FCapture.Free;
   FPlayback.Free;
   FReviewPlay.Free;
+  FAlerts.Free;
   { 書き残しを出してから解放します。閉じるときの 1 語は、記録として要ります。
     The remainder is written before releasing: the last word of a session
     belongs in the record. }
@@ -1101,6 +1126,27 @@ begin
     出すと、どちらも狭くなって両方読めなくなります。
     The band map occupies the same place as the transcript and the mode swaps
     them. Side by side, both would be too narrow to read. }
+  { 待つ符号を書く行。**待機モードのときだけ出します。**交信モードでは効かない
+    ものを置いておくと、書いても何も起きない理由が分かりません
+    （progressive disclosure）。
+    The row for the call signs waited for. **It appears only in the waiting
+    mode**: left on screen where it has no effect, there would be no way to tell
+    why typing into it does nothing. }
+  FWatchTools := TPanel.Create(TextPanel);
+  FWatchTools.Parent := TextPanel;
+  FWatchTools.Height := 34;
+  StackBelow(FWatchTools);
+  FWatchTools.Align := alTop;
+  FWatchTools.BevelOuter := bvNone;
+  AddLabel(FWatchTools, '待つ符号', 6, 9);
+  FRxWatch := TEdit.Create(FWatchTools);
+  FRxWatch.Parent := FWatchTools;
+  FRxWatch.SetBounds(80, 4, 260, 26);
+  FRxWatch.TextHint := 'JA1ABC JH2XYZ';
+  FRxWatchInfo := TLabel.Create(FWatchTools);
+  FRxWatchInfo.Parent := FWatchTools;
+  FRxWatchInfo.SetBounds(352, 9, 600, 20);
+
   FRxBandMap := TBandMapView.Create(TextPanel);
   FRxBandMap.Parent := TextPanel;
   FRxBandMap.OnStationChosen := @RxStationChosen;
@@ -1288,6 +1334,11 @@ begin
     FSetRetention.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'retention', 1), 0, 3);
     FSetJournal.Checked := Ini.ReadBool('receive', 'journal', True);
     FRxMode.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'mode', 0), 0, 1);
+    { 待つ符号は覚えておきます。待っている相手は、アプリを閉じたくらいでは
+      変わらないためです。
+      The call signs waited for are remembered: closing the application is not a
+      reason to stop waiting for someone. }
+    FRxWatch.Text := Ini.ReadString('receive', 'watch', '');
     FSetBandwidth.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'bandwidth', 0),
       0, FSetBandwidth.Items.Count - 1);
     { 前回の同調先は覚えておきます。同じ設備なら音程は同じであることが多く、
@@ -1347,6 +1398,7 @@ begin
       Ini.WriteInteger('receive', 'retention', FSetRetention.ItemIndex);
       Ini.WriteBool('receive', 'journal', FSetJournal.Checked);
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
+      Ini.WriteString('receive', 'watch', FRxWatch.Text);
       Ini.WriteString('audio', 'input_device', SelectedDeviceName);
       Ini.WriteBool('receive', 'track_signal', FRxTrack.Checked);
     finally
@@ -2054,6 +2106,7 @@ procedure TMainForm.RxClearClick(Sender: TObject);
 begin
   FLiveChars := nil;
   ReadTranscript;
+  FAlerts.Reset;
   if FStream <> nil then
     FStream.Reset;
   if FMulti <> nil then
@@ -2391,8 +2444,15 @@ begin
 
   FRxTranscript.Visible := FMode = rmContact;
   FRxBandMap.Visible := FMode = rmWatch;
+  FWatchTools.Visible := FMode = rmWatch;
+  { 受信をやり直せば局の番号も振り直されるので、知らせた覚えは捨てます。
+    残すと、番号を使い回した別の局が黙ったままになります。
+    Restarting reception renumbers the stations, so what was announced is
+    forgotten: kept, a different station reusing a number would stay silent. }
+  FAlerts.Reset;
   UpdateReplayInfo;
   UpdateFindInfo;
+  UpdateWatchInfo;
 end;
 
 procedure TMainForm.RxModeChanged(Sender: TObject);
@@ -2449,6 +2509,84 @@ begin
     [FRxWaterfall.TuneHz]));
 end;
 
+{ ---- 待っている呼出符号（要件 FR-I.4） ---- }
+
+{ 一覧の行が待ち符号に当たるかを引きます。一覧の層に待ち符号そのものを持たせない
+  のは、交信記録を持たせないのと同じ理由です。
+  The lookup the list uses to tell whether a row is one being waited for. The list
+  layer holds no watch list itself, for the same reason it holds no log. }
+function TMainForm.WatchedCall(const Callsign: string): string;
+begin
+  Result := MatchedWatch(Callsign, FWatched);
+end;
+
+procedure TMainForm.RxWatchChanged(Sender: TObject);
+begin
+  FWatched := ParseWatchList(FRxWatch.Text);
+  { 書き換えたら、知らせた覚えは捨てます。**別の符号を待ち始めたのに、前の待ちで
+    知らせた局が黙ったままになるのを避けるためです。**
+    Changing it forgets what was announced: otherwise a station announced under
+    the previous watch would stay silent under the new one. }
+  if FAlerts <> nil then
+    FAlerts.Reset;
+  UpdateWatchInfo;
+  if Sender <> nil then
+    MarkSettingsDirty;
+end;
+
+procedure TMainForm.UpdateWatchInfo;
+var
+  Given, Kept: Integer;
+begin
+  if FRxWatchInfo = nil then
+    Exit;
+  Given := CountWatchWords(FRxWatch.Text);
+  Kept := Length(FWatched);
+  if Given = 0 then
+    FRxWatchInfo.Caption :=
+      '符号を書くと、その局が聞こえたときに知らせます'
+  else if Kept < Given then
+    { 形にならない符号を黙って捨てると、いつまでも知らせが来ない理由が分かりません。
+      Dropping a malformed call sign silently leaves no way to tell why nothing is
+      ever announced. }
+    FRxWatchInfo.Caption := Format(
+      '%d 局を待っています（%d 件は呼出符号の形になっていません）',
+      [Kept, Given - Kept])
+  else
+    FRxWatchInfo.Caption := Format('%d 局を待っています', [Kept]);
+end;
+
+{ 待っていた局が出ていれば知らせます。
+
+  一覧を作り直した直後に呼びます。**知らせるのは局ごとに一度きり**で、消えて
+  出直した局には改めて知らせます。局の番号がそのまま「同じ呼び出しか」を表すため、
+  番号で覚えるだけで済みます。
+
+  Announces the stations waited for, if any have appeared.
+
+  Called just after the list is rebuilt. **Each station is announced once**, and
+  again if it drops and returns: the station's number already carries whether it
+  is the same call, so remembering numbers is all that is needed. }
+procedure TMainForm.AnnounceWatched;
+var
+  I: Integer;
+  Found: string;
+begin
+  if (FAlerts = nil) or (Length(FWatched) = 0) then
+    Exit;
+  Found := '';
+  for I := 0 to High(FBandEntries) do
+    if (FBandEntries[I].Watched <> '') and FAlerts.Announce(FBandEntries[I].Id) then
+    begin
+      if Found <> '' then
+        Found := Found + '、';
+      Found := Found + Format('%s（%.0f Hz）',
+        [FBandEntries[I].Callsign, FBandEntries[I].Hz]);
+    end;
+  if Found <> '' then
+    SetStatus('', '', Format('待っていた %s が出ています。', [Found]));
+end;
+
 { 一覧を作り直します。毎秒 1 回で足ります。局の並びが 0.2 秒ごとに変わる必要は
   なく、そのたびに全局の受信文を複製するのは無駄です。
   Rebuilds the list, once a second. The order of stations need not change five
@@ -2465,8 +2603,9 @@ begin
     The list just built is kept: having the log side rebuild the same thing
     would run a 10.6 ms job five times a second (measured in dsp_check). }
   FBandEntries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
-    @WorkedBefore);
+    @WorkedBefore, @WatchedCall);
   FRxBandMap.SetEntries(FBandEntries, FMulti.ElapsedSeconds);
+  AnnounceWatched;
 end;
 
 { ---- 検索（要件 FR-B.5） / search (requirement FR-B.5) ---- }

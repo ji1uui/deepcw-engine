@@ -18,7 +18,7 @@ program dsp_check;
 uses
   Classes, SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
   DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder,
-  DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange;
+  DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch;
 
 var
   Meta: TDeepCWMetadata;
@@ -661,8 +661,21 @@ begin
   Result := Callsign <> '';
 end;
 
+type
+  { JH2XYZ を待っている、という引き当てです。/ A watch standing on JH2XYZ. }
+  TWatchingFor = class
+    List: TWatchedCalls;
+    function Lookup(const Callsign: string): string;
+  end;
+
+function TWatchingFor.Lookup(const Callsign: string): string;
+begin
+  Result := MatchedWatch(Callsign, List);
+end;
+
 var
   Answers: TAlwaysWorked;
+  Waiting: TWatchingFor;
 
 procedure TestBandMap;
 var
@@ -738,9 +751,23 @@ begin
   Entries := BuildBandEntries(Logs, 10, @Answers.Always);
   Check('記録にあれば交信済みと分かる', Entries[0].Worked);
 
+  { 待っている符号の照合も、交信済みと同じ確かさの条件で行うこと（要件 FR-I.4）。
+    条件が食い違うと、一覧に出ていない符号で知らせが鳴ります。
+    The watch is matched on the same trust condition as the worked mark
+    (requirement FR-I.4); differing conditions would let an announcement fire on
+    a call sign the list is not showing. }
+  Entries := BuildBandEntries(Logs, 10, nil, nil);
+  Check('待ち符号を渡さなければ待っていない', Entries[0].Watched = '',
+    Entries[0].Watched);
+  Entries := BuildBandEntries(Logs, 10, nil, @Waiting.Lookup);
+  Check('待っている局が分かる', Entries[0].Watched = 'JH2XYZ',
+    Entries[0].Watched);
+
   { 1 回きりの符号は確かでないので、交信済みとは言わない。 }
   Logs[0] := LogOf('JA1ABC DE JH2XYZ K ', 1000, 0.99);
-  Entries := BuildBandEntries(Logs, 10, @Answers.Always);
+  Entries := BuildBandEntries(Logs, 10, @Answers.Always, @Waiting.Lookup);
+  Check('確かでない符号では待っていたと言わない', Entries[0].Watched = '',
+    Entries[0].Watched);
   Check('確かでない符号では交信済みと言わない', not Entries[0].Worked,
     Format('(%s)', [TrustCaption(Entries[0].Trust)]));
 
@@ -787,6 +814,128 @@ begin
   WriteLn(Format('    24 局 × 4000 文字の翻訳: %.1f ms', [Elapsed]));
   Check('24 局 × 4000 文字でも 100 ms 未満', Elapsed < 100,
     Format('(%.1f ms)', [Elapsed]));
+end;
+
+{ ---- 待っている呼出符号（要件 FR-I.4） ---- }
+
+procedure TestWatch;
+var
+  List: TWatchedCalls;
+  Alerts: TWatchAlerts;
+  I: Integer;
+  Started: TDateTime;
+  Elapsed: Double;
+begin
+  WriteLn('DeepCW.Watch');
+
+  { 書き方はいろいろあってよいこと。空白・読点・改行のどれでも区切れます。 }
+  List := ParseWatchList('JA1ABC JH2XYZ');
+  Check('空白で区切れる', Length(List) = 2, Format('(%d)', [Length(List)]));
+  List := ParseWatchList('JA1ABC,JH2XYZ');
+  Check('読点で区切れる', Length(List) = 2, Format('(%d)', [Length(List)]));
+  List := ParseWatchList('JA1ABC'#10'JH2XYZ');
+  Check('改行で区切れる', Length(List) = 2, Format('(%d)', [Length(List)]));
+  List := ParseWatchList('  JA1ABC   JH2XYZ  ');
+  Check('余分な空白があっても読める', Length(List) = 2,
+    Format('(%d)', [Length(List)]));
+  List := ParseWatchList('ja1abc');
+  Check('小文字で書いても待てる', (Length(List) = 1) and (List[0] = 'JA1ABC'),
+    Format('(%d)', [Length(List)]));
+
+  { 形にならないものは落とすこと。落としたと分かること。 }
+  List := ParseWatchList('JA1ABC J1ADC');
+  Check('形にならない符号は落とす', Length(List) = 1,
+    Format('(%d)', [Length(List)]));
+  Check('入力の語数は数えられる', CountWatchWords('JA1ABC J1ADC') = 2,
+    Format('(%d)', [CountWatchWords('JA1ABC J1ADC')]));
+  Check('空なら何も待たない', Length(ParseWatchList('')) = 0);
+  Check('空白だけでも落ちない', Length(ParseWatchList('   ')) = 0);
+
+  { 同じ符号を 2 回書いても 1 局。 }
+  List := ParseWatchList('JA1ABC JA1ABC');
+  Check('重複は 1 局にまとめる', Length(List) = 1, Format('(%d)', [Length(List)]));
+  { 附加符号を書いても、待つのは本体。 }
+  List := ParseWatchList('JA1ABC/P');
+  Check('附加符号を書いても本体で待つ',
+    (Length(List) = 1) and (List[0] = 'JA1ABC'),
+    Format('(%s)', [List[0]]));
+
+  { 照合は完全一致だけ。ここが版 2.23 で測って決めたところです。 }
+  List := ParseWatchList('JA1ABC JH2XYZ');
+  Check('待っている符号に当たる', MatchedWatch('JA1ABC', List) = 'JA1ABC',
+    MatchedWatch('JA1ABC', List));
+  Check('2 つ目の符号にも当たる', MatchedWatch('JH2XYZ', List) = 'JH2XYZ',
+    MatchedWatch('JH2XYZ', List));
+  Check('待っていない符号には当たらない', MatchedWatch('JR3KLM', List) = '',
+    MatchedWatch('JR3KLM', List));
+  Check('1 文字違いには当たらない', MatchedWatch('JA1ADC', List) = '',
+    MatchedWatch('JA1ADC', List));
+  Check('小文字で聞こえても当たる', MatchedWatch('ja1abc', List) = 'JA1ABC',
+    MatchedWatch('ja1abc', List));
+  Check('附加符号が付いて呼んでも当たる',
+    MatchedWatch('JA1ABC/P', List) = 'JA1ABC', MatchedWatch('JA1ABC/P', List));
+  Check('空の符号には当たらない', MatchedWatch('', List) = '');
+  Check('何も待っていなければ当たらない',
+    MatchedWatch('JA1ABC', ParseWatchList('')) = '');
+
+  { 文字の隔たり。採らなかった規則の代償を測るために使います。 }
+  Check('同じなら 0', CallsignDistance('JA1ABC', 'JA1ABC') = 0);
+  Check('1 文字違いは 1', CallsignDistance('JA1ABC', 'JA1ADC') = 1,
+    Format('(%d)', [CallsignDistance('JA1ABC', 'JA1ADC')]));
+  Check('1 文字足りなければ 1', CallsignDistance('JA1ABC', 'JA1AB') = 1,
+    Format('(%d)', [CallsignDistance('JA1ABC', 'JA1AB')]));
+  Check('1 文字余分なら 1', CallsignDistance('JA1ABC', 'JA1ABCD') = 1,
+    Format('(%d)', [CallsignDistance('JA1ABC', 'JA1ABCD')]));
+  Check('2 文字違いは 2', CallsignDistance('JA1ABC', 'JA1ADD') = 2,
+    Format('(%d)', [CallsignDistance('JA1ABC', 'JA1ADD')]));
+  Check('遠ければ 3 で打ち切る', CallsignDistance('JA1ABC', 'W7XYZ') = 3,
+    Format('(%d)', [CallsignDistance('JA1ABC', 'W7XYZ')]));
+  { 途中で打ち切れず、最後まで数えてから頭打ちになる組。**打ち切りが 2 か所
+    あることを、両方とも覆います。**この組を入れる前は、最後の頭打ちを外しても
+    どの試験も落ちませんでした。
+    A pair that cannot be cut short on the way and is capped only at the end.
+    **Both places the count is capped are covered.** Before this pair was added,
+    removing the final cap broke no test. }
+  Check('最後まで数えても 3 で頭打ちになる',
+    CallsignDistance('JR6P', 'JR8GHQ') = 3,
+    Format('(%d)', [CallsignDistance('JR6P', 'JR8GHQ')]));
+  Check('片方が空でも落ちない', CallsignDistance('', 'JA1ABC') = 3,
+    Format('(%d)', [CallsignDistance('', 'JA1ABC')]));
+
+  { 知らせは局ごとに一度きり。番号が変われば改めて知らせること。 }
+  Alerts := TWatchAlerts.Create;
+  try
+    Check('初めての局には知らせる', Alerts.Announce(1));
+    Check('同じ局には二度知らせない', not Alerts.Announce(1));
+    Check('別の局には知らせる', Alerts.Announce(2));
+    Check('また同じ局には知らせない', not Alerts.Announce(2));
+    Check('知らせた数を数えている', Alerts.Count = 2,
+      Format('(%d)', [Alerts.Count]));
+    Alerts.Reset;
+    Check('やり直せば忘れる', Alerts.Count = 0, Format('(%d)', [Alerts.Count]));
+    Check('忘れたあとは改めて知らせる', Alerts.Announce(1));
+
+    { 局が増えても覚え続けられること。上限で溢れて知らせが止まらないこと。 }
+    Alerts.Reset;
+    for I := 1 to 500 do
+      if not Alerts.Announce(I) then
+        Break;
+    Check('500 局まで覚えられる', Alerts.Count = 500,
+      Format('(%d)', [Alerts.Count]));
+    Check('覚えたものは二度知らせない', not Alerts.Announce(250));
+  finally
+    Alerts.Free;
+  end;
+
+  { 一覧は毎秒作り直します。そのたびに全行を引くので、遅ければ効きます。 }
+  List := ParseWatchList('JA1ABC JH2XYZ JR3KLM 7K1TUV 8N1OLP');
+  Started := Now;
+  for I := 1 to 10000 do
+    MatchedWatch('JR3KLM', List);
+  Elapsed := MilliSecondsBetween(Now, Started);
+  WriteLn(Format('    照合 1 万回: %.0f ms', [Elapsed]));
+  Check('照合 1 万回が 100 ms 未満', Elapsed < 100,
+    Format('(%.0f ms)', [Elapsed]));
 end;
 
 { ---- 受信文の読み取り（要件 FR-E.1・FR-E.2） ---- }
@@ -1244,13 +1393,17 @@ begin
     TestHistory;
     TestJournal;
     Answers := TAlwaysWorked.Create;
+    Waiting := TWatchingFor.Create;
+    Waiting.List := ParseWatchList('JH2XYZ');
     try
       TestBandMap;
     finally
+      Waiting.Free;
       Answers.Free;
     end;
     TestContactLog;
     TestExchange;
+    TestWatch;
   finally
     Meta.Free;
   end;
