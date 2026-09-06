@@ -61,6 +61,20 @@ const
   WATERFALL_RANGE_DB = 60.0;
 
 type
+  { 帯域にいる 1 局の見出し。**この部品は「どう決めたか」を知りません。**
+    名前を決めるのは DeepCW.BandMap、渡すのは画面側です（要件 FR-J.5）。
+    強さを持つのは、見出しが重なるときに強い局を優先するためです。
+
+    One station's label. **This control knows nothing of how it was decided**:
+    the name comes from DeepCW.BandMap by way of the form (requirement FR-J.5).
+    The level is carried so that the stronger station wins when labels collide. }
+  TStationLabel = record
+    Hz: Double;
+    Text: string;
+    LevelDb: Double;
+  end;
+  TStationLabels = array of TStationLabel;
+
   TWaterfallView = class(TCustomControl)
   private
     FSampleRate: Integer;
@@ -112,6 +126,7 @@ type
     FConsumed: Int64;
     FNewestRowSeconds: Double;
     FChars: TDecodedChars;
+    FStations: TStationLabels;
     FShowChars: Boolean;
     FTracking: Boolean;
     { 直前の同調点の変化が、利用者の操作ではなく追跡によるものか。画面側が
@@ -132,6 +147,7 @@ type
 
     procedure SetShowChars(Value: Boolean);
     procedure DrawCharacters(ScaleTop: Integer);
+    procedure DrawStations;
     function SurfaceHeight: Integer;
     procedure Configure(ASampleRate: Integer);
     procedure PushRow(const Magnitudes: TDoubleArray);
@@ -193,6 +209,20 @@ type
     procedure PushSamples(const Samples: TSingleArray; ASampleRate: Integer;
       StartSeconds: Double);
     procedure Clear;
+
+    { 帯域にいる局の見出しを重ねます（要件 FR-J.5）。渡さなければ何も重なりません。
+
+      **一覧と同じ文字を渡してください。**同じ局を一覧と波形で違う名前で出すと、
+      どちらを信じるべきか分かりません。決めるのは DeepCW.BandMap の
+      `EntryCaption` 1 か所です。
+
+      Lays labels for the stations in the band over the display
+      (requirement FR-J.5); handing over nothing overlays nothing.
+
+      **Hand it the same text the list shows.** The same station named
+      differently in the list and on the waterfall leaves no telling which to
+      believe; `EntryCaption` in DeepCW.BandMap decides it, once. }
+    procedure SetStations(const Value: TStationLabels);
 
     { 復号した文字を重ねます（要件 FR-D.6）。時刻を持つ文字だけを、その時刻の
       行へ描きます。渡さなければ何も重なりません。
@@ -598,6 +628,13 @@ begin
   Invalidate;
 end;
 
+procedure TWaterfallView.SetStations(const Value: TStationLabels);
+begin
+  FStations := Value;
+  if FShowChars then
+    Invalidate;
+end;
+
 procedure TWaterfallView.SetCharacters(const Value: TDecodedChars);
 begin
   FChars := Value;
@@ -698,6 +735,97 @@ begin
   end;
 end;
 
+{ 帯域にいる局の見出しを、その音程の上に並べます（要件 FR-J.5）。
+
+  **横の位置がこの機能そのものです。**受入基準は同調誤差と同じ 1 ビン（12.5 Hz）
+  以内で、`FrequencyToX` は同調線と同じ変換なので、線と見出しは必ず同じ桁に立ちます。
+
+  見出しは上端に置きます。**強い局から順に置き、重なるものは飛ばします。**24 局が
+  100 Hz 間隔で並ぶと、見出しの幅（6 文字ぶん）に対して間隔が足りません。**全部を
+  無理に描くと読めない塊になり、どれがどれか分からなくなります。**飛ばした局も
+  一覧には残っているので、失われる情報はありません。
+
+  Lays labels for the stations in the band above their pitches
+  (requirement FR-J.5).
+
+  **The horizontal position is the feature.** The acceptance is one bin
+  (12.5 Hz), the same as the tuning error, and `FrequencyToX` is the very
+  transform the tuning line uses, so the line and a label always stand in the
+  same column.
+
+  The labels sit at the top. **The strongest go first and anything that would
+  overlap is skipped.** Twenty-four stations at 100 Hz spacing leave less room
+  than a six-character label needs; **drawn regardless they become an unreadable
+  clump in which nothing can be told apart.** What is skipped is still in the
+  list, so nothing is lost. }
+procedure TWaterfallView.DrawStations;
+var
+  Order: array of Integer;
+  Taken: array of Integer;
+  I, J, Best, Swap, Count, X, From_, To_, Y, Width_: Integer;
+begin
+  if (not FShowChars) or (Length(FStations) = 0) then
+    Exit;
+
+  { 強い順に並べます。局は多くて 24 なので、単純な選択で足ります。
+    Ordered by strength; there are at most twenty-four, so a plain selection
+    sort is enough. }
+  SetLength(Order, Length(FStations));
+  for I := 0 to High(Order) do
+    Order[I] := I;
+  for I := 0 to High(Order) - 1 do
+  begin
+    Best := I;
+    for J := I + 1 to High(Order) do
+      if FStations[Order[J]].LevelDb > FStations[Order[Best]].LevelDb then
+        Best := J;
+    if Best <> I then
+    begin
+      Swap := Order[I];
+      Order[I] := Order[Best];
+      Order[Best] := Swap;
+    end;
+  end;
+
+  Canvas.Brush.Style := bsClear;
+  Canvas.Font.Color := clWhite;
+  Y := 2;
+  Count := 0;
+  SetLength(Taken, Length(FStations) * 2);
+  for I := 0 to High(Order) do
+  begin
+    if FStations[Order[I]].Text = '' then
+      Continue;
+    Width_ := Canvas.TextWidth(FStations[Order[I]].Text);
+    X := FrequencyToX(FStations[Order[I]].Hz);
+    { 見出しは音程の上に中央を合わせます。端では画面の中へ寄せます。
+      Centred on the pitch, pulled inside the display at the edges. }
+    From_ := Max(0, Min(Width - Width_ - 1, X - Width_ div 2));
+    To_ := From_ + Width_;
+    J := 0;
+    while J < Count do
+    begin
+      { 2 画素の隙間を要ります。隣り合った見出しは、間が無いと 1 語に見えます。
+        Two pixels of gap are required: touching labels read as one word. }
+      if (From_ < Taken[J * 2 + 1] + 2) and (To_ + 2 > Taken[J * 2]) then
+        Break;
+      Inc(J);
+    end;
+    if J < Count then
+      Continue;
+    { どの信号の見出しかが分かるよう、音程へ短い線を下ろします。
+      A short line drops to the pitch, so which signal the label names is
+      visible. }
+    Canvas.Pen.Color := clWhite;
+    Canvas.Pen.Width := 1;
+    Canvas.Line(X, Y + Canvas.TextHeight('M'), X, Y + Canvas.TextHeight('M') + 4);
+    Canvas.TextOut(From_, Y, FStations[Order[I]].Text);
+    Taken[Count * 2] := From_;
+    Taken[Count * 2 + 1] := To_;
+    Inc(Count);
+  end;
+end;
+
 procedure TWaterfallView.Paint;
 var
   TickHz: Double;
@@ -733,6 +861,7 @@ begin
   end;
 
   DrawCharacters(ScaleTop);
+  DrawStations;
 
   { 目盛り。500 Hz ごとに刻みます。/ Ticks every 500 Hz. }
   Canvas.Pen.Color := clGray;

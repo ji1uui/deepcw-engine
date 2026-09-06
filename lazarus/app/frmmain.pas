@@ -359,6 +359,7 @@ type
       mode and from the chosen row in the waiting mode, or empty. }
     function CallsignToLog: string;
     procedure ReadTranscript;
+    procedure ShowStationLabels;
     function WatchedCall(const Callsign: string): string;
     procedure RxWatchChanged(Sender: TObject);
     procedure AnnounceWatched;
@@ -2483,6 +2484,11 @@ begin
     is no longer on screen. }
   FBandEntries := nil;
 
+  { 一覧を離れれば見出しも用済みです。残すと、交信モードの波形に前のモードの
+    局名が浮いたままになります。
+    Leaving the list, its labels have served their purpose; kept, the previous
+    mode's station names would float over the contact mode's waterfall. }
+  FRxWaterfall.SetStations(nil);
   FRxTranscript.Visible := FMode = rmContact;
   FRxBandMap.Visible := FMode = rmWatch;
   FWatchTools.Visible := FMode = rmWatch;
@@ -2646,7 +2652,43 @@ begin
   FBandEntries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
     @WorkedBefore, @WatchedCall);
   FRxBandMap.SetEntries(FBandEntries, FMulti.ElapsedSeconds);
+  ShowStationLabels;
   AnnounceWatched;
+end;
+
+{ 一覧と同じ内容を、ウォーターフォールの音程の上へも渡します（要件 FR-J.5）。
+
+  **名前は一覧と同じ規則（`EntryCaption`）で決めます。**同じ局を一覧と波形で違う
+  名前で出したら、どちらを信じるべきか分かりません。ここは渡すだけで、何も
+  決めません。
+
+  The same contents go to the waterfall, above each pitch (requirement FR-J.5).
+
+  **The names come from the list's own rule (`EntryCaption`)**: the same station
+  named differently in the two places would leave no telling which to believe.
+  Nothing is decided here; it is only handed over. }
+procedure TMainForm.ShowStationLabels;
+var
+  Labels: TStationLabels;
+  I, Count: Integer;
+begin
+  SetLength(Labels, Length(FBandEntries));
+  Count := 0;
+  for I := 0 to High(FBandEntries) do
+  begin
+    Labels[Count].Text := EntryCaption(FBandEntries[I]);
+    if Labels[Count].Text = '' then
+      { 名前の付いていない局は見出しを持ちません。**「何か居る」とだけ書いても、
+        ウォーターフォールがすでにそれを示しています。**
+        A station with no name gets no label: **writing "something is here" adds
+        nothing to what the waterfall already shows.** }
+      Continue;
+    Labels[Count].Hz := FBandEntries[I].Hz;
+    Labels[Count].LevelDb := FBandEntries[I].LevelDb;
+    Inc(Count);
+  end;
+  SetLength(Labels, Count);
+  FRxWaterfall.SetStations(Labels);
 end;
 
 { ---- 検索（要件 FR-B.5） / search (requirement FR-B.5) ---- }

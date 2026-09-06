@@ -185,6 +185,21 @@ function BuildBandEntries(const Logs: TStationLogs; NowSeconds: Double;
   Puts the trust into the few words shown to the operator. }
 function TrustCaption(Trust: TCallsignTrust): string;
 
+{ 1 行に出す名前。密集・確からしさ・交信済み・待っていた局の印まで含みます。
+
+  **この規則をここに置くのは、一覧とウォーターフォールで別の文字が出ては困る
+  ためです。**同じ局を、一覧では `JH2XYZ ?`、波形では `JH2XYZ` と書いたら、
+  どちらを信じるべきか分かりません（要件 FR-J.5・FR-J.7）。
+
+  The name shown for one row, including the crowded, trust, worked and
+  waited-for marks.
+
+  **The rule lives here so that the list and the waterfall cannot show different
+  text for the same station**: written `JH2XYZ ?` in one and `JH2XYZ` in the
+  other, there would be no telling which to believe (requirements FR-J.5,
+  FR-J.7). }
+function EntryCaption(const Entry: TBandEntry): string;
+
 implementation
 
 { 語に切る規則と、相手の符号を選ぶ規則は DeepCW.Exchange が持ちます。交信モードの
@@ -262,6 +277,32 @@ begin
         BANDMAP_RECENT_CHARS);
     Result[I].Recent := Trim(Text);
   end;
+end;
+
+function EntryCaption(const Entry: TBandEntry): string;
+begin
+  { 密集している範囲は、1 局として読んだふりをしません（要件 FR-J.6）。
+    A crowded stretch is not passed off as one station (requirement FR-J.6). }
+  if Entry.Crowded > 0 then
+    Exit(Format('密集 %d', [Entry.Crowded + 1]));
+  case Entry.Trust of
+    ctNone: Result := '';
+    ctShape: Result := Entry.Callsign + ' ?';
+  else
+    Result := Entry.Callsign;
+  end;
+  { 交信済みの局に印を付けます（要件 FR-J.4）。呼びに行くかどうかの判断が、
+    一覧を見ただけで付きます。
+    A mark for a station already worked (requirement FR-J.4), so that whether to
+    call is decided from the list alone. }
+  if Entry.Worked then
+    Result := Result + ' ✓';
+  { 待っていた局には印を付けます（要件 FR-I.4）。**知らせは一度きりで流れて
+    しまうので、行にも残します。**
+    A mark for the station being waited for (requirement FR-I.4): **an
+    announcement goes by once, so the row carries it too.** }
+  if Entry.Watched <> '' then
+    Result := Result + ' ★';
 end;
 
 function TrustCaption(Trust: TCallsignTrust): string;

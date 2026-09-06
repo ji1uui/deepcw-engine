@@ -275,30 +275,11 @@ end;
 
 function TBandMapView.NameCaption(Index: Integer): string;
 begin
-  { 密集している範囲は、1 局として読んだふりをしません（要件 FR-J.6）。
-    A crowded stretch is not passed off as one station (requirement FR-J.6). }
-  if FEntries[Index].Crowded > 0 then
-    Exit(Format('密集 %d', [FEntries[Index].Crowded + 1]));
-  case FEntries[Index].Trust of
-    ctNone: Result := '';
-    ctShape: Result := FEntries[Index].Callsign + ' ?';
-  else
-    Result := FEntries[Index].Callsign;
-  end;
-  { 交信済みの局に印を付けます（要件 FR-J.4）。呼びに行くかどうかの判断が、
-    一覧を見ただけで付きます。
-    A mark for a station already worked (requirement FR-J.4), so that whether to
-    call is decided from the list alone. }
-  if FEntries[Index].Worked then
-    Result := Result + ' ✓';
-  { 待っていた局には印を付けます（要件 FR-I.4）。**知らせは一度きりで流れて
-    しまうので、行にも残します。**席を外していて案内を見逃しても、一覧を見れば
-    どれが待っていた局か分かります。
-    A mark for the station being waited for (requirement FR-I.4). **An
-    announcement goes by once, so the row carries it too**: an operator who was
-    away and missed the notice can still see which row it was. }
-  if FEntries[Index].Watched <> '' then
-    Result := Result + ' ★';
+  { 何を出すかは DeepCW.BandMap が決めます。ウォーターフォールも同じものを
+    使うため、写しを 2 つ置きません（要件 FR-J.5）。
+    What is shown is decided by DeepCW.BandMap; the waterfall uses the same one,
+    so no second copy is kept (requirement FR-J.5). }
+  Result := EntryCaption(FEntries[Index]);
 end;
 
 procedure TBandMapView.DrawRow(Index, AtY: Integer);

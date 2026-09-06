@@ -41,6 +41,8 @@ type
     { 周波数から桁を引きます。試験のためだけの入口です。
       Maps a frequency to a column; an entry point for the test alone. }
     function ColumnFor(Hz: Double): Integer;
+    { 桁から周波数を引きます。/ Maps a column back to a frequency. }
+    function FrequencyAt(X: Integer): Double;
   end;
 
   { バンドマップの押下も、そのままでは外から呼べません。
@@ -108,6 +110,11 @@ end;
 function TProbeView.ColumnFor(Hz: Double): Integer;
 begin
   Result := FrequencyToX(Hz);
+end;
+
+function TProbeView.FrequencyAt(X: Integer): Double;
+begin
+  Result := XToFrequency(X);
 end;
 
 procedure TProbeTranscript.Tap(X, Y: Integer);
@@ -404,6 +411,7 @@ var
   Ex: TExchange;
   Underlined, Marked, Thin, Thick, Y: Integer;
   Waiting: TWatchingFor;
+  Marks: TStationLabels;
   Aligned: TDecodedChars;
   Worst, Err, T, Fed: Double;
   Step_, Shown_: Integer;
@@ -848,6 +856,188 @@ begin
   Check('文字を渡しても描画できる', True);
   View.ShowCharacters := False;
   View.SetCharacters(nil);
+
+  { ── 局の見出しをウォーターフォールへ重ねる（要件 FR-J.5）──
+    受入基準は「位置は同調誤差と同じ 1 ビン以内」。1 ビンは 12.5 Hz です。
+
+    見出しの横位置は `FrequencyToX` で決めます。**同調線が使うのと同じ変換**
+    なので、線と見出しは必ず同じ桁に立ちます。その変換の誤差を、周波数 →桁 →
+    周波数で測ります。
+
+    往復では系統的なずれを見つけられません（付録 V.3）。ここでそれでよいのは、
+    **この変換がクリックに対して既に検証されている**ためです（要件 FR-D.1、
+    「クリックした位置の周波数へ同調する」）。見出しはその変換に相乗りします。
+    あわせて、見出しが実際に描かれることを画素で確かめます。
+
+    Laying the stations' labels over the waterfall (requirement FR-J.5). The
+    acceptance is one bin -- 12.5 Hz -- the same as the tuning error.
+
+    A label's column comes from `FrequencyToX`, **the very transform the tuning
+    line uses**, so a line and a label always stand in the same column. That
+    transform's error is measured frequency to column and back.
+
+    A round trip cannot catch a systematic shift (appendix V.3); it is enough
+    here because **the transform is already verified against clicks**
+    (requirement FR-D.1, tuning to the frequency clicked). The labels ride on
+    it. That a label is actually drawn is checked from the pixels as well. }
+  WriteLn;
+  WriteLn('局の見出しの検証 / station label checks');
+  View.Clear;
+  View.PushSamples(TestAudio(8000), 8000, 0);
+  View.TuneHz := 0;
+  View.ShowCharacters := True;
+  Application.ProcessMessages;
+
+  Worst := 0;
+  T := 300;
+  while T <= 2800 do
+  begin
+    Err := Abs(View.FrequencyAt(View.ColumnFor(T)) - T);
+    if Err > Worst then
+      Worst := Err;
+    T := T + 12.5;
+  end;
+  WriteLn(Format('  300〜2800 Hz で測った位置の最大のずれ: %.1f Hz', [Worst]));
+  Check('見出しの位置が 1 ビン（12.5 Hz）以内', Worst <= 12.5,
+    Format('(%.1f Hz)', [Worst]));
+
+  { 名前のある局にだけ見出しが付くこと。名前の無い局に「何か居る」と書いても、
+    ウォーターフォールがすでにそれを示しています。
+    Only a named station gets a label; writing "something is here" adds nothing
+    to what the waterfall already shows. }
+  SetLength(Marks, 3);
+  Marks[0].Hz := 700; Marks[0].Text := 'JH2XYZ'; Marks[0].LevelDb := 30;
+  Marks[1].Hz := 1900; Marks[1].Text := 'JA1ABC ✓'; Marks[1].LevelDb := 25;
+  Marks[2].Hz := 1200; Marks[2].Text := ''; Marks[2].LevelDb := 28;
+  View.SetStations(Marks);
+  Application.ProcessMessages;
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(View.Width, View.Height);
+    Shot.Canvas.Brush.Color := clBlack;
+    Shot.Canvas.FillRect(0, 0, Shot.Width, Shot.Height);
+    View.PaintTo(Shot.Canvas, 0, 0);
+    { 上端 40 行に白い画素があるか。見出しと、音程へ下ろす線が白です。
+      White pixels in the top forty rows: the labels and the lines dropped to
+      their pitches are white. }
+    Underlined := 0;
+    Marked := 0;
+    { 最上端の 1 行は数えません。画布へ写したときの端の差で白くなります
+      （付録 V.5 で見つけたもの）。
+      The topmost row is not counted: copying onto a canvas leaves it white
+      (found in appendix V.5). }
+    for Y := 1 to 40 do
+      for X := 1 to Shot.Width - 2 do
+        if Shot.Canvas.Pixels[X, Y] = clWhite then
+        begin
+          Inc(Underlined);
+          if Abs(X - View.ColumnFor(1200)) < 30 then
+            Inc(Marked);
+        end;
+    Check('見出しが描かれている', Underlined > 50,
+      Format('(白い画素 %d)', [Underlined]));
+    Check('名前の無い局には見出しを出さない', Marked = 0,
+      Format('(1200 Hz の周りに %d 画素)', [Marked]));
+  finally
+    Shot.Free;
+  end;
+
+  { 重なるときは強い局を残すこと。同じ音程に 2 つ置けば、必ず重なります。
+    The stronger wins a collision; two labels at one pitch always collide. }
+  SetLength(Marks, 2);
+  Marks[0].Hz := 1000; Marks[0].Text := 'WEAKCALL'; Marks[0].LevelDb := 10;
+  Marks[1].Hz := 1000; Marks[1].Text := 'JH2XYZ'; Marks[1].LevelDb := 30;
+  View.SetStations(Marks);
+  Application.ProcessMessages;
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(View.Width, View.Height);
+    Shot.Canvas.Brush.Color := clBlack;
+    Shot.Canvas.FillRect(0, 0, Shot.Width, Shot.Height);
+    View.PaintTo(Shot.Canvas, 0, 0);
+    Underlined := 0;
+    for Y := 1 to 40 do
+      for X := 1 to Shot.Width - 2 do
+        if Shot.Canvas.Pixels[X, Y] = clWhite then
+          Inc(Underlined);
+    { 2 つ描けば、1 つのときより白い画素がはっきり増えます。
+      Two labels would leave markedly more white than one. }
+    Thin := Underlined;
+    SetLength(Marks, 1);
+    Marks[0].Hz := 1000; Marks[0].Text := 'JH2XYZ'; Marks[0].LevelDb := 30;
+    View.SetStations(Marks);
+    Application.ProcessMessages;
+    Shot.Canvas.FillRect(0, 0, Shot.Width, Shot.Height);
+    View.PaintTo(Shot.Canvas, 0, 0);
+    Thick := 0;
+    for Y := 1 to 40 do
+      for X := 1 to Shot.Width - 2 do
+        if Shot.Canvas.Pixels[X, Y] = clWhite then
+          Inc(Thick);
+    Check('重なる見出しは 1 つに絞る', Thin = Thick,
+      Format('(2 つ渡して %d 画素、1 つ渡して %d 画素)', [Thin, Thick]));
+
+    { **描かれた見出しが、本当にその音程の上にあること。**上の位置の確認は
+      変換そのものを測っただけで、描くときに別の桁を使っていても気づけません
+      （付録 V.3 と同じ落とし穴）。白い画素の左右の端から中心を求めます。
+      **That the label drawn really stands above its pitch.** The check above
+      measures the transform alone and would not notice the drawing using a
+      different column (the same trap as appendix V.3). The centre is taken from
+      the leftmost and rightmost white pixels. }
+    Underlined := Shot.Width;
+    Marked := -1;
+    { 上端の 1 行と左右の端の 1 桁は数えません。画布へ写したときの端の差で
+      白くなります（付録 V.5 で見つけたのと同じもの）。
+      The topmost row and the outermost column on each side are not counted:
+      copying onto a canvas leaves them white (the same edge difference found in
+      appendix V.5). }
+    for Y := 1 to 40 do
+      for X := 1 to Shot.Width - 2 do
+        if Shot.Canvas.Pixels[X, Y] = clWhite then
+        begin
+          if X < Underlined then
+            Underlined := X;
+          if X > Marked then
+            Marked := X;
+        end;
+    Check('見出しが音程の上に立っている',
+      (Marked >= 0) and
+      (Abs(View.FrequencyAt((Underlined + Marked) div 2) - 1000) <= 30),
+      Format('(中心 %d 桁 ＝ %.0f Hz、音程は 1000 Hz)',
+        [(Underlined + Marked) div 2,
+         View.FrequencyAt((Underlined + Marked) div 2)]));
+  finally
+    Shot.Free;
+  end;
+
+  { 24 局でも描画が重くならないこと。 }
+  SetLength(Marks, 24);
+  for X := 0 to 23 do
+  begin
+    Marks[X].Hz := 700 + X * 100;
+    Marks[X].Text := Format('JH%dABC', [X mod 10]);
+    Marks[X].LevelDb := 30 - X * 0.5;
+  end;
+  View.SetStations(Marks);
+  Application.ProcessMessages;
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(View.Width, View.Height);
+    Started := Now;
+    for Frame := 1 to 100 do
+    begin
+      View.Touch;
+      View.PaintTo(Shot.Canvas, 0, 0);
+    end;
+    PaintMs := MilliSecondsBetween(Now, Started) / 100;
+  finally
+    Shot.Free;
+  end;
+  WriteLn(Format('  24 局の見出しを重ねた描画: %.2f ms', [PaintMs]));
+  Check('24 局の見出しでも 1 枚 33 ms 未満', PaintMs < 33,
+    Format('(%.2f ms)', [PaintMs]));
+  View.SetStations(nil);
+  View.ShowCharacters := False;
 
   WriteLn;
   WriteLn('受信テキストの検証 / transcript checks');
