@@ -89,6 +89,11 @@ type
       fell behind and the ring wrapped, Position is moved up to the oldest
       sample still held and False reports the loss. }
     function ReadSince(var Position: Int64; out Data: TSingleArray): Boolean;
+    { これまでに書き込まれた標本の総数です。**「いまから先だけを読む」読み手が、
+      始まりの位置をここから採ります。**
+      How many samples have been written in total. **A reader that wants only
+      what comes next takes its starting position from here.** }
+    function Written: Int64;
     property Capacity: Integer read FCapacity;
   end;
 
@@ -738,6 +743,16 @@ begin
       if Value > Result then
         Result := Value;
     end;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TAudioRing.Written: Int64;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FTotal;
   finally
     LeaveCriticalSection(FLock);
   end;

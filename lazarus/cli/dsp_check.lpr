@@ -16,9 +16,15 @@ program dsp_check;
 {$mode objfpc}{$H+}
 
 uses
+  { 録音はスレッドで動きます。**Unix では、スレッドを使う単位より先に
+    `cthreads` を置かないと、走らせた瞬間に落ちます。**
+    Recording runs on a thread, and **on Unix `cthreads` must come before any
+    unit that uses one, or the program dies the moment one starts.** }
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes, SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
   DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder,
-  DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch;
+  DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
+  DeepCW.Audio, DeepCW.Recorder;
 
 var
   Meta: TDeepCWMetadata;
@@ -625,6 +631,301 @@ begin
   finally
     Bad.Free;
   end;
+end;
+
+{ 書きかけの WAV を、書き手を締め出さずに読みます。
+  Reads a WAV that is still being written, without locking its writer out. }
+procedure LoadGrowing(const FileName: string; out Samples: TSingleArray;
+  out SampleRate: Integer);
+var
+  Stream: TFileStream;
+begin
+  Stream := TFileStream.Create(FileName, fmOpenRead or fmShareDenyNone);
+  try
+    LoadWavMonoFromStream(Stream, Samples, SampleRate);
+  finally
+    Stream.Free;
+  end;
+end;
+
+{ 一定の値で埋めた標本の列。録れた／録れなかったを値で見分けるために使います。
+  A run of samples all of one value, so that what was recorded and what was not
+  can be told apart by value. }
+function FilledWith(Value: Single; Count: Integer): TSingleArray;
+var
+  I: Integer;
+begin
+  SetLength(Result, Count);
+  for I := 0 to Count - 1 do
+    Result[I] := Value;
+end;
+
+{ 録音の状態が満たされるまで、上限つきで待ちます。**「一定時間眠って確かめる」
+  にすると、遅い機械では偽の失敗が出ます。**
+  Waits, with a ceiling, until the recording reaches a state. **Sleeping a fixed
+  time and then checking would fail spuriously on a slow machine.** }
+function WaitForSamples(Recorder: TAudioRecorder; Wanted: Int64;
+  Rate, LimitMs: Integer): Boolean;
+var
+  Waited: Integer;
+begin
+  Waited := 0;
+  while Waited < LimitMs do
+  begin
+    if Recorder.Snapshot.Seconds * Rate >= Wanted then
+      Exit(True);
+    Sleep(20);
+    Inc(Waited, 20);
+  end;
+  Result := Recorder.Snapshot.Seconds * Rate >= Wanted;
+end;
+
+procedure TestRecorder;
+const
+  WAV_RATE = 8000;
+var
+  Dir, Path: string;
+  Writer: TWavWriter;
+  Loaded: TSingleArray;
+  Rate: Integer;
+  Ring: TAudioRing;
+  Recorder: TAudioRecorder;
+  Status: TRecorderStatus;
+  I: Integer;
+begin
+  WriteLn('TWavWriter / TAudioRecorder（要件 FR-E.8）');
+  { 書きかけのファイルは、書き手を締め出さない読み方で開きます。`LoadWavMono` は
+    書き込みを拒む開き方をするので、**書きかけを読む道具にはできません。**
+    A file still being written is opened in a way that does not lock its writer
+    out. `LoadWavMono` opens denying writers, so **it cannot be the tool for
+    reading one part-way through.** }
+  Dir := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw-recorder-test';
+  ForceDirectories(Dir);
+  Path := IncludeTrailingPathDelimiter(Dir) + 'grow.wav';
+  DeleteFile(Path);
+
+  { ---- 書きながら書き足す WAV ---- }
+  Writer := TWavWriter.Create(Path, WAV_RATE);
+  try
+    { **1 標本も書いていない時点で、開ける WAV になっていること。**見出しを
+      最後にまとめて書く作りでは、ここで落ちると開けないファイルが残る。
+      **It must already be an openable WAV before a single sample is written**:
+      a design that writes the headers at the end leaves an unopenable file if it
+      dies here. }
+    LoadGrowing(Path, Loaded, Rate);
+    Check('中身が無くても開ける WAV になる',
+      (Length(Loaded) = 0) and (Rate = WAV_RATE),
+      Format('(%d 標本 / %d Hz)', [Length(Loaded), Rate]));
+
+    Writer.Append(FilledWith(0.5, 1000), 1000);
+    { **閉じる前に読めること。**強制終了に耐えるかどうかは、ここで決まる。
+      **It must be readable before it is closed**: whether it survives a forced
+      exit is decided here. }
+    LoadGrowing(Path, Loaded, Rate);
+    Check('閉じる前でも書いた分だけ読める', Length(Loaded) = 1000,
+      Format('(%d 標本)', [Length(Loaded)]));
+    Check('書いた値が読み戻せる',
+      (Length(Loaded) = 1000) and (Abs(Loaded[0] - 0.5) < 0.001),
+      Format('(%.4f)', [Loaded[0]]));
+    Check('大きさの欄が中身と合う', Writer.Bytes = 44 + 2000,
+      Format('(%d バイト)', [Writer.Bytes]));
+
+    Writer.Append(FilledWith(-0.25, 500), 500);
+    LoadGrowing(Path, Loaded, Rate);
+    Check('2 度に分けて書いても続きになる',
+      (Length(Loaded) = 1500) and (Abs(Loaded[1000] + 0.25) < 0.001),
+      Format('(%d 標本)', [Length(Loaded)]));
+  finally
+    Writer.Free;
+  end;
+  LoadWavMono(Path, Loaded, Rate);
+  Check('閉じたあとも同じ中身', Length(Loaded) = 1500,
+    Format('(%d 標本)', [Length(Loaded)]));
+
+  { 名前は地方時の日時から作る。/ The name comes from the local date and time. }
+  Check('録音の名前は日時から作る',
+    ExtractFileName(RecordingFileFor(Dir,
+      EncodeDate(2026, 9, 6) + EncodeTime(1, 2, 3, 0))) = '2026-09-06-010203.wav',
+    ExtractFileName(RecordingFileFor(Dir,
+      EncodeDate(2026, 9, 6) + EncodeTime(1, 2, 3, 0))));
+
+  { ---- 輪バッファから録る ---- }
+  Path := IncludeTrailingPathDelimiter(Dir) + 'live.wav';
+  DeleteFile(Path);
+  Ring := TAudioRing.Create(WAV_RATE * 4);
+  try
+    { 始める前に鳴っていた音。**これは録らない。**利用者が録ると決める前の音だから。
+      Audio that was already there. **It is not recorded**: it is from before the
+      operator chose to record. }
+    Ring.Push(FilledWith(0.9, 1600), 1600);
+    Check('輪バッファは書いた数を数えている', Ring.Written = 1600,
+      Format('(%d)', [Ring.Written]));
+
+    Recorder := TAudioRecorder.Create(Ring, WAV_RATE);
+    try
+      Check('録音を始められる', Recorder.Start(Path), Recorder.LastError);
+      Check('始めれば動いている', Recorder.Running);
+      Ring.Push(FilledWith(0.5, 800), 800);
+      Check('押し込んだ分が録れる', WaitForSamples(Recorder, 800, WAV_RATE, 3000),
+        Format('(%.0f 標本)', [Recorder.Snapshot.Seconds * WAV_RATE]));
+      Ring.Push(FilledWith(0.25, 800), 800);
+      Check('続けて押し込んだ分も録れる',
+        WaitForSamples(Recorder, 1600, WAV_RATE, 3000),
+        Format('(%.0f 標本)', [Recorder.Snapshot.Seconds * WAV_RATE]));
+      Status := Recorder.Snapshot;
+      Check('取りこぼしは無い', Status.Lost = 0, Format('(%d)', [Status.Lost]));
+      Check('自ら止まってはいない', Status.Stopped = '', Status.Stopped);
+    finally
+      Recorder.Stop;
+      Recorder.Free;
+    end;
+
+    LoadWavMono(Path, Loaded, Rate);
+    Check('止めたあとに読める録音になっている', Length(Loaded) = 1600,
+      Format('(%d 標本)', [Length(Loaded)]));
+    { **始める前の音が混ざっていないこと。**混ざれば、録音の時刻と受信テキストの
+      時刻がずれる。
+      **Nothing from before the start may be in it**: mixed in, the recording's
+      time and the transcript's time would no longer line up. }
+    Check('始める前の音は入っていない',
+      (Length(Loaded) = 1600) and (Abs(Loaded[0] - 0.5) < 0.001),
+      Format('(%.4f)', [Loaded[0]]));
+    Check('2 度目に押し込んだ音も入っている',
+      (Length(Loaded) = 1600) and (Abs(Loaded[800] - 0.25) < 0.001),
+      Format('(%.4f)', [Loaded[800]]));
+  finally
+    Ring.Free;
+  end;
+
+  { ---- 止める指示の直前に届いた音も残ること ---- }
+  { **止めた瞬間に残っていた分を書き切らなければ、最後の 1 文字の音が消えます。**
+    取り出しの周期の途中で押し込み、間を置かずに止める。
+    **Without writing out what was still there at the moment of stopping, the
+    sound of the last character is lost.** The audio is pushed part-way through
+    the reader's cycle and the recording stopped with no pause. }
+  Path := IncludeTrailingPathDelimiter(Dir) + 'tail.wav';
+  DeleteFile(Path);
+  Ring := TAudioRing.Create(WAV_RATE * 4);
+  try
+    Recorder := TAudioRecorder.Create(Ring, WAV_RATE);
+    try
+      Recorder.Start(Path);
+      Sleep(250);
+      Ring.Push(FilledWith(0.75, 800), 800);
+    finally
+      Recorder.Stop;
+      Recorder.Free;
+    end;
+    LoadWavMono(Path, Loaded, Rate);
+    Check('止める直前に届いた音も残る', Length(Loaded) = 800,
+      Format('(%d 標本)', [Length(Loaded)]));
+  finally
+    Ring.Free;
+  end;
+
+  { ---- 上限に達したら自ら止まり、理由を言う（教訓 10.1）---- }
+  Path := IncludeTrailingPathDelimiter(Dir) + 'limit.wav';
+  DeleteFile(Path);
+  Ring := TAudioRing.Create(WAV_RATE * 4);
+  try
+    Recorder := TAudioRecorder.Create(Ring, WAV_RATE, 0.1, RECORD_MAX_BYTES);
+    try
+      Recorder.Start(Path);
+      Ring.Push(FilledWith(0.5, 1600), 1600);
+      for I := 1 to 100 do
+      begin
+        if Recorder.Snapshot.Stopped <> '' then
+          Break;
+        Sleep(20);
+      end;
+      Status := Recorder.Snapshot;
+      Check('長さの上限に達したら止まる', Status.Stopped <> '', '(理由が空)');
+      Check('止まった理由を言う', Pos('上限', Status.Stopped) > 0,
+        Status.Stopped);
+      Check('止まったものは動いているとは言わない', not Status.Running);
+    finally
+      Recorder.Stop;
+      Recorder.Free;
+    end;
+    LoadWavMono(Path, Loaded, Rate);
+    Check('上限で止めた録音も読める', Length(Loaded) >= 800,
+      Format('(%d 標本)', [Length(Loaded)]));
+  finally
+    Ring.Free;
+  end;
+
+  { 大きさの上限も同じように効くこと。長さと大きさは別の道で溢れる。
+    The size limit works the same way: length and size overrun by different
+    routes. }
+  Path := IncludeTrailingPathDelimiter(Dir) + 'bytes.wav';
+  DeleteFile(Path);
+  Ring := TAudioRing.Create(WAV_RATE * 4);
+  try
+    Recorder := TAudioRecorder.Create(Ring, WAV_RATE, RECORD_MAX_SECONDS, 1000);
+    try
+      Recorder.Start(Path);
+      Ring.Push(FilledWith(0.5, 1600), 1600);
+      for I := 1 to 100 do
+      begin
+        if Recorder.Snapshot.Stopped <> '' then
+          Break;
+        Sleep(20);
+      end;
+      Status := Recorder.Snapshot;
+      Check('大きさの上限に達したら止まる', Status.Stopped <> '', '(理由が空)');
+      Check('大きさで止まった理由を言う', Pos('MB', Status.Stopped) > 0,
+        Status.Stopped);
+    finally
+      Recorder.Stop;
+      Recorder.Free;
+    end;
+  finally
+    Ring.Free;
+  end;
+
+  { ---- 追いつけなかったら、失った分を数える（教訓 10.1）---- }
+  Path := IncludeTrailingPathDelimiter(Dir) + 'lost.wav';
+  DeleteFile(Path);
+  Ring := TAudioRing.Create(800);
+  try
+    Recorder := TAudioRecorder.Create(Ring, WAV_RATE);
+    try
+      Recorder.Start(Path);
+      { 輪の 100 倍を一息に押し込む。取り出しは 0.1 秒ごとなので、間に合わない。
+        A hundred rings' worth at once: the reader runs every 0.1 seconds and
+        cannot keep up. }
+      for I := 1 to 100 do
+        Ring.Push(FilledWith(0.5, 800), 800);
+      Sleep(300);
+      Status := Recorder.Snapshot;
+      Check('追いつけなければ失った分を数える', Status.Lost > 0,
+        Format('(%d)', [Status.Lost]));
+      Check('失っても録音は続く', Status.Stopped = '', Status.Stopped);
+    finally
+      Recorder.Stop;
+      Recorder.Free;
+    end;
+  finally
+    Ring.Free;
+  end;
+
+  { 書けない場所を指されたら、例外ではなく理由を返す。
+    Pointed at a place it cannot write, it returns a reason rather than
+    raising. }
+  Recorder := TAudioRecorder.Create(nil, WAV_RATE);
+  try
+    Check('受信が動いていなければ始めない', not Recorder.Start(Path));
+    Check('始められない理由を残す', Recorder.LastError <> '', '(理由が空)');
+  finally
+    Recorder.Free;
+  end;
+
+  DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'grow.wav');
+  DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'live.wav');
+  DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'tail.wav');
+  DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'limit.wav');
+  DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'bytes.wav');
+  DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'lost.wav');
 end;
 
 { 文字列から、確からしさを指定した局の記録を 1 件作ります。
@@ -1533,8 +1834,93 @@ begin
     Sleep(200);
 end;
 
+{ 録音が強制終了に耐えることを、本当に強制終了して確かめるための入口です。
+
+  **見出しを書き足すたびに直す作りの意味は、ここでしか確かめられません。**
+  閉じてから見出しを直す作りでも、通常の試験はすべて通ります。
+
+  The entry point for checking that a recording survives a kill by actually being
+  killed.
+
+  **The point of rewriting the headers on every append can only be shown here:**
+  a design that fixed them at close would pass every ordinary test. }
+procedure RecordUntilKilled(const Directory: string);
+var
+  Ring: TAudioRing;
+  Recorder: TAudioRecorder;
+  Path: string;
+  Waited: Integer;
+begin
+  ForceDirectories(Directory);
+  Path := IncludeTrailingPathDelimiter(Directory) + 'kill.wav';
+  Ring := TAudioRing.Create(8000 * 4);
+  Recorder := TAudioRecorder.Create(Ring, 8000);
+  if not Recorder.Start(Path) then
+  begin
+    WriteLn(StdErr, Recorder.LastError);
+    Halt(2);
+  end;
+  Ring.Push(FilledWith(0.5, 8000), 8000);
+  { 実際に書けるまで待ってから名前を出します。名前だけ先に出すと、まだ 1 標本も
+    書けていないものを「書けている」と読み違えます。
+    The name is printed only once something has actually been written: printing
+    it first would let a recording with not one sample in it be read as
+    written. }
+  Waited := 0;
+  while (Recorder.Snapshot.Seconds <= 0) and (Waited < 5000) do
+  begin
+    Sleep(20);
+    Inc(Waited, 20);
+  end;
+  WriteLn(Path);
+  Flush(Output);
+  { 意図的に止めません。ここで殺されても、そこまでが読める WAV であることが
+    要件です。
+    Deliberately never stopped: the requirement is that what was written so far
+    is a readable WAV even when the process is killed at this point. }
+  while True do
+  begin
+    Ring.Push(FilledWith(0.5, 800), 800);
+    Sleep(100);
+  end;
+end;
+
+{ 殺されたあとのファイルを読み、標本の数を出します。読めなければ終了コードで
+  伝えます。**WAV は文字を探して確かめられないので、読めるかどうかで確かめます。**
+  Reads the file left behind and reports how many samples it holds, reporting
+  failure through the exit code. **A WAV cannot be checked by looking for a word
+  in it, so it is checked by being read.** }
+procedure CheckWavFile(const FileName: string);
+var
+  Samples: TSingleArray;
+  Rate: Integer;
+begin
+  try
+    LoadWavMono(FileName, Samples, Rate);
+  except
+    on E: Exception do
+    begin
+      WriteLn(StdErr, '読めません: ', E.Message);
+      Halt(1);
+    end;
+  end;
+  WriteLn(Format('%d 標本 / %d Hz', [Length(Samples), Rate]));
+  if Length(Samples) <= 0 then
+    Halt(1);
+end;
+
 begin
   MetadataPath := '';
+  if ParamStr(1) = '--record-until-killed' then
+  begin
+    RecordUntilKilled(ParamStr(2));
+    Halt(0);
+  end;
+  if ParamStr(1) = '--wav-check' then
+  begin
+    CheckWavFile(ParamStr(2));
+    Halt(0);
+  end;
   if ParamStr(1) = '--journal-until-killed' then
   begin
     RunUntilKilled(ParamStr(2));
@@ -1583,6 +1969,7 @@ begin
     TestContactLog;
     TestExchange;
     TestWatch;
+    TestRecorder;
   finally
     Meta.Free;
   end;

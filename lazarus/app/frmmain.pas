@@ -34,7 +34,7 @@ uses
   DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
-  DeepCW.Callsign,
+  DeepCW.Callsign, DeepCW.Recorder,
   TranscriptView, WaterfallView, BandMapView;
 
 type
@@ -182,6 +182,14 @@ type
       zero. Without the origin the recorded times would be the moments of
       writing, late by the confirmation lag (requirement FR-B.6). }
     FJournal: TTranscriptJournal;
+    { 受信音の録音（要件 FR-E.8）。受信が動いている間だけ存在します。
+      The recording of the received audio (requirement FR-E.8); it exists only
+      while reception runs. }
+    FRecorder: TAudioRecorder;
+    { 状態表示に出している文字。**同じ文字を毎回書き直さないためです。**
+      What the status panel currently shows, so the same text is not written
+      into it five times a second. }
+    FRecordShown: string;
     { 交信の記録。バンドマップの「交信済み」も ADIF の書き出しも、ここ 1 つを
       見ます（要件 FR-E.3・FR-J.4）。
       The contact log. Both the worked marks on the band map and the ADIF export
@@ -332,6 +340,8 @@ type
     FSetBandwidth: TComboBox;
     FSetRetention: TComboBox;
     FSetJournal: TCheckBox;
+    FSetRecord: TCheckBox;
+    FSetRecordInfo: TLabel;
     FSetLogImport: TButton;
     FSetLogExport: TButton;
     FSetLogInfo: TLabel;
@@ -421,6 +431,13 @@ type
     { 記録（要件 FR-B.6） / the journal (requirement FR-B.6) }
     procedure RxJournalChanged(Sender: TObject);
     function JournalDirectory: string;
+    procedure RxRecordChanged(Sender: TObject);
+    function RecordingDirectory: string;
+    procedure StartRecording;
+    procedure StopRecording(const Why: string);
+    procedure UpdateRecording;
+    procedure UpdateRecordInfo;
+    procedure SetRecordStatus(const Shown: string);
     procedure JournalConfirmed;
 
     { 聴き直し（要件 FR-E.10） / replay (requirement FR-E.10) }
@@ -597,6 +614,7 @@ begin
     something useful, but never block startup on a missing runtime. }
   { 読み込んだ表示設定を実際に反映します。設定は代入だけでは効きません。
     Apply the loaded display settings; assigning the controls is not enough. }
+  UpdateRecordInfo;
   RxDisplayChanged(nil);
   FRxMode.OnChange := @RxModeChanged;
   { 読み込んだ待ち符号を実際に反映します。設定は代入だけでは効きません。通知は
@@ -653,6 +671,16 @@ begin
     FPollTimer.Enabled := False;
   if FCapture <> nil then
     FCapture.Stop;
+  { 録音は閉じる前に終えます。**見出しは書き足すたびに直しているので、ここで
+    落ちても読めますが、終えれば最後の一息まで入ります。**
+    The recording is finished before closing: **the headers are kept correct as
+    it goes, so dying here still leaves it readable, but finishing puts the last
+    breath of it in.** }
+  if FRecorder <> nil then
+  begin
+    FRecorder.Stop;
+    FreeAndNil(FRecorder);
+  end;
   if FPlayback <> nil then
     FPlayback.Stop;
   if FReviewPlay <> nil then
@@ -697,10 +725,18 @@ begin
   FStatus.SimplePanel := False;
   FStatus.Panels.Add.Width := 160;
   FStatus.Panels.Add.Width := 140;
-  { 3 つ目には対処つきの案内が入るため、残りの幅をすべて与えます。切り詰められ
+  { 録音は運用の間ずっと続く状態なので、案内の欄ではなく自分の欄を持ちます
+    （要件 FR-E.8）。**案内に出すと、次の案内が出た時点で「録音中かどうか」が
+    画面から消えます。**
+    A recording is a state that lasts the whole session, so it has a panel of its
+    own rather than the guidance panel (requirement FR-E.8): **put in the
+    guidance, whether it is recording would vanish from the screen the moment the
+    next message arrived.** }
+  FStatus.Panels.Add.Width := 190;
+  { 最後には対処つきの案内が入るため、残りの幅をすべて与えます。切り詰められ
     ると「次に何をすればよいか」が読めなくなります（要件 FR-A.4）。
 
-    The third panel carries guidance with a remedy in it, so it takes all the
+    The last panel carries guidance with a remedy in it, so it takes all the
     remaining width; truncating it would cut off what to do next
     (requirement FR-A.4). }
   FStatus.Panels.Add.Width := 4000;
@@ -783,6 +819,23 @@ var
     alTop controls are ordered by their Top coordinate, not by creation order,
     so each one is given a larger Top before it is aligned. }
   GLayoutTop: Integer = 0;
+
+{ 秒数を時計の形にします。**「4837 秒」では、長いのか短いのかが分かりません。**
+  Turns seconds into a clock: **"4837 seconds" does not say whether that is long
+  or short.** }
+function SecondsAsClock(Seconds: Double): string;
+var
+  Whole: Integer;
+begin
+  Whole := Trunc(Seconds);
+  if Whole < 0 then
+    Whole := 0;
+  if Whole >= 3600 then
+    Result := Format('%d:%.2d:%.2d',
+      [Whole div 3600, (Whole div 60) mod 60, Whole mod 60])
+  else
+    Result := Format('%d:%.2d', [Whole div 60, Whole mod 60]);
+end;
 
 procedure StackBelow(Control: TControl);
 begin
@@ -1290,11 +1343,11 @@ begin
     Operating settings: what an operator actually changes. No jargon here. }
   Operating := TGroupBox.Create(Sheet);
   Operating.Parent := Sheet;
-  Operating.Height := 182;
+  Operating.Height := 210;
   Operating.Caption := '運用設定';
   Stretch(Operating, alTop);
 
-  AddLabel(Operating, '録音の細かさ', 14, 8);
+  AddLabel(Operating, '音の細かさ', 14, 8);
   FSetCaptureRate := TComboBox.Create(Operating);
   FSetCaptureRate.Parent := Operating;
   FSetCaptureRate.SetBounds(14, 30, 200, 28);
@@ -1306,7 +1359,7 @@ begin
   FSetCaptureRate.Items.Add('44100 Hz');
   FSetCaptureRate.Items.Add('48000 Hz');
   FSetCaptureRate.ItemIndex := 0;
-  AddLabel(Operating, '受信機の音を取り込む細かさです。うまく録音できないときだけ変えてください。',
+  AddLabel(Operating, '受信機の音を取り込む細かさです。うまく取り込めないときだけ変えてください。',
     232, 36);
 
   AddLabel(Operating, '聴き直せる長さ', 14, 62);
@@ -1334,17 +1387,39 @@ begin
     '確定するそばからファイルへ書き足します。異常終了しても直前まで残ります。',
     330, 92);
 
+  { 受信音の録音（要件 FR-E.8）。受信テキストの記録のすぐ下に置きます。**同じ
+    運用の、同じ「残す」という選択**であり、片方が設定タブで片方が受信タブに
+    あると、どちらを入れたのか覚えていられません。
+
+    既定は入れません。**書くのは利用者のディスクです。**聴き直し（要件 FR-E.10）
+    は記憶の中だけで済みますが、こちらは残ります。
+
+    Recording the received audio (requirement FR-E.8), directly under the
+    transcript journal: **the same session and the same choice to keep
+    something**, and split between two tabs there would be no remembering which
+    was switched on.
+
+    It is off by default. **What is written is the operator's own disk**: replay
+    (requirement FR-E.10) stays in memory, while this stays. }
+  FSetRecord := TCheckBox.Create(Operating);
+  FSetRecord.Parent := Operating;
+  FSetRecord.SetBounds(14, 118, 300, 22);
+  FSetRecord.Caption := '受信した音を WAV で録音する';
+  FSetRecord.Checked := False;
+  FSetRecord.OnChange := @RxRecordChanged;
+  FSetRecordInfo := AddLabel(Operating, '', 330, 120);
+
   { 交信記録の出し入れ。運用者が別のソフトで積み上げた記録を取り込めば、その場で
     「交信済み」が効きます（要件 FR-E.3・FR-J.4）。
     Taking the contact log in and out. Importing a log an operator built in
     another program makes the worked marks work at once (requirements FR-E.3 and
     FR-J.4). }
-  AddLabel(Operating, '交信記録', 14, 122);
-  FSetLogImport := AddButton(Operating, 'ADIF を取り込む', 120, 118, 150,
+  AddLabel(Operating, '交信記録', 14, 150);
+  FSetLogImport := AddButton(Operating, 'ADIF を取り込む', 120, 146, 150,
     @SetLogImportClick);
-  FSetLogExport := AddButton(Operating, 'ADIF を書き出す', 278, 118, 150,
+  FSetLogExport := AddButton(Operating, 'ADIF を書き出す', 278, 146, 150,
     @SetLogExportClick);
-  FSetLogInfo := AddLabel(Operating, '', 440, 122);
+  FSetLogInfo := AddLabel(Operating, '', 440, 150);
 
   { ── 詳細・診断：困ったときだけ見るもの ──
     Advanced and diagnostics: only looked at when something is wrong. }
@@ -1443,6 +1518,7 @@ begin
     FRxFontSize.Value := ClampInt(Ini.ReadInteger('receive', 'font_size', 14), 9, 32);
     FSetRetention.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'retention', 1), 0, 3);
     FSetJournal.Checked := Ini.ReadBool('receive', 'journal', True);
+    FSetRecord.Checked := Ini.ReadBool('receive', 'record', False);
     FRxMode.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'mode', 0), 0, 2);
     FRxBand.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'band', 0),
       0, FRxBand.Items.Count - 1);
@@ -1511,6 +1587,7 @@ begin
       Ini.WriteInteger('receive', 'bandwidth', FSetBandwidth.ItemIndex);
       Ini.WriteInteger('receive', 'retention', FSetRetention.ItemIndex);
       Ini.WriteBool('receive', 'journal', FSetJournal.Checked);
+      Ini.WriteBool('receive', 'record', FSetRecord.Checked);
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('receive', 'watch', FRxWatch.Text);
       Ini.WriteInteger('receive', 'band', FRxBand.ItemIndex);
@@ -2148,6 +2225,12 @@ begin
     FCaptureRate := SelectedCaptureRate;
     { 最長の窓の 2 倍を保持し、復号が遅れても次の窓が不足しないようにします。
     Hold twice the longest window so a slow decode never starves the next. }
+    { 輪バッファを作り直す前に、それを読んでいるものを止めます。**録音は輪
+      バッファを指しているので、先に作り直せば無いものを読みます。**
+      Whatever reads the ring is stopped before it is rebuilt: **the recording
+      points at the ring, and rebuilding first would leave it reading what is no
+      longer there.** }
+    StopRecording('');
     FreeAndNil(FRing);
     FRing := TAudioRing.Create(FCaptureRate * 2 * Round(DEEPCW_MAX_SECONDS));
     { 流し込み復号器はここで用意します。エンジンが読めていなければ作れず、
@@ -2167,13 +2250,21 @@ begin
 
     FCapture := TAudioCapture.Create(FRing, FCaptureRate, SelectedDeviceIndex);
     FCapture.Start;
-    { 録音の細かさが変わればウォーターフォールの目盛りも変わります。溜まって
+    { 音の細かさが変わればウォーターフォールの目盛りも変わります。溜まって
       いた絵は意味を失うので消します。
       A change of capture rate changes the waterfall's scale, so whatever is
       already drawn no longer means anything and is cleared. }
     FRxWaterfall.Clear;
     FRxWaterfall.Message_ := '信号を待っています。読みたい信号が見えたらクリックしてください。';
-    SetStatus('', Format('録音中 %d Hz', [FCaptureRate]), '受信を開始しました。');
+    { 「録音」はファイルへ残すこと（要件 FR-E.8）に使う語なので、取り込んで
+      いる状態は「受信中」と言います。**1 つの語に 2 つの意味を持たせると、
+      録音していないのに録音中と読めます。**
+      "Recording" is the word for keeping a file (requirement FR-E.8), so
+      capturing is called receiving: **one word with two meanings would read as
+      recording when nothing is being recorded.** }
+    SetStatus('', Format('受信中 %d Hz', [FCaptureRate]), '受信を開始しました。');
+    if FSetRecord.Checked then
+      StartRecording;
   except
     on E: Exception do
     begin
@@ -2189,6 +2280,11 @@ begin
     Exit;
   FCapture.Stop;
   FreeAndNil(FCapture);
+  { 録音は取り込みを止めてから終えます。**先に録音を終えると、そのあと届いた
+    音が録音に入りません。**
+    The recording ends after the capture does: **ending it first would leave the
+    audio that arrived afterwards out of the file.** }
+  StopRecording('');
   FRxLevel.Position := 0;
   FRxSignal.Caption := '';
   { 残った暫定部分を確定させてから止めます（要件 FR-B.2）。
@@ -2991,6 +3087,136 @@ begin
     ExtractFilePath(ConfigFileName)) + 'log';
 end;
 
+{ 録音の置き場所。設定ファイルと同じところの `audio` です。受信テキストの記録が
+  `log` に入るのと並びます。
+  Where recordings are kept: `audio` beside the settings file, alongside the
+  `log` the transcript journal writes into. }
+function TMainForm.RecordingDirectory: string;
+begin
+  Result := IncludeTrailingPathDelimiter(
+    ExtractFilePath(ConfigFileName)) + 'audio';
+end;
+
+{ 録音を始めます。**受信が動いていなければ何もしません。**録るものが無いのに
+  ファイルだけができると、0 秒の録音がディスクに溜まります。
+  Starts recording. **Nothing happens unless reception is running**: a file made
+  with nothing to put in it would leave recordings of zero seconds on the disk. }
+procedure TMainForm.StartRecording;
+var
+  Path: string;
+begin
+  if (FRecorder <> nil) or (FCapture = nil) or (FRing = nil) then
+    Exit;
+  Path := RecordingFileFor(RecordingDirectory, Now);
+  FRecorder := TAudioRecorder.Create(FRing, FCaptureRate);
+  if not FRecorder.Start(Path) then
+  begin
+    LogDiagnostic('録音', FRecorder.LastError);
+    SetStatus('', '', StatusLine(FRecorder.LastError));
+    FreeAndNil(FRecorder);
+    { 始められなかったのに印だけ入ったままにはしません。**入っているのに録れて
+      いない**のがいちばん困ります。
+      The box is not left ticked when the recording could not start: **ticked and
+      not recording** is the worst of the outcomes. }
+    FSetRecord.OnChange := nil;
+    FSetRecord.Checked := False;
+    FSetRecord.OnChange := @RxRecordChanged;
+    Exit;
+  end;
+  SetStatus('', '', '録音を始めました: ' + Path);
+end;
+
+{ 録音を終えます。**何秒録れたか、どこに残ったかを必ず言います。**
+  Stops recording, **always saying how long it kept and where it went.** }
+procedure TMainForm.StopRecording(const Why: string);
+var
+  Status: TRecorderStatus;
+  Path, Lost: string;
+begin
+  if FRecorder = nil then
+    Exit;
+  Path := FRecorder.FileName;
+  { 先に止めます。止めるときに残りを書き切るので、**止める前に数えた長さは、
+    実際に残った長さより短く出ます。**
+    Stopped first: stopping writes out the remainder, so **a length counted
+    before that would be shorter than what the file actually holds.** }
+  FRecorder.Stop;
+  Status := FRecorder.Snapshot;
+  FreeAndNil(FRecorder);
+  SetRecordStatus('');
+  { 1 標本も録れていない録音は残しません。**受信が始められなかったときに、
+    0 秒のファイルだけがディスクに積もります。**消したことは言います。
+    A recording with not one sample in it is not kept: **a reception that failed
+    to start would otherwise leave nothing but files of zero seconds piling up.**
+    That it was removed is said. }
+  if Status.Seconds <= 0 then
+  begin
+    DeleteFile(Path);
+    SetStatus('', '', Format('%s録音は残していません（音が届きませんでした）。',
+      [Why]));
+    Exit;
+  end;
+  Lost := '';
+  if Status.Lost > 0 then
+    { 取りこぼしは黙って飲み込みません（教訓 10.1）。**穴の空いた録音を、
+      無傷の録音と同じ顔で渡さないためです。**
+      Dropped audio is not swallowed in silence (lesson 10.1): **a recording with
+      a hole in it must not be handed over wearing the face of a whole one.** }
+    Lost := Format('（%.1f 秒を取りこぼしました）', [Status.Lost / FCaptureRate]);
+  SetStatus('', '', Format('%s録音を終えました: %s（%s）%s',
+    [Why, Path, SecondsAsClock(Status.Seconds), Lost]));
+end;
+
+{ 録音の状態を状態表示へ映し、自ら止まっていれば後始末をします。
+  Reflects the recording into the status bar and clears up if it stopped by
+  itself. }
+procedure TMainForm.UpdateRecording;
+var
+  Status: TRecorderStatus;
+begin
+  if FRecorder = nil then
+    Exit;
+  Status := FRecorder.Snapshot;
+  if Status.Stopped <> '' then
+  begin
+    { 上限に達した、あるいは書けなくなった。**印も外します。**入ったままだと、
+      次に受信を始めたときに黙って録り始めます。
+      A limit was reached or writing failed. **The box is cleared too**: left
+      ticked, the next reception would quietly start recording again. }
+    FSetRecord.OnChange := nil;
+    FSetRecord.Checked := False;
+    FSetRecord.OnChange := @RxRecordChanged;
+    MarkSettingsDirty;
+    StopRecording(Status.Stopped);
+    Exit;
+  end;
+  SetRecordStatus(Format('録音 %s（%.1f MB）',
+    [SecondsAsClock(Status.Seconds), Status.Bytes / (1000 * 1000)]));
+end;
+
+{ 録音の説明を出します。**どこに、どこまで残るのかを、印の隣で言います。**
+  設定を入れたあとで「どこへ行ったのか」を探させないためです。
+  Explains the recording beside its own box: **where it goes and how far it
+  goes**, so that switching it on is not followed by hunting for the file. }
+procedure TMainForm.UpdateRecordInfo;
+begin
+  if FSetRecordInfo = nil then
+    Exit;
+  FSetRecordInfo.Caption := Format(
+    '受信と同時に %s へ書きます。上限は %.0f 時間で、そこで止めて知らせます。',
+    [RecordingDirectory, RECORD_MAX_SECONDS / 3600]);
+end;
+
+procedure TMainForm.RxRecordChanged(Sender: TObject);
+begin
+  MarkSettingsDirty;
+  UpdateRecordInfo;
+  if FSetRecord.Checked then
+    StartRecording
+  else
+    StopRecording('');
+end;
+
 procedure TMainForm.RxJournalChanged(Sender: TObject);
 begin
   if FJournal = nil then
@@ -3493,7 +3719,7 @@ begin
       Copy the message first: RxStopClick frees FCapture, so LastError cannot
       be read after it. }
     Failure := FCapture.LastError;
-    LogDiagnostic('録音', Failure);
+    LogDiagnostic('取り込み', Failure);
     { 止めてから案内を出します。RxStopClick は「受信を停止しました」を出すため、
       順序が逆だと、なぜ止まったのかという肝心の説明が上書きされて消えます。
 
@@ -3623,6 +3849,7 @@ begin
 
   UpdateTransmitProgress;
   UpdateLiveReceive;
+  UpdateRecording;
 
   FTxSend.Enabled := (Length(FTxSamples) > 0) and not FPlayback.Running;
   FTxStop.Enabled := FPlayback.Running;
@@ -3646,7 +3873,19 @@ begin
   if Audio <> '' then
     FStatus.Panels[1].Text := Audio;
   if Message_ <> '' then
-    FStatus.Panels[2].Text := Message_;
+    FStatus.Panels[3].Text := Message_;
+end;
+
+{ 録音の欄。**同じ文字なら書き直しません。**毎秒 5 回の書き直しは、変わって
+  いないものを描き直すだけの費用です。
+  The recording panel. **The same text is not written again**: rewriting it five
+  times a second would be the cost of redrawing what has not changed. }
+procedure TMainForm.SetRecordStatus(const Shown: string);
+begin
+  if Shown = FRecordShown then
+    Exit;
+  FRecordShown := Shown;
+  FStatus.Panels[2].Text := Shown;
 end;
 
 { 技術的な文言を、次の一手が分かる日本語に置き換えます（要件 FR-A.4）。

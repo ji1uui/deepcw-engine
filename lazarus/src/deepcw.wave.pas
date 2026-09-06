@@ -39,6 +39,55 @@ procedure LoadWavMonoFromStream(Stream: TStream; out Samples: TSingleArray;
 procedure SaveWavMono(const FileName: string; const Samples: TSingleArray;
   SampleRate: Integer);
 
+type
+  { 受信しながら書き足していく WAV の出力口です（要件 FR-E.8）。
+
+    **見出しは書き足すたびに書き直します。**WAV の大きさの欄は先頭にあるため、
+    最後にまとめて直す作りにすると、異常終了したファイルは長さ 0 として残り、
+    どの再生ソフトでも開けません。書き直しは 44 バイトで済みます。実測では、
+    1 時間ぶんの音（0.1 秒ずつ 36000 回）を書くのに 276 ms、うち見出しの
+    書き直しは 73 ms でした（付録 Z.2）。**録り終えるまで残らない録音は、
+    録音ではない**という考え方です（`DeepCW.Journal` と同じ）。
+
+    ここは書き出しだけを行います。どこから音を取るか、いつ止めるかは
+    `DeepCW.Recorder` が決めます。
+
+    A WAV sink that grows while reception continues (requirement FR-E.8).
+
+    **The headers are rewritten on every append.** The size fields sit at the
+    front of the file, so writing them only at the end would leave an abnormally
+    terminated recording at length zero -- unopenable in any player. The rewrite
+    is 44 bytes: measured, an hour of audio written in 36000 pieces of 0.1
+    seconds costs 276 ms, of which the header rewriting is 73 ms (appendix Z.2).
+    **A recording that only exists once it is finished is not a recording**,
+    which is the reasoning `DeepCW.Journal` already follows.
+
+    This writes; where the audio comes from and when to stop belong to
+    `DeepCW.Recorder`. }
+  TWavWriter = class
+  private
+    FStream: TFileStream;
+    FFileName: string;
+    FSampleRate: Integer;
+    FSamples: Int64;
+    procedure WriteHeaders;
+  public
+    { ファイルを作り、まだ中身の無い見出しを書きます。作れなければ例外です。
+      Creates the file and writes the headers of an empty recording. Raises if
+      the file cannot be created. }
+    constructor Create(const AFileName: string; ASampleRate: Integer);
+    destructor Destroy; override;
+    { 標本を書き足し、見出しを直します。範囲外の値は [-1, 1] に丸めます。
+      Appends samples and updates the headers, clipping to [-1, 1]. }
+    procedure Append(const Samples: TSingleArray; Count: Integer);
+    property FileName: string read FFileName;
+    property SampleRate: Integer read FSampleRate;
+    { 書いた標本の数と、ファイルの大きさ（見出しを含む）。
+      The samples written and the file's size, headers included. }
+    property SampleCount: Int64 read FSamples;
+    function Bytes: Int64;
+  end;
+
 { 線形補間によるリサンプラです。Python 版および Node.js 版のサンプルと同一の
   処理とし、3 つの実装が同じ入力テンソルを生成するようにしています。
 
@@ -253,55 +302,118 @@ begin
   SampleRate := Integer(Format.SampleRate);
 end;
 
-procedure SaveWavMono(const FileName: string; const Samples: TSingleArray;
-  SampleRate: Integer);
+{ TWavWriter }
+
+constructor TWavWriter.Create(const AFileName: string; ASampleRate: Integer);
+begin
+  inherited Create;
+  if ASampleRate <= 0 then
+    raise EDeepCW.Create('The WAV sample rate must be positive.');
+  FFileName := AFileName;
+  FSampleRate := ASampleRate;
+  FSamples := 0;
+  { 書いている間も、ほかから読めるようにしておきます。**書き足すたびに見出しを
+    直す意味は、途中で読めることにあります。**
+    Others may read it while it is being written: **rewriting the headers on
+    every append is meaningful only if it can be read part-way through.** }
+  FStream := TFileStream.Create(AFileName, fmCreate or fmShareDenyNone);
+  { 中身がまだ 1 標本も無いうちから、正しい見出しを置きます。**この時点で
+    止まっても「長さ 0 の録音」として開けるファイルになります。**
+    Correct headers are laid down before a single sample exists: **stopped here,
+    the file still opens as a recording of length zero.** }
+  WriteHeaders;
+end;
+
+destructor TWavWriter.Destroy;
+begin
+  FStream.Free;
+  inherited Destroy;
+end;
+
+{ 見出しを先頭へ書き直し、書き足す位置へ戻ります。
+  Rewrites the headers at the front and returns to the append position. }
+procedure TWavWriter.WriteHeaders;
 var
-  Stream: TFileStream;
   Riff: TRiffHeader;
   Chunk: TChunkHeader;
   Format: TFormatChunk;
+  DataSize: LongWord;
+  Resume: Int64;
+begin
+  DataSize := LongWord(FSamples * SizeOf(SmallInt));
+  Resume := FStream.Position;
+  FStream.Position := 0;
+
+  SetChunkId(Riff.RiffId, 'RIFF');
+  Riff.RiffSize := 4 + (8 + SizeOf(Format)) + (8 + DataSize);
+  SetChunkId(Riff.WaveId, 'WAVE');
+  FStream.WriteBuffer(Riff, SizeOf(Riff));
+
+  SetChunkId(Chunk.ChunkId, 'fmt ');
+  Chunk.ChunkSize := SizeOf(Format);
+  FStream.WriteBuffer(Chunk, SizeOf(Chunk));
+
+  Format.AudioFormat := WAVE_FORMAT_PCM;
+  Format.Channels := 1;
+  Format.SampleRate := LongWord(FSampleRate);
+  Format.BitsPerSample := 16;
+  Format.BlockAlign := 2;
+  Format.ByteRate := LongWord(FSampleRate) * Format.BlockAlign;
+  FStream.WriteBuffer(Format, SizeOf(Format));
+
+  SetChunkId(Chunk.ChunkId, 'data');
+  Chunk.ChunkSize := DataSize;
+  FStream.WriteBuffer(Chunk, SizeOf(Chunk));
+
+  { 1 度目は見出しの直後が書き足す位置です。2 度目以降は元の位置へ戻ります。
+    On the first call the append position is just past the headers; afterwards
+    it is wherever it was. }
+  if Resume > FStream.Position then
+    FStream.Position := Resume;
+end;
+
+procedure TWavWriter.Append(const Samples: TSingleArray; Count: Integer);
+var
   Payload: array of SmallInt;
   I: Integer;
   Value: Double;
-  DataSize: LongWord;
 begin
-  if SampleRate <= 0 then
-    raise EDeepCW.Create('The WAV sample rate must be positive.');
-
-  SetLength(Payload, Length(Samples));
-  for I := 0 to High(Samples) do
+  if Count > Length(Samples) then
+    Count := Length(Samples);
+  if Count <= 0 then
+    Exit;
+  SetLength(Payload, Count);
+  for I := 0 to Count - 1 do
   begin
     Value := ClampDouble(Samples[I], -1.0, 1.0) * 32767.0;
     Payload[I] := SmallInt(Round(Value));
   end;
-  DataSize := LongWord(Length(Payload) * SizeOf(SmallInt));
+  FStream.WriteBuffer(Payload[0], Count * SizeOf(SmallInt));
+  FSamples := FSamples + Count;
+  WriteHeaders;
+end;
 
-  Stream := TFileStream.Create(FileName, fmCreate);
+function TWavWriter.Bytes: Int64;
+begin
+  Result := SizeOf(TRiffHeader) + 2 * SizeOf(TChunkHeader) + SizeOf(TFormatChunk)
+    + FSamples * SizeOf(SmallInt);
+end;
+
+{ 1 度に書き出す道は、書きながら書き足す道と同じものを通します。**RIFF の並べ方
+  を 2 か所に持つと、片方だけを直したときに気づけません**（教訓 10.3）。
+  The one-shot path goes through the same writer as the growing one: **holding
+  the RIFF layout in two places would let one of them be fixed without the other
+  being noticed** (lesson 10.3). }
+procedure SaveWavMono(const FileName: string; const Samples: TSingleArray;
+  SampleRate: Integer);
+var
+  Writer: TWavWriter;
+begin
+  Writer := TWavWriter.Create(FileName, SampleRate);
   try
-    SetChunkId(Riff.RiffId, 'RIFF');
-    Riff.RiffSize := 4 + (8 + SizeOf(Format)) + (8 + DataSize);
-    SetChunkId(Riff.WaveId, 'WAVE');
-    Stream.WriteBuffer(Riff, SizeOf(Riff));
-
-    SetChunkId(Chunk.ChunkId, 'fmt ');
-    Chunk.ChunkSize := SizeOf(Format);
-    Stream.WriteBuffer(Chunk, SizeOf(Chunk));
-
-    Format.AudioFormat := WAVE_FORMAT_PCM;
-    Format.Channels := 1;
-    Format.SampleRate := LongWord(SampleRate);
-    Format.BitsPerSample := 16;
-    Format.BlockAlign := 2;
-    Format.ByteRate := LongWord(SampleRate) * Format.BlockAlign;
-    Stream.WriteBuffer(Format, SizeOf(Format));
-
-    SetChunkId(Chunk.ChunkId, 'data');
-    Chunk.ChunkSize := DataSize;
-    Stream.WriteBuffer(Chunk, SizeOf(Chunk));
-    if DataSize > 0 then
-      Stream.WriteBuffer(Payload[0], DataSize);
+    Writer.Append(Samples, Length(Samples));
   finally
-    Stream.Free;
+    Writer.Free;
   end;
 end;
 

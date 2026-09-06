@@ -3,6 +3,7 @@
 #
 #   受信テキストの記録（要件 FR-B.6）
 #   交信記録（要件 FR-E.3。失うと交信そのものが失われます）
+#   受信音の録音（要件 FR-E.8。閉じるまで見出しを直さない作りでは開けません）
 #
 # 通常の試験は「閉じる前にファイルへ残っている」ところまでしか押さえられません。
 # ここでは、書いたプロセスを実際に kill -9 して、書いたものがファイルに
@@ -53,7 +54,41 @@ run_case() {
   return $RESULT
 }
 
+# 録音は文字を探して確かめられません。**読めるかどうか**で確かめます。
+# 見出しを閉じるときにだけ直す作りだと、ここで残るのは開けないファイルです。
+# A recording cannot be checked by looking for a word in it; it is checked by
+# **whether it can be read.** A design that fixes the headers only at close
+# leaves an unopenable file here.
+run_wav_case() {
+  DIR=${TMPDIR:-/tmp}/deepcw-kill-record
+  rm -rf "$DIR" "$DIR.out"
+
+  "$HERE/cli/dsp_check" --record-until-killed "$DIR" > "$DIR.out" 2>&1 &
+  PID=$!
+  FILE=''
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ -s "$DIR.out" ] && FILE=$(head -1 "$DIR.out")
+    [ -n "$FILE" ] && [ -s "$FILE" ] && break
+    sleep 0.3
+  done
+
+  kill -9 "$PID" 2>/dev/null || true
+  wait "$PID" 2>/dev/null || true
+
+  if [ -f "$FILE" ] && "$HERE/cli/dsp_check" --wav-check "$FILE" > "$DIR.check" 2>&1; then
+    echo "  ok   強制終了しても残る: 受信音の録音 / the recording ($(cat "$DIR.check"))"
+    RESULT=0
+  else
+    echo "  NG   強制終了で失われた: 受信音の録音 / the recording"
+    [ -f "$DIR.check" ] && sed 's/^/       /' "$DIR.check"
+    RESULT=1
+  fi
+  rm -rf "$DIR" "$DIR.out" "$DIR.check"
+  return $RESULT
+}
+
 FAILED=0
 run_case "受信テキストの記録 / the transcript journal" journal JH2XYZ || FAILED=1
 run_case "交信記録 / the contact log" log JH2XYZ || FAILED=1
+run_wav_case || FAILED=1
 exit $FAILED
