@@ -70,6 +70,12 @@ type
     FFileName: string;
     FSampleRate: Integer;
     FSamples: Int64;
+    { 書き出し用の一時領域は持ち回します。**0.1 秒ごとに確保して解放するのを
+      12 時間続けると 43 万回になります。**大きさは要るだけ伸ばし、縮めません。
+      The scratch buffer is kept: **allocating and freeing it every 0.1 seconds
+      for twelve hours would be 432,000 times.** It grows to what is needed and
+      never shrinks. }
+    FPayload: array of SmallInt;
     procedure WriteHeaders;
   public
     { ファイルを作り、まだ中身の無い見出しを書きます。作れなければ例外です。
@@ -374,7 +380,6 @@ end;
 
 procedure TWavWriter.Append(const Samples: TSingleArray; Count: Integer);
 var
-  Payload: array of SmallInt;
   I: Integer;
   Value: Double;
 begin
@@ -382,13 +387,14 @@ begin
     Count := Length(Samples);
   if Count <= 0 then
     Exit;
-  SetLength(Payload, Count);
+  if Length(FPayload) < Count then
+    SetLength(FPayload, Count);
   for I := 0 to Count - 1 do
   begin
     Value := ClampDouble(Samples[I], -1.0, 1.0) * 32767.0;
-    Payload[I] := SmallInt(Round(Value));
+    FPayload[I] := SmallInt(Round(Value));
   end;
-  FStream.WriteBuffer(Payload[0], Count * SizeOf(SmallInt));
+  FStream.WriteBuffer(FPayload[0], Count * SizeOf(SmallInt));
   FSamples := FSamples + Count;
   WriteHeaders;
 end;

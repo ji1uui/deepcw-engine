@@ -190,6 +190,10 @@ type
       What the status panel currently shows, so the same text is not written
       into it five times a second. }
     FRecordShown: string;
+    { 交信数を数え直した時刻。数え直しは記録の全件を読むため、毎秒は行いません。
+      When the contact count was last recounted: counting reads every record, so
+      it is not done every second. }
+    FRateAt: TDateTime;
     { 交信の記録。バンドマップの「交信済み」も ADIF の書き出しも、ここ 1 つを
       見ます（要件 FR-E.3・FR-J.4）。
       The contact log. Both the worked marks on the band map and the ADIF export
@@ -403,7 +407,7 @@ type
     function SelectedBand: string;
     function WithoutWorked(const Entries: TBandEntries): TBandEntries;
     procedure RxContestChanged(Sender: TObject);
-    procedure UpdateRate;
+    procedure UpdateRate(Force: Boolean = False);
     function WatchedCall(const Callsign: string): string;
     procedure RxWatchChanged(Sender: TObject);
     procedure AnnounceWatched;
@@ -2493,15 +2497,45 @@ end;
 
 { 直近 1 時間の交信数。コンテスト中に運用者が最も見る数字です。**得点ではなく、
   自分の記録から数えられるものだけを出します**（未解決 #9）。
+
+  数え直しは**記録の全件を読む**ため、件数に比例して重くなります（1 万件で
+  2.23 ms の実測）。一覧を作り直すたび、つまり毎秒これを行うと、**記録を積んだ
+  運用者ほど重くなる**という、いちばん避けたい形になります。
+
+  `Force` を渡さなければ数秒に 1 度しか数え直しません。1 時間あたりの局数が
+  数秒古いことは、運用の判断を何も変えません。交信を記録した直後や取り込んだ
+  直後は `Force` で即座に映します。**自分が今いれた 1 局が数に出ないのは、
+  古い数字とは意味が違います。**
+
   Contacts in the last hour, the number a contest operator watches most.
   **Not a score: only what can be counted from the operator's own log**
-  (unresolved #9). }
-procedure TMainForm.UpdateRate;
+  (unresolved #9).
+
+  Counting **reads every record**, so it grows with the size of the log (2.23 ms
+  at ten thousand, measured). Doing it on every rebuild of the list -- once a
+  second -- would make the application heavier for exactly the operator who has
+  logged the most, which is the last shape it should take.
+
+  Without `Force` it recounts only every few seconds: an hourly rate that is a
+  few seconds old changes no decision. After a contact is logged or a log is
+  imported it is forced, because **a contact the operator has just entered not
+  appearing in the count means something different from a slightly old
+  number.** }
+procedure TMainForm.UpdateRate(Force: Boolean);
+const
+  { 数え直す間隔。1 時間あたりの局数は、数秒では意味のある変わり方をしません。
+    How often to recount: contacts per hour does not change meaningfully in a
+    few seconds. }
+  RATE_REFRESH_SECONDS = 5;
 var
   Hour, Total: Integer;
 begin
   if (FRxRate = nil) or (FLog = nil) then
     Exit;
+  if (not Force) and (FRateAt > 0) and
+     (SecondsBetween(Now, FRateAt) < RATE_REFRESH_SECONDS) then
+    Exit;
+  FRateAt := Now;
   Hour := FLog.CountSince(IncHour(LocalTimeToUniversal(Now), -1));
   Total := FLog.Count;
   FRxRate.Caption := Format('直近 1 時間: %d 局 ／ 記録全体: %d 局',
@@ -2621,7 +2655,7 @@ begin
     starts coming in. }
   FChosenCallsign := '';
   UpdateLogInfo;
-  UpdateRate;
+  UpdateRate(True);
   FBandMapAt := 0;
   RefreshBandMap;
   RefreshInfo;
@@ -2656,7 +2690,7 @@ begin
       Exit;
     end;
     UpdateLogInfo;
-    UpdateRate;
+    UpdateRate(True);
     FBandMapAt := 0;
     RefreshBandMap;
     RefreshInfo;
@@ -2798,7 +2832,7 @@ begin
     The contact count is shown the moment the mode is entered: **left blank
     until reception starts, it would not say whether nothing is counted or
     nothing has been worked.** }
-  UpdateRate;
+  UpdateRate(True);
 end;
 
 procedure TMainForm.RxModeChanged(Sender: TObject);

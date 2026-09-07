@@ -1773,6 +1773,24 @@ begin
     WriteLn(Format('    バンドを指定した問い合わせ 1 万回: %.0f ms', [Elapsed]));
     Check('バンドを指定した問い合わせ 1 万回が 200 ms 未満', Elapsed < 200,
       Format('(%.0f ms)', [Elapsed]));
+    { 直近 1 時間の交信数（要件 FR-I.5）は**記録の全件を読みます。**交信済みの
+      問い合わせが索引で答えるのと違い、件数に比例して重くなります。**画面が
+      これを毎秒行えば、記録を積んだ運用者ほど重くなります。**費用をここに
+      出しておき、画面の側では数秒に 1 度に抑えてあります。
+      The contacts-in-the-last-hour count (requirement FR-I.5) **reads every
+      record**: unlike the worked-before question, which an index answers, it
+      grows with the size of the log. **Done every second by the display, it
+      would make the application heavier for whoever has logged the most**, so
+      the cost is measured here and the display recounts only every few
+      seconds. }
+    Started := Now;
+    for I := 1 to 100 do
+      Log.CountSince(45000);
+    Elapsed := MilliSecondsBetween(Now, Started);
+    WriteLn(Format('    直近の交信数を 100 回数える: %.0f ms（1 回 %.2f ms）',
+      [Elapsed, Elapsed / 100]));
+    Check('直近の交信数を数えるのが 1 回 10 ms 未満', Elapsed / 100 < 10,
+      Format('(%.2f ms)', [Elapsed / 100]));
   finally
     Log.Free;
   end;

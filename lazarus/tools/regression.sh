@@ -87,10 +87,23 @@ else
   step "cw_tune（同調・検出・多局・形・待ち符号）" \
     ./cli/cw_tune --tests stream,correctness,overload,review,detect,multi,shape,callsign,watch
   if [ $QUICK -eq 1 ]; then
-    skip "cw_tune（規模・長時間・追跡・広帯域）" "--quick"
+    skip "cw_tune（規模・追跡・広帯域）" "--quick"
+    skip "cw_tune（長時間・メモリ）" "--quick"
   else
-    step "cw_tune（規模・長時間・追跡・広帯域）" \
-      ./cli/cw_tune --tests scale,soak,track,wide
+    step "cw_tune（規模・追跡・広帯域）" \
+      ./cli/cw_tune --tests scale,track,wide
+    # 長時間の走行は**別のプロセスで**行います。規模の測定は 24 局ぶんの
+    # 領域を確保し、Free Pascal のヒープはそれを OS へ返しません。同じ
+    # プロセスで続けると、長時間の走行は「すでに広いヒープ」から始まり、
+    # **増えないのが当たり前**になります（実測 419516 kB から開始。単体では
+    # 138792 kB）。メモリの測定は、測る対象だけが走っている場所で行います。
+    # The long run goes in **a process of its own.** The scale measurement
+    # claims the memory for 24 stations and Free Pascal's heap does not return
+    # it to the system; continuing in the same process would start the long run
+    # from an already-wide heap, where **not growing is guaranteed** (measured:
+    # it began at 419516 kB against 138792 kB on its own). Memory is measured
+    # where only the thing being measured is running.
+    step "cw_tune（長時間・メモリ）" ./cli/cw_tune --tests soak
   fi
 
   # ---- 遅延（要件 NFR-1.1・NFR-1.2）----
