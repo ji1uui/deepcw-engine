@@ -172,7 +172,16 @@ begin
     FLine := '';
     Exit;
   end;
-  Text := FormatDateTime('yyyy-mm-dd hh:nn:ss',
+  { 時刻の区切りは引用符で囲みます。**囲まないと `:` は「その環境の時刻区切り」
+    に置き換わります。**Windows は地域の設定からこれを取るため、同じアプリが
+    書いた記録が機械ごとに `12:34:56` と `12.34.56` に分かれます。記録は
+    運用者が読み、機械も読むものなので、書き方は環境で変わってはいけません。
+    The separators are quoted: **unquoted, `:` is replaced by the environment's
+    time separator.** Windows takes it from the regional settings, so the same
+    application would write `12:34:56` on one machine and `12.34.56` on another.
+    A record is read by the operator and by machines alike, so how it is written
+    must not depend on where it runs. }
+  Text := FormatDateTime('yyyy-mm-dd hh":"nn":"ss',
     FOrigin + FLineSeconds / SecsPerDay) + '  ' + FLine + LineEnding;
   try
     if FileExists(FFileName) then

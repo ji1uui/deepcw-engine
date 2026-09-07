@@ -20,6 +20,7 @@ uses
   SysUtils, DateUtils, Math, Classes, Interfaces, Forms, Controls, Graphics, LCLType,
   DeepCW.Types, DeepCW.Morse, DeepCW.Tuner, DeepCW.Decoder,
   DeepCW.Review, DeepCW.Multi, DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch,
+  DeepCW.Platform,
   WaterfallView, TranscriptView, BandMapView;
 
 type
@@ -232,42 +233,10 @@ begin
     Result[I] := 0.05 * (Random + Random - 1);
 end;
 
-{ いま使っている実メモリ（kB）。取れない環境では 0 を返します。
-  Resident memory in kilobytes, or 0 where it cannot be read. }
-function ResidentKb: Int64;
-{$IFDEF LINUX}
-var
-  Lines: TStringList;
-  I: Integer;
-  Line: string;
-begin
-  Result := 0;
-  Lines := TStringList.Create;
-  try
-    try
-      Lines.LoadFromFile('/proc/self/status');
-    except
-      Exit;
-    end;
-    for I := 0 to Lines.Count - 1 do
-    begin
-      Line := Lines[I];
-      if Pos('VmRSS:', Line) = 1 then
-      begin
-        Line := Trim(Copy(Line, 7, Length(Line)));
-        Result := StrToInt64Def(Trim(Copy(Line, 1, Pos(' ', Line + ' ') - 1)), 0);
-        Exit;
-      end;
-    end;
-  finally
-    Lines.Free;
-  end;
-end;
-{$ELSE}
-begin
-  Result := 0;
-end;
-{$ENDIF}
+{ 実メモリの読み取りは `DeepCW.Platform` にあります。**同じものを実行ファイル
+  ごとに写すと、片方だけを直したことに気づけません**（教訓 10.11）。
+  Reading the memory lives in `DeepCW.Platform`: **a copy per executable is a
+  copy that can be fixed in one place and not the other** (lesson 10.11). }
 
 { 復号済みの文字を並べたものを作ります。長時間の受信で溜まった状態を模します。
   Builds a run of decoded characters, standing in for what accumulates over a
@@ -389,7 +358,7 @@ var
   Chars: TDecodedChars;
   SetMs, PaintMs: Double;
   Repeats: Integer;
-  BeforeKb, AfterKb: Int64;
+  Before, After_: TMemoryUse;
   View: TProbeView;
   Watcher: TWatcher;
   Audio: TSingleArray;
@@ -1534,25 +1503,32 @@ begin
       View.Touch;
       View.PaintTo(Shot.Canvas, 0, 0);
     end;
-    BeforeKb := ResidentKb;
+    Before := MemoryUse;
     for Repeats := 1 to 500 do
     begin
       View.PushSamples(Audio, 8000, 0);
       View.Touch;
       View.PaintTo(Shot.Canvas, 0, 0);
     end;
-    AfterKb := ResidentKb;
+    After_ := MemoryUse;
   finally
     Shot.Free;
   end;
-  WriteLn(Format('  500 回の描画: %d kB → %d kB（差 %d kB）',
-    [BeforeKb, AfterKb, AfterKb - BeforeKb]));
+  WriteLn(Format('  500 回の描画: %s → %d kB（差 %d kB）',
+    [MemoryUseCaption(Before), After_.Kilobytes,
+     After_.Kilobytes - Before.Kilobytes]));
   { 500 回で 20 MB 増えるなら、毎秒 10 回の描画で 1 時間に 1.4 GB になる。
     Twenty megabytes over five hundred paints is 1.4 GB an hour at ten paints
     a second. }
-  Check('描画を繰り返してもメモリが増え続けない',
-    (BeforeKb = 0) or (AfterKb - BeforeKb < 20000),
-    Format('(差 %d kB)', [AfterKb - BeforeKb]));
+  { **測れない環境では「通った」と言いません**（教訓 10.14）。
+    **Where it cannot be measured, this does not say it passed** (lesson
+    10.14). }
+  if Before.Kind = mkNone then
+    WriteLn('  --   メモリを測れない環境のため、増加の検査は行いません')
+  else
+    Check('描画を繰り返してもメモリが増え続けない',
+      After_.Kilobytes - Before.Kilobytes < 20000,
+      Format('(差 %d kB)', [After_.Kilobytes - Before.Kilobytes]));
 
   Watcher.Free;
   Form.Free;

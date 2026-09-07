@@ -28,7 +28,7 @@ uses
   SysUtils, Classes, DateUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Decoder, DeepCW.Dsp, DeepCW.Morse, DeepCW.Tuner, DeepCW.Stream,
   DeepCW.Callsign, DeepCW.Review, DeepCW.Stations, DeepCW.Multi,
-  DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch;
+  DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch, DeepCW.Platform;
 
 const
   { 試験に使う本文。実際の交信に出てくる形をなぞっています。
@@ -2395,44 +2395,10 @@ begin
   Summary(Failures);
 end;
 
-{$IFDEF LINUX}
-{ 実メモリ（kB）。長く走らせて増え続けないことを見るために使います。
-  Resident memory in kilobytes, for checking that a long run does not keep
-  growing. }
-function ResidentKb: Int64;
-var
-  Lines: TStringList;
-  I: Integer;
-  Line: string;
-begin
-  Result := 0;
-  Lines := TStringList.Create;
-  try
-    try
-      Lines.LoadFromFile('/proc/self/status');
-    except
-      Exit;
-    end;
-    for I := 0 to Lines.Count - 1 do
-    begin
-      Line := Lines[I];
-      if Copy(Line, 1, 6) = 'VmRSS:' then
-      begin
-        Line := Trim(Copy(Line, 7, Length(Line)));
-        Result := StrToInt64Def(Copy(Line, 1, Pos(' ', Line + ' ') - 1), 0);
-        Exit;
-      end;
-    end;
-  finally
-    Lines.Free;
-  end;
-end;
-{$ELSE}
-function ResidentKb: Int64;
-begin
-  Result := 0;
-end;
-{$ENDIF}
+{ 実メモリの読み取りは `DeepCW.Platform` にあります。**同じものを実行ファイル
+  ごとに写すと、片方だけを直したことに気づけません**（教訓 10.11）。
+  Reading the memory lives in `DeepCW.Platform`: **a copy per executable is a
+  copy that can be fixed in one place and not the other** (lesson 10.11). }
 
 { 多局同時受信を、局数を増やして測ります（要件 FR-I.7 の根拠）。
 
@@ -2892,7 +2858,7 @@ var
   Multi: TMultiStationDecoder;
   Mixed, Audio: TSingleArray;
   I, J, Position, Taken, Failures: Integer;
-  BeforeKb, AfterKb: Int64;
+  Before, After_: TMemoryUse;
   Fed: Int64;
   Chars: Integer;
   Logs: TStationLogs;
@@ -2940,7 +2906,8 @@ begin
   try
     Fed := 0;
     Position := 0;
-    BeforeKb := 0;
+    Before.Kind := mkNone;
+    Before.Kilobytes := 0;
     for I := 1 to Round(MINUTES * 60 / (Length(Mixed) / RATE)) do
     begin
       Position := 0;
@@ -2956,19 +2923,19 @@ begin
       { 最初の 1 分ぶんは暖機として測りません。最初の確保を増加と数えないためです。
         The first minute is a warm-up, so that the initial allocations are not
         counted as growth. }
-      if (BeforeKb = 0) and (Fed > 60 * RATE) then
-        BeforeKb := ResidentKb;
+      if (Before.Kind = mkNone) and (Fed > 60 * RATE) then
+        Before := MemoryUse;
     end;
-    AfterKb := ResidentKb;
+    After_ := MemoryUse;
 
     Logs := Multi.Logs;
     Chars := 0;
     for I := 0 to High(Logs) do
       Chars := Max(Chars, Length(Logs[I].Chars));
 
-    WriteLn(Format('  %d 分 / %d 窓 / 記録 %d 件 / 最長の受信文 %d 文字 / メモリ %d → %d kB（差 %d）',
-      [MINUTES, Multi.Rounds, Length(Logs), Chars, BeforeKb, AfterKb,
-       AfterKb - BeforeKb]));
+    WriteLn(Format('  %d 分 / %d 窓 / 記録 %d 件 / 最長の受信文 %d 文字 / %s → %d kB（差 %d）',
+      [MINUTES, Multi.Rounds, Length(Logs), Chars, MemoryUseCaption(Before),
+       After_.Kilobytes, After_.Kilobytes - Before.Kilobytes]));
 
     Verdict('局ごとの文字数が上限を超えない', Chars <= MULTI_MAX_CHARS,
       Format('(%d 文字)', [Chars]));
@@ -2976,9 +2943,16 @@ begin
       Format('(%d 件)', [Length(Logs)]));
     { 12 分で 50 MB 増えるなら、1 日で 6 GB になります。
       Fifty megabytes over twelve minutes is six gigabytes in a day. }
-    Verdict('長く走らせてもメモリが増え続けない',
-      (BeforeKb = 0) or (AfterKb - BeforeKb < 50000),
-      Format('(差 %d kB)', [AfterKb - BeforeKb]));
+    { **測れない環境では「通った」と言いません。**測れないことと、増えなかった
+      ことは違います（教訓 10.14）。
+      **Where it cannot be measured, this does not say it passed:** not being
+      measurable and not having grown are different things (lesson 10.14). }
+    if Before.Kind = mkNone then
+      WriteLn('  --   メモリを測れない環境のため、増加の検査は行いません')
+    else
+      Verdict('長く走らせてもメモリが増え続けない',
+        After_.Kilobytes - Before.Kilobytes < 50000,
+        Format('(差 %d kB)', [After_.Kilobytes - Before.Kilobytes]));
     Verdict('時計が入れた音の長さと一致し続ける',
       Abs(Multi.ElapsedSeconds - Fed / RATE) < 1E-6,
       Format('(%.6f 秒 / 実際 %.6f 秒)', [Multi.ElapsedSeconds, Fed / RATE]));

@@ -527,6 +527,8 @@ var
   Origin: TDateTime;
   Body: string;
   Bad: TTranscriptJournal;
+  Separator: Char;
+  Blocker: string;
 begin
   WriteLn('TTranscriptJournal');
   Dir := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw-journal-test';
@@ -610,11 +612,65 @@ begin
     Journal.Free;
   end;
 
+  { 時刻の書き方が、環境の地域設定で変わらないこと。
+
+    `FormatDateTime` の `:` は「その環境の時刻区切り」に置き換わる。Windows は
+    地域の設定からこれを取るため、**同じアプリが書いた記録が機械ごとに
+    `12:34:56` と `12.34.56` に分かれる。**この容器では区切りが `:` のままなので、
+    **地域設定を変えて、Windows で起きることをここで起こす。**
+
+    The way the time is written must not follow the environment's locale.
+
+    `:` in `FormatDateTime` is replaced by the environment's time separator, and
+    Windows takes that from the regional settings, so **the same application
+    would write `12:34:56` on one machine and `12.34.56` on another.** In this
+    container the separator is `:` already, so **the locale is changed here to
+    make what happens on Windows happen here.** }
+  Separator := DefaultFormatSettings.TimeSeparator;
+  DefaultFormatSettings.TimeSeparator := '.';
+  try
+    Journal := TTranscriptJournal.Create(Dir);
+    try
+      Journal.Enabled := True;
+      Journal.StartSession(Origin);
+      { **この行だけの時刻**にします。同じファイルには 12:00:00 の行が既にあり、
+        そちらを見つけて通ってしまうと、試験は何も確かめていません。
+        A time **this line alone has**: the file already holds a line at
+        12:00:00, and finding that one would let the test pass without testing
+        anything. }
+      Journal.Add(CharsOf('LOCALE ', 3661));
+      Journal.Flush;
+      Body := ReadWhole(Journal.FileName);
+      Check('時刻の区切りが地域設定で変わらない',
+        Pos('13:01:01  LOCALE', Body) > 0,
+        Format('("%s")', [Trim(Copy(Body, Length(Body) - 30, 30))]));
+    finally
+      Journal.Free;
+    end;
+  finally
+    DefaultFormatSettings.TimeSeparator := Separator;
+  end;
+
   { 書けない場所を指されても、例外を投げずに理由を残すこと。受信の脈動のたびに
     例外が上がると、受信そのものが続けられない。
+
+    **場所は環境ごとに違う。**`/proc` のような特定の OS だけの道を書くと、ほかの
+    OS では「書ける場所」を指してしまい、試験は通ったふりをする。ファイルを 1 つ
+    作り、その名前をディレクトリとして渡す。**ファイルのある名前でディレクトリは
+    作れない**というのは、どの OS でも同じである。
+
     An unwritable location must leave a reason rather than raise: an exception on
-    every pulse of the receive loop would stop reception itself. }
-  Bad := TTranscriptJournal.Create('/proc/deepcw-cannot-write-here');
+    every pulse of the receive loop would stop reception itself.
+
+    **Where that is differs by system.** A path only one system has, such as one
+    under `/proc`, points at a perfectly writable place on the others and the
+    test passes without testing. Instead a file is created and its name handed
+    over as a directory: **a directory cannot be made where a file already has
+    the name**, on every system alike. }
+  Blocker := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw-not-a-directory';
+  with TFileStream.Create(Blocker, fmCreate) do
+    Free;
+  Bad := TTranscriptJournal.Create(Blocker);
   try
     Bad.Enabled := True;
     Bad.StartSession(Origin);

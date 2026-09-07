@@ -2664,12 +2664,16 @@ begin
     The band it was recorded under is said too: **the control that chooses it is
     only on the contest row, so in the other modes the screen would not say what
     the contact was filed under.** }
+  { 時刻の区切りは引用符で囲みます。囲まないと、その環境の時刻区切りに
+    置き換わります（`DeepCW.Journal` に同じ注記）。
+    The separator is quoted, or it is replaced by the environment's own (the
+    same note as in `DeepCW.Journal`). }
   if SelectedBand <> '' then
     SetStatus('', '', Format('%s との交信を %s で記録しました（%s UTC）。',
-      [Call, FRxBand.Text, FormatDateTime('yyyy-mm-dd hh:nn', Moment)]))
+      [Call, FRxBand.Text, FormatDateTime('yyyy-mm-dd hh":"nn', Moment)]))
   else
     SetStatus('', '', Format('%s との交信を記録しました（%s UTC）。',
-      [Call, FormatDateTime('yyyy-mm-dd hh:nn', Moment)]));
+      [Call, FormatDateTime('yyyy-mm-dd hh":"nn', Moment)]));
 end;
 
 procedure TMainForm.SetLogImportClick(Sender: TObject);
@@ -4003,7 +4007,7 @@ begin
   if FDiagnostics = nil then
     Exit;
   FDiagnostics.Add(Format('%s  %s: %s',
-    [FormatDateTime('hh:nn:ss', Now), Context, Raw]));
+    [FormatDateTime('hh":"nn":"ss', Now), Context, Raw]));
   while FDiagnostics.Count > 50 do
     FDiagnostics.Delete(0);
 end;
