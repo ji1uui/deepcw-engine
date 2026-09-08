@@ -2849,6 +2849,145 @@ end;
   eventually stops.** Station records age out after ten minutes and each
   station's characters are capped, but whether that actually holds is not known
   until it is run and the resident memory measured. }
+{ 語の読み直しを測ります（要件 FR-C.3）。
+
+  **「押した語の音を切り出して読み直す」は、切り出し方で答えが変わります。**
+  文字の時刻はその文字が鳴り終わるころを指すため、後ろと同じだけ前へ戻ると
+  語の頭が切れ、`JA1ABC` が `MA1ABC`、`K` が `U` になります（付録 AC）。
+
+  ここでは `DeepCW.Review.WordAudioSpan` が決めた範囲で切り出し、**画面に出て
+  いる語と同じものが返るか**を数えます。切り出しの規則を壊すと、ここが落ちます。
+
+  1 語あたりの解析時間も測ります。押してから出るまでの目標は 1 秒（NFR-1.3）で、
+  待ち時間を別にしても、解析だけで超えていては話になりません。
+
+  Measures the re-reading of a word (requirement FR-C.3).
+
+  **Cutting the word out is where the answer is decided.** A character's time
+  marks about where it stops sounding, so stepping back by the margin used at the
+  other end cuts the word's head off and `JA1ABC` comes back as `MA1ABC`, `K` as
+  `U` (appendix AC).
+
+  Here the span comes from `DeepCW.Review.WordAudioSpan` and what it yields is
+  counted against **the word on screen**. Break the rule for cutting and this
+  fails.
+
+  The time per word is measured too: the target from press to display is one
+  second (NFR-1.3), and the analysis alone must sit well inside it. }
+procedure RunRecheck;
+const
+  RATE = 8000;
+  TONE_HZ = 700.0;
+var
+  ModelRate, Trial, I, Position, First_, Last_, Back, Failures, Words, Same: Integer;
+  Audio, Slice, Prepared: TSingleArray;
+  Chars: TDecodedChars;
+  Reference, Word_, Again: string;
+  Previous, From_, To_: Double;
+  Started: TDateTime;
+  TotalMs: Double;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
+begin
+  ModelRate := Decoder.Metadata.SampleRate;
+  Failures := 0;
+  Words := 0;
+  Same := 0;
+  TotalMs := 0;
+  WriteLn;
+  WriteLn('recheck: 語の読み直し / re-reading one word on its own');
+
+  for Trial := 0 to High(MESSAGES) do
+  begin
+    Reference := NormalizeText(MESSAGES[Trial]);
+    Audio := Synthesise(Reference, RATE, TONE_HZ, Noise, 9100 + Trial);
+    { 受信の経路と同じ形に整えてから読みます。
+      Prepared as the receive path prepares it, then read. }
+    Prepared := PrepareForModel(Audio, RATE, ModelRate, TONE_HZ, tbAuto, True);
+    Chars := Decoder.DecodeLongSamplesTimed(Prepared, ModelRate);
+
+    Position := 0;
+    while Position <= High(Chars) do
+    begin
+      while (Position <= High(Chars)) and (Chars[Position].Text = ' ') do
+        Inc(Position);
+      if Position > High(Chars) then
+        Break;
+      First_ := Position;
+      Last_ := First_;
+      while (Last_ + 1 <= High(Chars)) and (Chars[Last_ + 1].Text <> ' ') do
+        Inc(Last_);
+      Position := Last_ + 1;
+
+      Word_ := '';
+      for I := First_ to Last_ do
+        Word_ := Word_ + Chars[I].Text;
+
+      { その語より前にある最後の文字の時刻。空白は音を持ちません。
+        The time of the last character before the word; a space has no sound. }
+      Previous := -1;
+      Back := First_ - 1;
+      while Back >= 0 do
+      begin
+        if Chars[Back].Text <> ' ' then
+        begin
+          Previous := Chars[Back].EndSeconds;
+          Break;
+        end;
+        Dec(Back);
+      end;
+
+      WordAudioSpan(Chars[First_].Seconds, Chars[Last_].EndSeconds, Previous,
+        From_, To_);
+      Slice := Copy(Audio, Max(0, Round(From_ * RATE)),
+        Min(Length(Audio), Round(To_ * RATE)) - Max(0, Round(From_ * RATE)));
+      if Length(Slice) <= 0 then
+        Continue;
+
+      Started := Now;
+      Again := Trim(DecodedText(Decoder.DecodeLongSamplesTimed(
+        PrepareForModel(Slice, RATE, ModelRate, TONE_HZ, tbAuto, True),
+        ModelRate)));
+      TotalMs := TotalMs + MilliSecondsBetween(Now, Started);
+      Inc(Words);
+      if Again = Word_ then
+        Inc(Same)
+      else
+        WriteLn(Format('    %-10s → %s', [Word_, Again]));
+    end;
+  end;
+
+  if Words = 0 then
+  begin
+    Verdict('読み直せる語がある', False, '(0 語)');
+    Summary(Failures);
+    Exit;
+  end;
+  WriteLn(Format('  語 %d 個中 %d 個が画面と同じに読めた（%.0f%%）／ 1 語 %.0f ms',
+    [Words, Same, 100 * Same / Words, TotalMs / Words]));
+
+  { 切り出しが正しければ、ほとんどの語は同じに読めます。**同じに読めない語が
+    増えたら、切り出しが壊れたか、読み直し自体が当てにならなくなったかです。**
+    With the span right, nearly every word reads the same. **More words reading
+    differently means either the span broke or the re-reading stopped being
+    trustworthy.** }
+  Verdict('切り出した語の 9 割以上が画面と同じに読める',
+    Same >= Round(0.9 * Words), Format('(%d / %d)', [Same, Words]));
+  Verdict('読み直し 1 語が 1 秒未満（要件 NFR-1.3）', TotalMs / Words < 1000,
+    Format('(%.0f ms)', [TotalMs / Words]));
+  Summary(Failures);
+end;
+
 procedure RunSoak;
 const
   RATE = 8000;
@@ -3040,6 +3179,8 @@ begin
       RunWatch;
     if Pos('scale', Tests) > 0 then
       RunScale;
+    if Pos('recheck', Tests) > 0 then
+      RunRecheck;
     if Pos('soak', Tests) > 0 then
       RunSoak;
     if Pos('track', Tests) > 0 then

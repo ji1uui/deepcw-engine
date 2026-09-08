@@ -102,6 +102,7 @@ type
     FSampleRate: Integer;
     FChars: TDecodedChars;
     FError: string;
+    FRecheck: Boolean;
     FOnDone: TNotifyEvent;
     procedure ReportDone;
   protected
@@ -123,7 +124,23 @@ type
     constructor CreateMultiFile(AMulti: TMultiStationDecoder;
       const ASamples: TSingleArray; ASampleRate: Integer;
       AOnDone: TNotifyEvent);
+    { 1 語ぶんの音を、その区間だけで読み直します（要件 FR-C.3）。
+
+      解析そのものは `Create` と同じです。**別の入口にしてあるのは、返ってきた
+      結果を受信テキストへ流し込ませないためです。**読み直しは確かめるための
+      もので、確定した文字を書き換えるものではありません（要件 FR-B.2）。
+
+      Re-reads one word from its own span of audio (requirement FR-C.3).
+
+      The analysis is the same as `Create` does. **It has an entrance of its own
+      so that what comes back cannot flow into the transcript**: a re-reading is
+      for checking, not for rewriting characters already confirmed (requirement
+      FR-B.2). }
+    constructor CreateRecheck(ADecoder: TDeepCWDecoder;
+      const ASamples: TSingleArray; ASampleRate: Integer;
+      AOnDone: TNotifyEvent);
     property Chars: TDecodedChars read FChars;
+    property Recheck: Boolean read FRecheck;
     property Error: string read FError;
   end;
 
@@ -194,6 +211,23 @@ type
       When the contact count was last recounted: counting reads every record, so
       it is not done every second. }
     FRateAt: TDateTime;
+    { 読み直しの依頼（要件 FR-C.3）。押されたときに解析が塞がっていることが
+      あるので、**依頼を覚えておいて、空いたら出します。**
+      A re-reading that has been asked for (requirement FR-C.3). The analysis can
+      be busy at the moment of the press, so **the request is remembered and
+      issued when it is free.** }
+    FRecheckPending: Boolean;
+    FRecheckIndex: Integer;
+    FRecheckWord: string;
+    FRecheckAt: TDateTime;
+    { 解析に出したほうの語と、その依頼の時刻。**待っている間に別の語を押されても、
+      返ってきた答えは押された当時の語のものです。**取り違えると、読み直しの
+      結果が別の語の隣に並びます。
+      The word actually handed to the analysis, and when it was asked for.
+      **Another word pressed while this one is out does not change what comes
+      back**: mixing them up would put a re-reading beside a different word. }
+    FRecheckSent: string;
+    FRecheckSentAt: TDateTime;
     { 交信の記録。バンドマップの「交信済み」も ADIF の書き出しも、ここ 1 つを
       見ます（要件 FR-E.3・FR-J.4）。
       The contact log. Both the worked marks on the band map and the ADIF export
@@ -450,6 +484,11 @@ type
     procedure RxReplayStopClick(Sender: TObject);
     procedure RxRetentionChanged(Sender: TObject);
     procedure ReplayFrom(Index: Integer);
+    function WordSpan(Index: Integer; out First, Last: Integer;
+      out FromSeconds, ToSeconds: Double): Boolean;
+    procedure RequestRecheck(Index: Integer);
+    procedure TryStartRecheck;
+    procedure ShowRecheck(const Chars: TDecodedChars);
     function SelectedRetention: Double;
     procedure UpdateReplayInfo;
 
@@ -504,6 +543,13 @@ begin
   FOnDone := AOnDone;
   FreeOnTerminate := False;
   inherited Create(False);
+end;
+
+constructor TDecodeThread.CreateRecheck(ADecoder: TDeepCWDecoder;
+  const ASamples: TSingleArray; ASampleRate: Integer; AOnDone: TNotifyEvent);
+begin
+  FRecheck := True;
+  Create(ADecoder, ASamples, ASampleRate, AOnDone);
 end;
 
 constructor TDecodeThread.CreateStreaming(AStream: TStreamingDecoder;
@@ -1850,6 +1896,25 @@ begin
 
   FRxBusy.Caption := '';
 
+  { 読み直しの結果は、ここで折り返します（要件 FR-C.3）。**受信テキストへは
+    流しません。**確かめるために読んだものが、確かめた相手を書き換えては
+    いけません（要件 FR-B.2）。
+    A re-reading turns back here (requirement FR-C.3): **it does not flow into
+    the transcript.** What was read in order to check something must not rewrite
+    the thing it checked (requirement FR-B.2). }
+  if Thread.Recheck then
+  begin
+    if Thread.Error <> '' then
+    begin
+      LogDiagnostic('語の読み直し', Thread.Error);
+      SetStatus('', '', StatusLine(Thread.Error));
+    end
+    else
+      ShowRecheck(Thread.Chars);
+    FCompletedThread := Thread;
+    Exit;
+  end;
+
   if Thread.Error <> '' then
   begin
     LogDiagnostic('デコード', Thread.Error);
@@ -2338,6 +2403,10 @@ end;
 procedure TMainForm.RxClearClick(Sender: TObject);
 begin
   FLiveChars := nil;
+  { 消した受信文の添字は、もう何も指しません。頼まれていた読み直しは捨てます。
+    An index into a cleared transcript points at nothing; a re-reading that was
+    asked for is dropped. }
+  FRecheckPending := False;
   ReadTranscript;
   FAlerts.Reset;
   if FStream <> nil then
@@ -2790,6 +2859,7 @@ begin
   FJournalled := 0;
   FClockOrigin := 0;
   FLiveChars := nil;
+  FRecheckPending := False;
   ReadTranscript;
   FRxTranscript.Clear;
   FRxBandMap.Clear;
@@ -3379,33 +3449,80 @@ end;
   seconds. The stretch is extended to the surrounding spaces and played as a
   word, because what an operator wants to check is usually a call sign or a
   whole abbreviation rather than a single letter. }
+{ 押された文字を含む「語」の範囲と、その音の時刻を返します。
+
+  聴き直し（要件 FR-E.10）と読み直し（要件 FR-C.3）は、**同じ「語」を指して
+  いなければなりません。**別々に数えれば、聴いた音と読み直した音が食い違います
+  （教訓 10.11）。
+
+  Returns the span of the word containing the pressed character.
+
+  Replay (requirement FR-E.10) and re-reading (requirement FR-C.3) must **point
+  at the same word**: counted separately, the audio heard and the audio re-read
+  could differ (lesson 10.11). }
+function TMainForm.WordSpan(Index: Integer; out First, Last: Integer;
+  out FromSeconds, ToSeconds: Double): Boolean;
+var
+  Item: TDecodedChar;
+  Back: Integer;
+  Earlier: Double;
+begin
+  Result := False;
+  First := Index;
+  Last := Index;
+  FromSeconds := 0;
+  ToSeconds := 0;
+  if (Index < 0) or (Index > High(FLiveChars)) then
+    Exit;
+  if not FRxTranscript.CharItem(Index, Item) then
+    Exit;
+
+  while (First > 0) and FRxTranscript.CharItem(First - 1, Item) and
+        (Item.Text <> ' ') do
+    Dec(First);
+  while FRxTranscript.CharItem(Last + 1, Item) and (Item.Text <> ' ') do
+    Inc(Last);
+
+  { その語より前にある最後の文字を探します。空白そのものは音を持たないので
+    飛ばします。**この文字の尻尾へ食い込まないことが、切り出しの要です。**
+    The last character before the word; the space itself has no sound of its own
+    and is stepped over. **Not cutting into that character's tail is what the
+    span turns on.** }
+  Earlier := -1;
+  Back := First - 1;
+  while Back >= 0 do
+  begin
+    if not FRxTranscript.CharItem(Back, Item) then
+      Break;
+    if Item.Text <> ' ' then
+    begin
+      Earlier := Item.EndSeconds;
+      Break;
+    end;
+    Dec(Back);
+  end;
+
+  if not FRxTranscript.CharItem(First, Item) then
+    Exit;
+  FromSeconds := Item.Seconds;
+  if not FRxTranscript.CharItem(Last, Item) then
+    Exit;
+  WordAudioSpan(FromSeconds, Item.EndSeconds, Earlier,
+    FromSeconds, ToSeconds);
+  Result := True;
+end;
+
 procedure TMainForm.ReplayFrom(Index: Integer);
 var
   First, Last: Integer;
-  Item: TDecodedChar;
   FromSeconds, ToSeconds, GotFrom, GotTo: Double;
   Audio: TSingleArray;
   Rate: Integer;
 begin
   if (FHistory = nil) or (FReviewPlay = nil) then
     Exit;
-  if not FRxTranscript.CharItem(Index, Item) then
+  if not WordSpan(Index, First, Last, FromSeconds, ToSeconds) then
     Exit;
-
-  First := Index;
-  while (First > 0) and FRxTranscript.CharItem(First - 1, Item) and
-        (Item.Text <> ' ') do
-    Dec(First);
-  Last := Index;
-  while FRxTranscript.CharItem(Last + 1, Item) and (Item.Text <> ' ') do
-    Inc(Last);
-
-  if not FRxTranscript.CharItem(First, Item) then
-    Exit;
-  FromSeconds := Item.Seconds - REVIEW_PAD_SECONDS;
-  if not FRxTranscript.CharItem(Last, Item) then
-    Exit;
-  ToSeconds := Item.EndSeconds + REVIEW_PAD_SECONDS;
 
   Audio := FHistory.Extract(FromSeconds, ToSeconds, GotFrom, GotTo, Rate);
   if Length(Audio) = 0 then
@@ -3452,6 +3569,132 @@ begin
      Trunc(GotFrom) div 60, Trunc(GotFrom) mod 60, GotTo - GotFrom]);
 end;
 
+{ ---- 語の読み直し（要件 FR-C.3） ---- }
+
+{ 押された語を、その区間の音だけで読み直すよう頼みます。
+
+  **流し込み受信は、前後の窓と継ぎ目の都合の中でその語を読んでいます。**同じ音を
+  1 語だけ切り出して読ませると、別の答えが出ることがあります。どちらが正しいかを
+  機械は知りませんが、**2 つ並べば、運用者は自分で判断できます。**
+
+  読み直した結果で受信テキストを書き換えることはしません（要件 FR-B.2）。
+  確定した文字が後から変わるなら、確定という言葉に意味がありません。
+
+  Asks for the pressed word to be read again from its own span of audio.
+
+  **Streaming reception read that word amid its neighbouring windows and their
+  seams.** Cutting the same audio down to the one word and reading it alone can
+  give a different answer. Which is right is not something the machine knows --
+  but **with the two side by side the operator can judge.**
+
+  The transcript is never rewritten from the result (requirement FR-B.2): if a
+  confirmed character could change afterwards, "confirmed" would mean nothing. }
+procedure TMainForm.RequestRecheck(Index: Integer);
+var
+  First, Last: Integer;
+  FromSeconds, ToSeconds: Double;
+begin
+  if (FHistory = nil) or (FDecoder = nil) or (FMode <> rmContact) then
+    Exit;
+  if not WordSpan(Index, First, Last, FromSeconds, ToSeconds) then
+    Exit;
+  FRecheckIndex := Index;
+  FRecheckWord := Trim(DecodedText(Copy(FLiveChars, First, Last - First + 1)));
+  if FRecheckWord = '' then
+    Exit;
+  FRecheckPending := True;
+  FRecheckAt := Now;
+  TryStartRecheck;
+end;
+
+{ 頼まれた読み直しを、解析が空いていれば始めます。
+
+  **塞がっていれば、そのまま待ちます。**受信中の解析は 0.2 秒ごとに動くので、
+  待ちはその程度です（要件 NFR-1.3 の 1 秒に収まります）。割り込ませると、
+  受信そのものが遅れます。
+
+  Starts the requested re-reading if the analysis is free.
+
+  **If it is busy the request simply waits.** During reception the analysis runs
+  every 0.2 seconds, so the wait is about that long, well inside the second
+  requirement NFR-1.3 allows. Pushing in front of it would delay reception
+  itself. }
+procedure TMainForm.TryStartRecheck;
+var
+  First, Last: Integer;
+  FromSeconds, ToSeconds, GotFrom, GotTo: Double;
+  Audio, Prepared: TSingleArray;
+  Rate: Integer;
+begin
+  if not FRecheckPending then
+    Exit;
+  if DecoderBusy or (FDecoder = nil) or (FHistory = nil) then
+    Exit;
+  if not WordSpan(FRecheckIndex, First, Last, FromSeconds, ToSeconds) then
+  begin
+    FRecheckPending := False;
+    Exit;
+  end;
+  Audio := FHistory.Extract(FromSeconds, ToSeconds, GotFrom, GotTo, Rate);
+  FRecheckPending := False;
+  if Length(Audio) = 0 then
+    { 音が残っていない理由は、聴き直しの側が既に言っています。二重には言いません。
+      Why the audio is gone has already been said by the replay; it is not said
+      twice. }
+    Exit;
+  { 同調と帯域制限は、受信と同じものを掛けます。**別の音を読ませて「読み直し」と
+    呼ぶことはできません。**
+    The same tuning and band limit are applied as reception uses: **reading a
+    different sound and calling it a re-reading would not be one.** }
+  Prepared := PrepareForDecoder(Audio, Rate);
+  FRecheckSent := FRecheckWord;
+  FRecheckSentAt := FRecheckAt;
+  FRxBusy.Caption := '読み直し中...';
+  FDecodeThread := TDecodeThread.CreateRecheck(FDecoder, Prepared,
+    FDecoder.Metadata.SampleRate, @DecodeFinished);
+end;
+
+{ 読み直した結果を、画面の語と並べて出します。
+
+  **同じだったことにも値打ちがあります。**「怪しい」と思って押した語が、切り離して
+  読んでも同じなら、それは確かめられたということです。
+
+  Shows what the re-reading gave, beside what is on screen.
+
+  **Agreement is worth saying too:** a word pressed because it looked doubtful,
+  read the same way on its own, has been checked. }
+procedure TMainForm.ShowRecheck(const Chars: TDecodedChars);
+var
+  Again: string;
+  Elapsed: Int64;
+begin
+  FRxBusy.Caption := '';
+  Again := Trim(DecodedText(Chars));
+  Elapsed := MilliSecondsBetween(Now, FRecheckSentAt);
+  { 目標（要件 NFR-1.3）を超えたときだけ、診断に残します。**間に合っている間は
+    黙っています。**毎回書けば、本当に遅れた 1 件が埋もれます。
+    Only a response past the target (requirement NFR-1.3) is recorded in the
+    diagnostics: **while it keeps up, nothing is said.** Writing every time would
+    bury the one that was late. }
+  if Elapsed > 1000 then
+    LogDiagnostic('語の読み直し',
+      Format('%d ms (target 1000 ms): %s', [Elapsed, FRecheckSent]));
+  { 出す場所は状態表示の案内欄です。**聴き直しの欄は、既定の窓の幅では右端の
+    外にあって見えません。**見えない場所に答えを書くのは、答えないのと同じです。
+    It goes in the status bar's guidance panel: **the replay label sits beyond
+    the right edge at the default window width and cannot be read.** An answer
+    written where it cannot be seen is not an answer. }
+  if Again = '' then
+    SetStatus('', '', Format(
+      '読み直すと、この区間からは何も読めませんでした（画面は %s）。',
+      [FRecheckSent]))
+  else if Again = FRecheckSent then
+    SetStatus('', '', Format('読み直しても %s でした。', [FRecheckSent]))
+  else
+    SetStatus('', '', Format('読み直すと %s（画面は %s）。',
+      [Again, FRecheckSent]));
+end;
+
 { 押された文字が呼出符号の上なら、その符号を相手として採ります（要件 FR-E.1）。
 
   機械は DE の直後を相手と見ますが、外すことがあります。**外したときに指し直せる
@@ -3477,6 +3720,11 @@ begin
   end;
   ReplayFrom(Index);
   UpdateReplayInfo;
+  { 聴かせるのと同時に、同じ語を読み直します（要件 FR-C.3）。**耳と機械の
+    答え合わせが、押す 1 回で揃います。**
+    The same word is re-read as it is played (requirement FR-C.3), so that
+    **one press brings both the ear's answer and the machine's.** }
+  RequestRecheck(Index);
 end;
 
 procedure TMainForm.RxReplayClick(Sender: TObject);
@@ -3888,6 +4136,10 @@ begin
   UpdateTransmitProgress;
   UpdateLiveReceive;
   UpdateRecording;
+  { 解析が塞がっていて出せなかった読み直しを、ここで出します（要件 FR-C.3）。
+    A re-reading that could not be issued because the analysis was busy is
+    issued here (requirement FR-C.3). }
+  TryStartRecheck;
 
   FTxSend.Enabled := (Length(FTxSamples) > 0) and not FPlayback.Running;
   FTxStop.Enabled := FPlayback.Running;

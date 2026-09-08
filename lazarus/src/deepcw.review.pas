@@ -50,11 +50,74 @@ const
     hour of 48 kHz audio is about 345 MB, which is the practical limit. }
   REVIEW_MIN_SECONDS = 60.0;
   REVIEW_MAX_SECONDS = 1800.0;
-  { 聴き直すときに、語の前後へ足す余裕。頭から鳴り出すと符号の立ち上がりを
-    聴き逃すので、少しだけ前から鳴らします。
-    The margin added before and after a word when replaying. Starting exactly on
-    the first element loses its attack, so playback starts slightly early. }
+  { 語の後ろへ足す余裕。文字の時刻はその文字が鳴り終わるころを指すので、
+    後ろは少しで足ります。
+    The margin added after a word. A character's time marks about where it stops
+    sounding, so little is needed at that end. }
   REVIEW_PAD_SECONDS = 0.25;
+
+  { 語の前へ遡る長さ。**文字の時刻は、その文字が鳴り「終わる」ころを指します。**
+    CTC は音の証拠が出そろってから札を立てるためで、実測では `K`（9 単位）の
+    時刻が音の 76% のところ、`N`（5 単位）が 70% のところでした。
+
+    後ろと同じ 0.25 秒しか遡らないと、**語の頭が切れます。**耳には頭の欠けた
+    符号が鳴り、読み直し（要件 FR-C.3）は別の文字を読みます。実測では 97 語中
+    70 語で頭が欠け、`JA1ABC` が `MA1ABC`、`K` が `U` になりました（付録 AC）。
+
+    いちばん長い文字（`0` は 19 単位で、12 wpm なら 1.9 秒）を覆える長さにします。
+
+    How far back a word starts. **A character's time marks about where it stops
+    sounding**: CTC raises its label once the acoustic evidence is in, and
+    measured, `K` (nine units) is timed 76% of the way through its sound and `N`
+    (five units) 70%.
+
+    Stepping back only the 0.25 seconds used at the other end **cuts the head off
+    the word**: the ear hears a code with its beginning missing and a re-reading
+    (requirement FR-C.3) reads a different character. Measured, 70 words in 97
+    lost their head, `JA1ABC` coming back as `MA1ABC` and `K` as `U`
+    (appendix AC).
+
+    The length covers the longest character -- `0` is nineteen units, 1.9
+    seconds at 12 wpm. }
+  REVIEW_LOOKBACK_SECONDS = 1.2;
+
+  { 前の文字へ食い込まないための床。**前の文字の時刻もその文字の終わりごろ**
+    なので、そこから始めると前の文字の尻尾が入り、`E` や `T` として読まれます
+    （実測。付録 AC.3）。
+
+    2 つの時刻の間隔に対する割合で置きます。**固定の秒数にすると、速度が変われば
+    合わなくなります。**尻尾も間隔も、速度に比例して伸び縮みするためです。
+
+    The floor that keeps the previous character out. **Its time is near its own
+    end too**, so starting there lets its tail in, to be read as an `E` or a `T`
+    (measured; appendix AC.3).
+
+    It is a fraction of the interval between the two times: **a fixed number of
+    seconds would stop fitting when the speed changed**, since both the tail and
+    the interval scale with it. }
+  REVIEW_GUARD_FRACTION = 0.25;
+
+{ 1 語の音を切り出す範囲を決めます（要件 FR-E.10・FR-C.3）。
+
+  渡すのは 3 つの時刻です。語の**最初の文字の時刻**、**最後の文字の終わりの
+  時刻**、そして**その語より前にある最後の文字の時刻**（無ければ負の値）。
+
+  文字の並びではなく時刻だけを受け取るのは、この規則が時刻の話だからです。
+  聴き直しと読み直しが同じ範囲を使うためにここに置いてあります。**別々に決めれば、
+  聴いた音と読み直した音が食い違います**（教訓 10.11）。
+
+  Decides the span of audio that holds one word (requirements FR-E.10, FR-C.3).
+
+  Three times go in: the word's **first character's time**, its **last
+  character's end**, and **the time of the last character before the word**, or a
+  negative value where there is none.
+
+  It takes times rather than characters because the rule is about times, and it
+  lives here so that replay and re-reading use the same span: **decided
+  separately, the audio heard and the audio re-read could differ**
+  (lesson 10.11). }
+procedure WordAudioSpan(FirstSeconds, LastEndSeconds, PreviousSeconds: Double;
+  out FromSeconds, ToSeconds: Double);
 
 type
   { 直近の受信音を、受信文と同じ時刻で引ける環状バッファ。
@@ -138,6 +201,22 @@ type
   end;
 
 implementation
+
+procedure WordAudioSpan(FirstSeconds, LastEndSeconds, PreviousSeconds: Double;
+  out FromSeconds, ToSeconds: Double);
+var
+  Guard: Double;
+begin
+  FromSeconds := FirstSeconds - REVIEW_LOOKBACK_SECONDS;
+  if PreviousSeconds >= 0 then
+  begin
+    Guard := PreviousSeconds +
+      REVIEW_GUARD_FRACTION * (FirstSeconds - PreviousSeconds);
+    if FromSeconds < Guard then
+      FromSeconds := Guard;
+  end;
+  ToSeconds := LastEndSeconds + REVIEW_PAD_SECONDS;
+end;
 
 constructor TAudioHistory.Create(ASeconds: Double; ARate: Integer);
 begin
