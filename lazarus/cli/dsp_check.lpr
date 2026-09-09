@@ -24,7 +24,8 @@ uses
   Classes, SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
   DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder,
   DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
-  DeepCW.Audio, DeepCW.Recorder;
+  DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.Callsign,
+  DeepCW.Morse;
 
 var
   Meta: TDeepCWMetadata;
@@ -734,6 +735,192 @@ begin
     Inc(Waited, 20);
   end;
   Result := Recorder.Snapshot.Seconds * Rate >= Wanted;
+end;
+
+{ 出題に数字が入っているか。/ Whether the exercise holds a digit. }
+function HasDigit(const Text: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to Length(Text) do
+    if (Text[I] >= '0') and (Text[I] <= '9') then
+      Exit(True);
+end;
+
+{ 空白で語に割ります。/ Splits on spaces. }
+function SplitWordsAt(const Text: string): TStringArray;
+var
+  Piece: string;
+  K: Integer;
+begin
+  Result := nil;
+  Piece := '';
+  for K := 1 to Length(Text) + 1 do
+    if (K > Length(Text)) or (Text[K] = ' ') then
+    begin
+      if Piece <> '' then
+      begin
+        SetLength(Result, Length(Result) + 1);
+        Result[High(Result)] := Piece;
+        Piece := '';
+      end;
+    end
+    else
+      Piece := Piece + Text[K];
+end;
+
+procedure TestPractice;
+var
+  A, B: string;
+  Score: TCopyScore;
+  Words: TStringArray;
+  Parsed: TCallsign;
+  I, J, Digits, Bad: Integer;
+begin
+  WriteLn('DeepCW.Practice（要件 FR-F.3）');
+
+  { ---- 出題 ---- }
+  { 同じ種なら同じ問題。**もう一度同じ問題を出せなければ、練習になりません。**
+    The same seed gives the same exercise: **without being able to send the same
+    one again, it is not practice.** }
+  A := MakeExercise(ekLetters, 5, 1234);
+  B := MakeExercise(ekLetters, 5, 1234);
+  Check('同じ種なら同じ問題が出る', A = B, Format('("%s" / "%s")', [A, B]));
+  B := MakeExercise(ekLetters, 5, 1235);
+  Check('種が違えば違う問題が出る', A <> B, Format('("%s")', [A]));
+
+  Words := SplitWordsAt(A);
+  Check('頼んだ数だけ語が出る', Length(Words) = 5,
+    Format('(%d 語: "%s")', [Length(Words), A]));
+  Check('欧文の群は 5 文字',
+    (Length(Words) > 0) and (Length(Words[0]) = 5),
+    Format('("%s")', [A]));
+  { 文字集合の選択が効いていること（要件 FR-F.3 の受入基準）。
+    The choice of character set must take effect (the acceptance criterion). }
+  Check('欧文だけの出題に数字が入らない', not HasDigit(MakeExercise(ekLetters, 40, 7)),
+    MakeExercise(ekLetters, 40, 7));
+  Digits := 0;
+  for I := 1 to 10 do
+    if HasDigit(MakeExercise(ekMixed, 20, I)) then
+      Inc(Digits);
+  Check('欧文と数字の出題には数字が出る', Digits >= 9, Format('(10 回中 %d 回)', [Digits]));
+
+  { 呼出符号の出題は、**アプリ自身の規則で通るものだけ**を出すこと。思いつきの
+    形を出せば、練習で覚えるのは実在しない符号の形になります。
+    Call sign exercises must hold only what **the application's own rules
+    accept**: invented forms would have the operator practise call signs that do
+    not exist. }
+  Bad := 0;
+  for I := 1 to 20 do
+  begin
+    Words := SplitWordsAt(MakeExercise(ekCallsigns, 6, 500 + I));
+    for Digits := 0 to High(Words) do
+      if not ParseCallsign(Words[Digits], Parsed) then
+      begin
+        Inc(Bad);
+        if Bad = 1 then
+          WriteLn('    通らなかった符号: ', Words[Digits]);
+      end;
+  end;
+  Check('呼出符号の出題はすべて規則を満たす', Bad = 0, Format('(%d 件)', [Bad]));
+
+  A := MakeExercise(ekQso, 3, 99);
+  Check('QSO の出題は交信の言葉でできている',
+    (Pos('DE', A) > 0) and ((Pos('CQ', A) > 0) or (Pos('QTH', A) > 0) or
+     (Pos('TNX', A) > 0)), A);
+  { **CQ は自分の符号を 2 度繰り返します。**呼ぶたびに違う符号が出る出題では、
+    覚えるのは実際には無い呼び方です。
+    **A CQ repeats the caller's own call sign.** An exercise drawing a different
+    one each time would teach a call that is never made. }
+  Bad := 0;
+  Digits := 0;
+  for I := 1 to 30 do
+  begin
+    Words := SplitWordsAt(MakeExercise(ekQso, 4, 700 + I));
+    for J := 0 to High(Words) - 3 do
+      if (Words[J] = 'CQ') and (Words[J + 1] = 'CQ') and
+         (Words[J + 2] = 'DE') then
+      begin
+        Inc(Digits);
+        if Words[J + 3] <> Words[J + 4] then
+        begin
+          Inc(Bad);
+          if Bad = 1 then
+            WriteLn('    違う符号で CQ を出した: ', Words[J + 3], ' / ',
+              Words[J + 4]);
+        end;
+      end;
+  end;
+  Check('CQ は同じ符号を 2 度繰り返す', (Digits > 0) and (Bad = 0),
+    Format('(%d 例中 %d 件が違う)', [Digits, Bad]));
+
+  { 出題は送れる文字だけでできていること。送れない文字が混ざれば、鳴らした音と
+    出題が食い違います。
+    An exercise must hold only what can be sent, or the sound and the answer
+    would differ. }
+  Check('出題は送れる文字だけでできている',
+    MakeExercise(ekQso, 3, 99) = NormalizeText(MakeExercise(ekQso, 3, 99)), A);
+
+  { ---- 採点 ---- }
+  Score := ScoreCopy('CQ DE JA1ABC', 'CQ DE JA1ABC');
+  Check('全部写せていれば 100%',
+    (Score.Percent = 100) and (Score.Wrong = 0) and (Score.Missed = 0) and
+    (Score.Extra = 0),
+    Format('(%.0f%% / 違い %d / 落とし %d / 足し %d)',
+      [Score.Percent, Score.Wrong, Score.Missed, Score.Extra]));
+  Check('空白は点に数えない', Score.Total = 10, Format('(%d 文字)', [Score.Total]));
+
+  Score := ScoreCopy('CQ DE JA1ABC', 'CQ DE JA1ABX');
+  Check('1 文字違えば 1 つだけ違いになる',
+    (Score.Wrong = 1) and (Score.Missed = 0) and (Score.Extra = 0),
+    Format('(違い %d / 落とし %d / 足し %d)',
+      [Score.Wrong, Score.Missed, Score.Extra]));
+
+  { **落とした 1 文字で、あとが全部ずれてはいけません。**前から 1 文字ずつ
+    比べる採点はここで壊れます。
+    **One dropped character must not throw the rest out of step**: marking by
+    position breaks exactly here. }
+  Score := ScoreCopy('CQ DE JA1ABC', 'CQ DE J1ABC');
+  Check('1 文字落としても、あとがずれない',
+    (Score.Missed = 1) and (Score.Wrong = 0) and (Score.Extra = 0) and
+    (Score.Same = 9),
+    Format('(合い %d / 違い %d / 落とし %d / 足し %d)',
+      [Score.Same, Score.Wrong, Score.Missed, Score.Extra]));
+
+  Score := ScoreCopy('CQ DE JA1ABC', 'CQ DE JAX1ABC');
+  Check('1 文字足しても、あとがずれない',
+    (Score.Extra = 1) and (Score.Wrong = 0) and (Score.Missed = 0) and
+    (Score.Same = 10),
+    Format('(合い %d / 違い %d / 落とし %d / 足し %d)',
+      [Score.Same, Score.Wrong, Score.Missed, Score.Extra]));
+
+  Score := ScoreCopy('CQ DE JA1ABC', 'CQDE JA1ABC');
+  Check('語の切れ目の書き方は点に響かない', Score.Percent = 100,
+    Format('(%.0f%%)', [Score.Percent]));
+
+  Score := ScoreCopy('CQ DE JA1ABC', 'cq de ja1abc');
+  Check('大文字小文字を問わない', Score.Percent = 100,
+    Format('(%.0f%%)', [Score.Percent]));
+
+  Score := ScoreCopy('CQ DE JA1ABC', '');
+  Check('何も写さなければ 0%',
+    (Score.Percent = 0) and (Score.Missed = 10) and (Score.Total = 10),
+    Format('(%.0f%% / 落とし %d)', [Score.Percent, Score.Missed]));
+
+  { ---- 間違いの傾向（要件 FR-F.5 の材料） ---- }
+  { **少ないほうを先に書いた出題**で試します。並べ替えていなければ、書いた順の
+    まま出てしまい、それでは「傾向」になりません。
+    Tried with **the rarer mistake written first**: without sorting, the order
+    written is the order shown, and that is not a tendency. }
+  Score := ScoreCopy('S RRR', 'T KKK');
+  Check('多い間違いが先に出る', Pos('R → K（3 回）', MistakeSummary(Score)) = 1,
+    MistakeSummary(Score));
+  Check('少ない間違いも続けて出る', Pos('S → T', MistakeSummary(Score)) > 1,
+    MistakeSummary(Score));
+  Score := ScoreCopy('CQ DE JA1ABC', 'CQ DE JA1ABC');
+  Check('間違いが無ければ何も言わない', MistakeSummary(Score) = '',
+    MistakeSummary(Score));
 end;
 
 procedure TestRecorder;
@@ -2043,6 +2230,7 @@ begin
     TestContactLog;
     TestExchange;
     TestWatch;
+    TestPractice;
     TestRecorder;
   finally
     Meta.Free;

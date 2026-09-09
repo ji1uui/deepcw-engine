@@ -34,7 +34,7 @@ uses
   DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
-  DeepCW.Callsign, DeepCW.Recorder,
+  DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice,
   TranscriptView, WaterfallView, BandMapView;
 
 type
@@ -378,6 +378,25 @@ type
     FSetBandwidth: TComboBox;
     FSetRetention: TComboBox;
     FSetJournal: TCheckBox;
+    { 受信練習（要件 FR-F.3）。**出題は隠しておき、答え合わせのときだけ見せます。**
+      Receive practice (requirement FR-F.3). **The exercise is kept out of sight
+      until the copy is marked.** }
+    FPrKind: TComboBox;
+    FPrGroups: TSpinEdit;
+    FPrWpm: TSpinEdit;
+    FPrNoise: TTrackBar;
+    FPrPlay: TButton;
+    FPrAgain: TButton;
+    FPrStop: TButton;
+    FPrMark: TButton;
+    FPrSummary: TLabel;
+    FPrCopy: TMemo;
+    FPrResult: TLabel;
+    FPrAnswer: TMemo;
+    FPrMistakes: TLabel;
+    FPrText: string;
+    FPrSamples: TSingleArray;
+    FSettingsSheet: TTabSheet;
     FSetRecord: TCheckBox;
     FSetRecordInfo: TLabel;
     FSetLogImport: TButton;
@@ -390,6 +409,16 @@ type
     function BuildTransmitTab: TTabSheet;
     function BuildReceiveTab: TTabSheet;
     function BuildSettingsTab: TTabSheet;
+    function BuildPracticeTab: TTabSheet;
+
+    { 受信練習（要件 FR-F.3） / receive practice }
+    function PracticeKind: TExerciseKind;
+    procedure PrRender;
+    procedure PrOptionsChanged(Sender: TObject);
+    procedure PrPlayClick(Sender: TObject);
+    procedure PrAgainClick(Sender: TObject);
+    procedure PrStopClick(Sender: TObject);
+    procedure PrMarkClick(Sender: TObject);
 
     function ConfigFileName: string;
     procedure LoadSettings;
@@ -797,7 +826,8 @@ begin
   FPages.AddTabSheet.Free;      { 仮のシートを取り除きます / drop the placeholder sheet }
   BuildTransmitTab;
   BuildReceiveTab;
-  BuildSettingsTab;
+  BuildPracticeTab;
+  FSettingsSheet := BuildSettingsTab;
   { 起動直後の画面は受信です。ここから受信開始まで操作 1 回で届きます
     （要件 FR-A.2）。
     The window opens on the receive tab, one action away from starting
@@ -1366,6 +1396,236 @@ begin
   Stretch(FRxBandMap, alClient);
 end;
 
+{ 受信練習のタブ（要件 FR-F.3）。
+
+  **出題は画面に出しません。**見えていれば練習になりません。答え合わせを押した
+  ときにだけ、正解と間違いの傾向を出します。
+
+  音程と音量は送信タブの設定を使います。**同じものを 2 か所に置くと、片方だけを
+  直したときに気づけません**（教訓 10.3）。ここに置くのは、要件が挙げる 3 つ
+  ――出題の種類（文字集合）・速度・雑音――だけです。
+
+  The receive practice tab (requirement FR-F.3).
+
+  **The exercise is not shown**: visible, it would not be practice. The answer
+  and the tendency of the mistakes appear only when the copy is marked.
+
+  The pitch and the volume come from the transmit settings: **the same thing in
+  two places is a thing that can be changed in one and not the other**
+  (lesson 10.3). What lives here is the three the requirement names -- the kind
+  of material, which is also the character set, the speed, and the noise. }
+function TMainForm.BuildPracticeTab: TTabSheet;
+var
+  Sheet: TTabSheet;
+  Options: TGroupBox;
+  Buttons: TPanel;
+  Kind: TExerciseKind;
+begin
+  Sheet := FPages.AddTabSheet;
+  Sheet.Caption := '練習';
+  Result := Sheet;
+
+  Options := TGroupBox.Create(Sheet);
+  Options.Parent := Sheet;
+  Options.Height := 116;
+  Options.Caption := '出題';
+  Stretch(Options, alTop);
+
+  AddLabel(Options, '出す内容', 14, 8);
+  FPrKind := TComboBox.Create(Options);
+  FPrKind.Parent := Options;
+  FPrKind.SetBounds(14, 28, 200, 28);
+  FPrKind.Style := csDropDownList;
+  for Kind := Low(TExerciseKind) to High(TExerciseKind) do
+    FPrKind.Items.Add(EXERCISE_NAMES[Kind]);
+  FPrKind.ItemIndex := 0;
+  FPrKind.OnChange := @PrOptionsChanged;
+
+  AddLabel(Options, '出す数', 230, 8);
+  FPrGroups := AddSpin(Options, 230, 30, 1, 50, 10, @PrOptionsChanged);
+  AddLabel(Options, '速度 (WPM)', 330, 8);
+  FPrWpm := AddSpin(Options, 330, 30, 5, 40, 20, @PrOptionsChanged);
+
+  AddLabel(Options, '雑音', 440, 8);
+  FPrNoise := TTrackBar.Create(Options);
+  FPrNoise.Parent := Options;
+  FPrNoise.SetBounds(440, 26, 160, 36);
+  FPrNoise.Min := 0;
+  FPrNoise.Max := 40;
+  FPrNoise.Position := 10;
+  FPrNoise.OnChange := @PrOptionsChanged;
+
+  AddLabel(Options,
+    '音程と音量は送信タブの設定を使います。', 620, 34);
+
+  Buttons := AddTopPanel(Sheet, 40);
+  FPrPlay := AddButton(Buttons, '出題して鳴らす', 12, 4, 150, @PrPlayClick);
+  FPrAgain := AddButton(Buttons, 'もう一度鳴らす', 170, 4, 150, @PrAgainClick);
+  FPrAgain.Enabled := False;
+  FPrStop := AddButton(Buttons, '止める', 328, 4, 100, @PrStopClick);
+  FPrStop.Enabled := False;
+  FPrSummary := AddLabel(Buttons, '「出題して鳴らす」を押すと始まります。', 440, 12);
+
+  AddTopLabel(Sheet, '写した文字を書いてください');
+  FPrCopy := TMemo.Create(Sheet);
+  FPrCopy.Parent := Sheet;
+  FPrCopy.Height := 90;
+  FPrCopy.ScrollBars := ssAutoVertical;
+  FPrCopy.Font.Size := 14;
+  Stretch(FPrCopy, alTop);
+
+  Buttons := AddTopPanel(Sheet, 40);
+  FPrMark := AddButton(Buttons, '答え合わせ', 12, 4, 130, @PrMarkClick);
+  FPrMark.Enabled := False;
+  FPrResult := AddLabel(Buttons, '', 156, 12);
+
+  AddTopLabel(Sheet, '正解');
+  FPrAnswer := TMemo.Create(Sheet);
+  FPrAnswer.Parent := Sheet;
+  FPrAnswer.Height := 70;
+  FPrAnswer.ReadOnly := True;
+  FPrAnswer.ScrollBars := ssAutoVertical;
+  FPrAnswer.Font.Size := 14;
+  Stretch(FPrAnswer, alTop);
+
+  FPrMistakes := AddTopLabel(Sheet, '');
+end;
+
+function TMainForm.PracticeKind: TExerciseKind;
+begin
+  if (FPrKind = nil) or (FPrKind.ItemIndex < 0) or
+     (FPrKind.ItemIndex > Ord(High(TExerciseKind))) then
+    Exit(ekLetters);
+  Result := TExerciseKind(FPrKind.ItemIndex);
+end;
+
+{ いまの出題を、いまの設定で音にします。**出題そのものは作り直しません。**
+  速度や雑音を変えて同じ問題をもう一度聴けることが練習では要ります。
+  Turns the current exercise into sound with the current settings. **The
+  exercise itself is not rebuilt**: hearing the same one again at another speed
+  or with more noise is part of practising. }
+procedure TMainForm.PrRender;
+var
+  Timing: TCWTiming;
+  Options: TCWToneOptions;
+begin
+  FPrSamples := nil;
+  if FPrText = '' then
+    Exit;
+  Timing.CharWpm := FPrWpm.Value;
+  Timing.TextWpm := FPrWpm.Value;
+  Options := DefaultToneOptions;
+  Options.SampleRate := FTxSampleRate;
+  Options.ToneHz := FTxToneHz.Value;
+  Options.Amplitude := FTxVolume.Position / 100;
+  Options.NoiseAmplitude := FPrNoise.Position / 100;
+  try
+    FPrSamples := TextToPCM(FPrText, Timing, Options);
+    FPrSummary.Caption := Format('%d 文字 / %.1f 秒',
+      [Length(FPrText), Length(FPrSamples) / FTxSampleRate]);
+  except
+    on E: Exception do
+    begin
+      FPrSamples := nil;
+      FPrSummary.Caption := E.Message;
+    end;
+  end;
+end;
+
+procedure TMainForm.PrOptionsChanged(Sender: TObject);
+begin
+  MarkSettingsDirty;
+  { 速度と雑音は、いまの出題にそのまま効きます。出す内容を変えたときは、
+    次の出題から効きます。**いま聴いている問題が、押していないのに別のものへ
+    変わってはいけません。**
+    Speed and noise take effect on the exercise in hand; a change of material
+    takes effect at the next one. **What is being listened to must not turn into
+    something else without being asked.** }
+  if (Sender = FPrWpm) or (Sender = FPrNoise) then
+    PrRender;
+end;
+
+procedure TMainForm.PrPlayClick(Sender: TObject);
+begin
+  { 出題は毎回変えます。種は時刻から採ります。**同じ問題が続けて出ると、
+    覚えているかどうかを測ることになります。**
+    A new exercise each time, seeded from the clock: **the same one twice over
+    would measure remembering rather than copying.** }
+  FPrText := MakeExercise(PracticeKind, FPrGroups.Value,
+    Round(Frac(Now) * MSecsPerDay) + Random(1000));
+  FPrCopy.Clear;
+  FPrAnswer.Clear;
+  FPrResult.Caption := '';
+  FPrMistakes.Caption := '';
+  PrRender;
+  FPrAgain.Enabled := Length(FPrSamples) > 0;
+  FPrMark.Enabled := FPrText <> '';
+  PrAgainClick(nil);
+  if FPrCopy.CanFocus then
+    FPrCopy.SetFocus;
+end;
+
+procedure TMainForm.PrAgainClick(Sender: TObject);
+begin
+  if Length(FPrSamples) = 0 then
+    Exit;
+  try
+    if not LoadPortAudio(FSetPortAudio.Text) then
+      raise EDeepCW.Create(PortAudioLoadError);
+    { ほかの音を止めてから鳴らします。2 つ重なると、どちらを写しているのか
+      分からなくなります。
+      Anything else playing is stopped first: two sounds at once leave no telling
+      which is being copied. }
+    FReviewPlay.Stop;
+    FPlayback.Stop;
+    FTxPlaying := False;
+    FPlayback.Play(FPrSamples, FTxSampleRate);
+    FPrStop.Enabled := True;
+    SetStatus('', '', '出題を鳴らしています。');
+  except
+    on E: Exception do
+      ReportError('練習', E);
+  end;
+end;
+
+procedure TMainForm.PrStopClick(Sender: TObject);
+begin
+  FPlayback.Stop;
+  FPrStop.Enabled := False;
+end;
+
+{ 写したものを突き合わせ、正解と間違いの傾向を出します（要件 FR-F.3・FR-F.5）。
+
+  **正解はここで初めて見せます。**出題のときに見せていれば、練習になりません。
+
+  Marks the copy and shows the answer with the tendency of the mistakes
+  (requirements FR-F.3, FR-F.5).
+
+  **The answer is shown here and not before**: shown when it was sent, there
+  would have been nothing to practise. }
+procedure TMainForm.PrMarkClick(Sender: TObject);
+var
+  Score: TCopyScore;
+  Mistakes: string;
+begin
+  if FPrText = '' then
+  begin
+    SetStatus('', '', '先に「出題して鳴らす」を押してください。');
+    Exit;
+  end;
+  Score := ScoreCopy(FPrText, FPrCopy.Text);
+  FPrAnswer.Text := FPrText;
+  FPrResult.Caption := Format(
+    '正答率 %.0f%%（%d 文字中 %d 文字）／ 違い %d ・ 落とし %d ・ 足し %d',
+    [Score.Percent, Score.Total, Score.Same, Score.Wrong, Score.Missed,
+     Score.Extra]);
+  Mistakes := MistakeSummary(Score);
+  if Mistakes = '' then
+    FPrMistakes.Caption := '間違いはありません。'
+  else
+    FPrMistakes.Caption := '間違えやすかった符号: ' + Mistakes;
+end;
+
 function TMainForm.BuildSettingsTab: TTabSheet;
 var
   Sheet: TTabSheet;
@@ -1569,6 +1829,11 @@ begin
     FSetRetention.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'retention', 1), 0, 3);
     FSetJournal.Checked := Ini.ReadBool('receive', 'journal', True);
     FSetRecord.Checked := Ini.ReadBool('receive', 'record', False);
+    FPrKind.ItemIndex := ClampInt(Ini.ReadInteger('practice', 'kind', 0),
+      0, FPrKind.Items.Count - 1);
+    FPrGroups.Value := ClampInt(Ini.ReadInteger('practice', 'groups', 10), 1, 50);
+    FPrWpm.Value := ClampInt(Ini.ReadInteger('practice', 'wpm', 20), 5, 40);
+    FPrNoise.Position := ClampInt(Ini.ReadInteger('practice', 'noise', 10), 0, 40);
     FRxMode.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'mode', 0), 0, 2);
     FRxBand.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'band', 0),
       0, FRxBand.Items.Count - 1);
@@ -1638,6 +1903,10 @@ begin
       Ini.WriteInteger('receive', 'retention', FSetRetention.ItemIndex);
       Ini.WriteBool('receive', 'journal', FSetJournal.Checked);
       Ini.WriteBool('receive', 'record', FSetRecord.Checked);
+      Ini.WriteInteger('practice', 'kind', FPrKind.ItemIndex);
+      Ini.WriteInteger('practice', 'groups', FPrGroups.Value);
+      Ini.WriteInteger('practice', 'wpm', FPrWpm.Value);
+      Ini.WriteInteger('practice', 'noise', FPrNoise.Position);
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('receive', 'watch', FRxWatch.Text);
       Ini.WriteInteger('receive', 'band', FRxBand.ItemIndex);
@@ -4113,7 +4382,11 @@ end;
   there yet (requirements FR-G.3, NFR-5.7). }
 procedure TMainForm.PagesChanged(Sender: TObject);
 begin
-  if FPages.PageIndex = 2 then
+  { 何番目か、ではなくどのタブか、で判じます。**番号で書くと、タブを 1 つ足した
+    だけで別のタブの処理が動きます。**
+    Which tab it is, not which number: **written as a number, adding one tab
+    would run another tab's work.** }
+  if FPages.ActivePage = FSettingsSheet then
     RefreshInfo;
 end;
 
@@ -4136,6 +4409,13 @@ begin
   UpdateTransmitProgress;
   UpdateLiveReceive;
   UpdateRecording;
+  { 出題が鳴り終われば「止める」は用済みです。押せるまま残すと、何も鳴って
+    いないのに止められるように見えます（要件 FR-F.3）。
+    Once the exercise has finished sounding, "stop" has served its purpose;
+    left enabled it would offer to stop what is not playing
+    (requirement FR-F.3). }
+  if (FPrStop <> nil) and FPrStop.Enabled and not FPlayback.Running then
+    FPrStop.Enabled := False;
   { 解析が塞がっていて出せなかった読み直しを、ここで出します（要件 FR-C.3）。
     A re-reading that could not be issued because the analysis was busy is
     issued here (requirement FR-C.3). }
