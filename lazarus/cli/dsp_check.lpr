@@ -770,6 +770,10 @@ begin
       Piece := Piece + Text[K];
 end;
 
+{ 遅延表示の検査は下に置いてありますが、練習の検査から呼びます。
+  The delayed-reveal checks live below and are called from the practice ones. }
+procedure TestReveal; forward;
+
 procedure TestPractice;
 var
   A, B: string;
@@ -921,6 +925,135 @@ begin
   Score := ScoreCopy('CQ DE JA1ABC', 'CQ DE JA1ABC');
   Check('間違いが無ければ何も言わない', MistakeSummary(Score) = '',
     MistakeSummary(Score));
+
+  TestReveal;
+end;
+
+{ 遅延表示（要件 FR-F.4）。
+
+  **ここで確かめるのは「早く出ないこと」です。**遅く出るのは待てば済みますが、
+  早く出れば、聴きながら読むことになり、練習になりません。文字の時刻が何を
+  指しているかを取り違えると、まさにそれが起きます（教訓 10.29）。
+
+  The delayed reveal (requirement FR-F.4).
+
+  **What is checked here is that nothing appears early.** Late can be waited
+  out; early means reading along with the sound instead of copying it, which is
+  what mistaking what a character's time refers to produces (lesson 10.29). }
+procedure TestReveal;
+const
+  LEAD_IN = 0.2;
+  TEXT = 'CQ DE JA1ABC';
+var
+  Timing: TCWTiming;
+  Times, Plain: TDoubleArray;
+  Segments: TCWSegments;
+  Sound, FirstEnds: Double;
+  I, Grew, Shrank: Integer;
+  Shown, Longer: string;
+begin
+  WriteLn;
+  WriteLn('DeepCW.Practice の遅延表示（要件 FR-F.4）');
+  Timing.CharWpm := 20;
+  Timing.TextWpm := 20;
+
+  Times := RevealTimes(TEXT, Timing, LEAD_IN, 0);
+  Check('文字の数だけ時刻がある',
+    Length(Times) = Length(NormalizeText(TEXT)),
+    Format('(%d / %d)', [Length(Times), Length(NormalizeText(TEXT))]));
+
+  Shrank := 0;
+  for I := 1 to High(Times) do
+    if Times[I] < Times[I - 1] then
+      Inc(Shrank);
+  Check('時刻が戻らない', Shrank = 0, Format('(%d 回戻った)', [Shrank]));
+
+  { 最初の文字（C）が鳴り終わる時刻。**その前に出てはいけません。**
+    When the first character finishes sounding: **nothing may appear before
+    that.** }
+  Segments := TextToSegments(NormalizeText(TEXT), Timing);
+  FirstEnds := LEAD_IN;
+  for I := 0 to High(Segments) do
+  begin
+    FirstEnds := FirstEnds + Segments[I].Duration;
+    if (I + 1 <= High(Segments)) and (Segments[I + 1].TextIndex <> 1) then
+      Break;
+  end;
+  Check('鳴り終わる前には出ない',
+    RevealedText(TEXT, Times, FirstEnds - 0.01) = '',
+    Format('(%.2f 秒: "%s")',
+      [FirstEnds - 0.01, RevealedText(TEXT, Times, FirstEnds - 0.01)]));
+  Check('鳴り終われば出る',
+    RevealedText(TEXT, Times, FirstEnds + 0.01) = 'C',
+    Format('(%.2f 秒: "%s")',
+      [FirstEnds + 0.01, RevealedText(TEXT, Times, FirstEnds + 0.01)]));
+
+  Sound := LEAD_IN + SegmentsDuration(Segments);
+  Check('鳴り終わったころには全部出る',
+    RevealedText(TEXT, Times, Sound + 0.01) = NormalizeText(TEXT),
+    Format('(%.2f 秒: "%s")',
+      [Sound, RevealedText(TEXT, Times, Sound + 0.01)]));
+
+  { **遅らせた分だけ、そのままずれること。**「遅らせる秒数」が効いていなければ
+    要件 FR-F.4 は満たしていません。
+    **The delay shifts everything by exactly itself**: without that, the setting
+    does nothing and requirement FR-F.4 is not met. }
+  Plain := Times;
+  Times := RevealTimes(TEXT, Timing, LEAD_IN, 5);
+  Grew := 0;
+  for I := 0 to High(Times) do
+    if Abs(Times[I] - (Plain[I] + 5)) < 1E-9 then
+      Inc(Grew);
+  Check('遅らせた秒数だけ、そのまま遅れる', Grew = Length(Times),
+    Format('(%d / %d)', [Grew, Length(Times)]));
+  Check('遅らせれば、鳴り終わっても、まだ出ていない',
+    RevealedText(TEXT, Times, Sound + 0.01) <> NormalizeText(TEXT),
+    Format('("%s")', [RevealedText(TEXT, Times, Sound + 0.01)]));
+  Check('遅らせた分だけ待てば出る',
+    RevealedText(TEXT, Times, Sound + 5.01) = NormalizeText(TEXT),
+    Format('("%s")', [RevealedText(TEXT, Times, Sound + 5.01)]));
+
+  { いつ見ても、出ているものは出題の先頭からの一続きであること。**途中から
+    出れば、写したものと並べられません。**
+    Whatever the moment, what is shown is a run from the start of the exercise:
+    **shown from the middle, it could not be lined up with the copy.** }
+  Times := RevealTimes(TEXT, Timing, LEAD_IN, 1);
+  Grew := 0;
+  Shown := '';
+  I := 0;
+  while I <= Round((Sound + 2) * 10) do
+  begin
+    Longer := RevealedText(TEXT, Times, I / 10);
+    { 空文字は「まだ何も出ていない」であって、崩れてはいません。`Pos` は空文字に
+      0 を返すため、ここで分けます。
+      An empty string is "nothing yet", not a break; `Pos` returns 0 for it, so
+      it is separated here. }
+    if (Longer <> '') and (Pos(Longer, NormalizeText(TEXT)) <> 1) then
+      Break;
+    if Length(Longer) < Length(Shown) then
+      Break;
+    if Length(Longer) > Length(Shown) then
+      Inc(Grew);
+    Shown := Longer;
+    Inc(I);
+  end;
+  Check('出ているものは、いつも出題の先頭からの一続き',
+    I > Round((Sound + 2) * 10),
+    Format('(%.1f 秒で崩れた: "%s")', [I / 10, Longer]));
+  Check('少しずつ増える', Grew > 3, Format('(%d 回増えた)', [Grew]));
+
+  { 音を持たない文字（空白）は、直前の文字と一緒に出ます。**空白だけが遅れて
+    出ると、語の切れ目が後から差し込まれることになります。**
+    A character with no sound of its own goes up with the one before it: a space
+    arriving late would insert the word break after the fact. }
+  Times := RevealTimes('AB CD', Timing, LEAD_IN, 0);
+  Segments := TextToSegments('AB CD', Timing);
+  Check('空白は直前の文字と同じ時刻', Times[2] = Times[1],
+    Format('(%.3f / %.3f)', [Times[1], Times[2]]));
+
+  Check('出題が無ければ時刻も無い', Length(RevealTimes('', Timing, LEAD_IN, 0)) = 0,
+    '');
+  Check('時刻が無ければ何も出ない', RevealedText('', nil, 100) = '', '');
 end;
 
 procedure TestRecorder;

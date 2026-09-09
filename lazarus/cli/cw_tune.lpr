@@ -207,17 +207,40 @@ begin
 end;
 
 procedure RunSweep;
+const
+  { 差の出る雑音。**この水準まで上げないと、どの音程でも誤りが 0 になり、
+    比べるものがありません。**帯域幅の測定（`RunBandwidth`）と同じ考え方です。
+    The noise at which differences appear: **below it nothing errs at any pitch
+    and there is nothing to compare**, the same reasoning `RunBandwidth`
+    follows. }
+  HARD_NOISE = 2.0;
+  LOW_EDGE_HZ = 425.0;
+  HIGH_EDGE_HZ = 1175.0;
 var
-  ToneHz, Error, Best, BestTone: Double;
+  ToneHz, Error, Best, BestTone, AtLow, AtHigh, AtTarget: Double;
+  Failures: Integer;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
 begin
+  Failures := 0;
   WriteLn;
   WriteLn('sweep: 音程ごとの復号精度 / accuracy against pitch');
   WriteLn(Format('  変換の行き先を決めます。雑音 %.2f、%.0f WPM。', [Noise, Wpm]));
   WriteLn('  tone(Hz)   CER');
   Best := 1E9;
   BestTone := TUNER_TARGET_TONE_HZ;
-  ToneHz := 425;
-  while ToneHz <= 1175.01 do
+  ToneHz := LOW_EDGE_HZ;
+  while ToneHz <= HIGH_EDGE_HZ + 0.01 do
   begin
     Error := MeasureAt(Decoder.Metadata.SampleRate, ToneHz, 0, Noise, 0, False);
     WriteLn(Format('  %8.1f   %5.3f', [ToneHz, Error]));
@@ -230,16 +253,56 @@ begin
   end;
   WriteLn(Format('  best %.1f Hz (CER %.3f); target in use %.1f Hz',
     [BestTone, Best, TUNER_TARGET_TONE_HZ]));
+
+  { この雑音では、どの音程でも読めます。**まずそれを確かめます。**通過帯域の
+    中で読めない音程があれば、変換の行き先どころの話ではありません。
+    At this noise every pitch is readable, **and that is checked first**: a pitch
+    inside the passband that cannot be read is a larger problem than where to
+    translate to. }
+  Verdict('通過帯域のどの音程でも読める', Best <= 0.05,
+    Format('(最良 %.1f Hz で %.3f)', [BestTone, Best]));
+
+  { **帯域の端は誤りが増える**（付録 E.1）。これが変換の行き先を帯域の中央に
+    置いた理由です。差が出る雑音まで上げて確かめます。
+    **The edges of the band err more** (appendix E.1), which is why the
+    translation targets its middle. The noise is raised until the difference
+    shows. }
+  AtLow := MeasureAt(Decoder.Metadata.SampleRate, LOW_EDGE_HZ, 0, HARD_NOISE, 0, False);
+  AtTarget := MeasureAt(Decoder.Metadata.SampleRate, TUNER_TARGET_TONE_HZ, 0,
+    HARD_NOISE, 0, False);
+  AtHigh := MeasureAt(Decoder.Metadata.SampleRate, HIGH_EDGE_HZ, 0, HARD_NOISE, 0, False);
+  WriteLn(Format('  雑音 %.2f: 下端 %.1f Hz %.3f / 行き先 %.1f Hz %.3f / 上端 %.1f Hz %.3f',
+    [HARD_NOISE, LOW_EDGE_HZ, AtLow, TUNER_TARGET_TONE_HZ, AtTarget,
+     HIGH_EDGE_HZ, AtHigh]));
+  Verdict('行き先の音程は、帯域の端より読める',
+    (AtTarget <= AtLow) and (AtTarget <= AtHigh),
+    Format('(下端 %.3f / 行き先 %.3f / 上端 %.3f)', [AtLow, AtTarget, AtHigh]));
+  Summary(Failures);
 end;
 
 procedure RunShift;
 const
   TONES: array[0..7] of Double = (200, 400, 700, 1000, 1500, 2200, 3000, 3600);
 var
-  I, Rate: Integer;
+  I, Rate, Rescued, Broken, Failures: Integer;
   Plain, Tuned: Double;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
 begin
   Rate := 8000;
+  Failures := 0;
+  Rescued := 0;
+  Broken := 0;
   WriteLn;
   WriteLn('shift: 音程を変換して読めるか / readability after translation');
   WriteLn(Format('  録音 %d Hz、雑音 %.2f、行き先 %.1f Hz。',
@@ -252,7 +315,22 @@ begin
     WriteLn(Format('  %8.1f     %5.3f     %5.3f  %s',
       [TONES[I], Plain, Tuned,
        BoolToStr(IsTunable(TONES[I], Rate), '対象内', '対象外')]));
+    { 同調しなければ読めなかったものが、同調して読めるようになったか。
+      **これが同調という機能の値打ちそのものです。**
+      What could not be read without tuning and can be read with it. **This is
+      the value of tuning, entire.** }
+    if Plain > 0.5 then
+    begin
+      if Tuned < 0.1 then
+        Inc(Rescued)
+      else
+        Inc(Broken);
+    end;
   end;
+  Verdict('同調でしか読めない音程が、実際に読める',
+    (Rescued > 0) and (Broken = 0),
+    Format('(救えた %d / 救えなかった %d)', [Rescued, Broken]));
+  Summary(Failures);
 end;
 
 procedure RunImage;
@@ -271,12 +349,27 @@ const
   InterferenceHz = 1200.0;
   LEVELS: array[0..3] of Double = (0.2, 0.4, 0.6, 0.8);
 var
-  Rate, I, L: Integer;
+  Rate, I, L, Failures, Beaten: Integer;
   Reference, Decoded: string;
   Audio, Hilbert, Naive: TSingleArray;
-  HilbertError, NaiveError, ShiftHz: Double;
+  HilbertError, NaiveError, ShiftHz, WorstHilbert: Double;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
 begin
   Rate := 8000;
+  Failures := 0;
+  Beaten := 0;
+  WorstHilbert := 0;
   ShiftHz := WantedHz - TUNER_TARGET_TONE_HZ;
   WriteLn;
   WriteLn('image: 解析信号を使う理由 / why the analytic signal is needed');
@@ -303,7 +396,26 @@ begin
     end;
     WriteLn(Format('  %9.2f     %5.3f      %5.3f',
       [LEVELS[L], HilbertError / Length(MESSAGES), NaiveError / Length(MESSAGES)]));
+    HilbertError := HilbertError / Length(MESSAGES);
+    NaiveError := NaiveError / Length(MESSAGES);
+    if HilbertError > WorstHilbert then
+      WorstHilbert := HilbertError;
+    if HilbertError < NaiveError then
+      Inc(Beaten);
   end;
+
+  { **これが解析信号を使う理由そのものです**（付録 E.2）。単純な乗算に置き換え
+    られたら、ここが落ちなければなりません。数字を出すだけでは、誰かが読むまで
+    劣化が通ります（教訓 10.14）。
+    **This is the reason the analytic signal is used** (appendix E.2). Replaced
+    by a plain multiply, this must fail: printing numbers alone lets a
+    regression through until somebody reads them (lesson 10.14). }
+  Verdict('妨害があっても解析信号なら読める', WorstHilbert <= 0.05,
+    Format('(いちばん悪くて %.3f)', [WorstHilbert]));
+  Verdict('どの妨害の強さでも、単純な乗算より良い',
+    Beaten = Length(LEVELS),
+    Format('(%d / %d)', [Beaten, Length(LEVELS)]));
+  Summary(Failures);
 end;
 
 procedure RunBandwidth;
@@ -320,11 +432,22 @@ const
   SOURCE_TONE_HZ = 1800.0;
   INTERFERENCE_OFFSET_HZ = 300.0;
 var
-  I, L, Rate: Integer;
+  I, L, Rate, Failures, Better: Integer;
   Bandwidth: TTunerBandwidth;
   Line, Reference, Decoded: string;
   Audio, Prepared: TSingleArray;
-  ShiftHz, Total: Double;
+  ShiftHz, Total, AutoError, WideError: Double;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
 
   procedure Header(const Title: string);
   var
@@ -340,6 +463,10 @@ var
 
 begin
   Rate := 8000;
+  Failures := 0;
+  Better := 0;
+  AutoError := 0;
+  WideError := 0;
   ShiftHz := SOURCE_TONE_HZ - TUNER_TARGET_TONE_HZ;
   WriteLn;
   WriteLn('bandwidth: 追加の帯域制限が効くか / whether extra band limiting helps');
@@ -378,9 +505,23 @@ begin
         Total := Total + CharErrorRate(Reference, Decoded);
       end;
       Line := Line + Format('%-16.3f', [Total / Length(MESSAGES)]);
+      if Bandwidth = tbAuto then
+        AutoError := Total / Length(MESSAGES);
+      if Bandwidth = tbWide then
+        WideError := Total / Length(MESSAGES);
     end;
     WriteLn(Line);
+    { 妨害があるとき、自動（±250 Hz）が広い（±400 Hz）より悪くならないこと。
+      **これが「自動＝±250 Hz」と決めた根拠です**（付録 E.3）。
+      With interference the automatic width (+/-250 Hz) must be no worse than the
+      wide one (+/-400 Hz). **This is the evidence behind choosing it**
+      (appendix E.3). }
+    if AutoError <= WideError then
+      Inc(Better);
   end;
+  Verdict('妨害があるとき、自動の帯域幅は広い帯域幅より悪くならない',
+    Better = Length(NOISES), Format('(%d / %d)', [Better, Length(NOISES)]));
+  Summary(Failures);
 end;
 
 { 流し込み受信の経路をそのまま通します。他の試験と違い、確定と暫定の分割や
@@ -393,12 +534,23 @@ const
   SOURCE_TONE_HZ = 2200.0;
   CHUNK_SECONDS = 0.5;
 var
-  Rate, I, Position, Count: Integer;
+  Rate, I, Position, Count, Failures: Integer;
   Stream: TStreamingDecoder;
   Audio, Chunk: TSingleArray;
   Reference, Tuned, Untuned: string;
   Started: TDateTime;
   PlainMs, TunedMs, Steps: Double;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
 
   function RunOnce(TuneHz: Double): string;
   begin
@@ -427,6 +579,7 @@ var
 
 begin
   Rate := 8000;
+  Failures := 0;
   WriteLn;
   WriteLn('stream: 流し込み受信での同調 / tuning through the streaming path');
   WriteLn(Format('  音程 %.0f Hz、録音 %d Hz、%.1f 秒ずつ投入。',
@@ -489,7 +642,19 @@ begin
        BoolToStr(Tuned = Reference, '一致', '不一致')]));
     WriteLn(Format('  1 回の解析: 同調なし %.0f ms、同調あり %.0f ms',
       [PlainMs, TunedMs]));
+
+    { 無音から文字が湧かないこと（要件 FR-A.3）と、無音のあとの符号が
+      そのまま読めること。**数字を出すだけでは、崩れても誰かが読むまで通ります**
+      （教訓 10.14）。
+      No characters may appear out of silence (requirement FR-A.3), and the code
+      after the silence must read as sent. **Printing the numbers alone lets a
+      break through until somebody reads them** (lesson 10.14). }
+    Verdict('無音から文字が湧かない', Untuned = '',
+      Format('(%d 文字: "%s")', [Length(Untuned), Untuned]));
+    Verdict('無音のあとの符号が同調して読める', Tuned = Reference,
+      Format('("%s")', [Tuned]));
   end;
+  Summary(Failures);
 end;
 
 { 帯域全体を 1 度に変換し、そこから局ごとに切り出して読めるかを確かめます。
@@ -518,9 +683,27 @@ var
   Reference, Sliced, Tuned: string;
   Seconds, Started, SharedMs, PerStationMs, TunedMs: Double;
   Begun: TDateTime;
+  Failures, Unlimited, Narrowest: Integer;
+
+  { 通らなかったものを数えたうえで書き出します。
+    A check's result, printed and counted. }
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What, '  ', Detail)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
 begin
   WriteLn;
   WriteLn('wide: ', Title);
+  Failures := 0;
+  Unlimited := -1;
+  Narrowest := -1;
   WideRate := Decoder.Metadata.SampleRate * 2;
   WriteLn(Format('  録音 %d Hz を %d Hz へ変換し、FFT %d・ホップ %d で 1 度だけ解析。',
     [CAPTURE_RATE, WideRate, Decoder.Metadata.FFTLength * 2,
@@ -596,6 +779,9 @@ begin
       Reference := '制限なし';
     WriteLn(Format('  %-12s  %d / %d   %s',
       [Reference, Total, Length(TONES), Copy(Sliced, 1, 44)]));
+    if WIDTHS[I] = 0 then
+      Unlimited := Total;
+    Narrowest := Total;
   end;
 
   { 同調経路（時間領域のフィルタ）との比較を 1 局ぶんだけ取ります。
@@ -611,6 +797,31 @@ begin
 
   WriteLn(Format('  共通の変換 %.0f ms / 1 局あたり 切り出し %.0f ms・同調経路 %.0f ms',
     [SharedMs, PerStationMs / Length(TONES), TunedMs]));
+
+  { ここまでは表でした。**表は、壊れても表のままです。**この機能が成り立つ
+    条件を、そのまま検査にします。
+
+      (1) いちばん狭い幅なら、どの間隔でも全局が読める
+      (2) 幅を制限しないと読めない  — `MaskSpectrogram` が効いている証拠
+      (3) 共通の変換を分け合った費用が、局ごとの同調経路より高くならない
+
+    (3) が崩れれば、広帯域で一度だけ変換する理由が無くなります。
+
+    Up to here this was a table, and **a broken table is still a table.** The
+    conditions this feature depends on are turned into checks: the narrowest
+    width reads every station at every spacing; leaving the width unrestricted
+    does not; and the shared transform, divided among the stations, does not
+    cost more than tuning each one separately. Lose the last and there is no
+    reason to transform the whole band at once. }
+  Verdict('いちばん狭い幅なら全局が読める', Narrowest = Length(TONES),
+    Format('(%d / %d)', [Narrowest, Length(TONES)]));
+  Verdict('幅を制限したほうが読める', Narrowest > Unlimited,
+    Format('(制限なし %d / 最も狭い %d)', [Unlimited, Narrowest]));
+  Verdict('切り出しは局ごとの同調経路より高くない',
+    PerStationMs / Length(TONES) + SharedMs / Length(TONES) <= TunedMs,
+    Format('(%.0f ms / %.0f ms)',
+      [PerStationMs / Length(TONES) + SharedMs / Length(TONES), TunedMs]));
+  Summary(Failures);
 end;
 
 { コールサインの誤りが、形の検査だけでどこまで弾けるかを測ります。
@@ -659,8 +870,25 @@ var
   Found: TCallsigns;
   Counts: array of Integer;
   J, K, BestCount: Integer;
+  Failures, QuietCorrect: Integer;
+
+  { 通らなかったものを数えたうえで書き出します。
+    A check's result, printed and counted. }
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What, '  ', Detail)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
 begin
   Rate := Decoder.Metadata.SampleRate;
+  Failures := 0;
+  QuietCorrect := 0;
 
   { 実在一覧の模型を用意します。/ Build the stand-in list of real callsigns. }
   Known := TStringList.Create;
@@ -760,6 +988,8 @@ begin
     Inc(TotalAgreedCorrect, AgreedCorrect);
     Inc(TotalAgreedWrong, AgreedWrong);
     Inc(TotalInList, InList);
+    if L = 0 then
+      QuietCorrect := Correct;
   end;
   WriteLn(Format('  （各行 %d 局）', [Length(CALLS)]));
   WriteLn;
@@ -773,7 +1003,32 @@ begin
     [TotalAgreedCorrect, TotalAgreedWrong]));
   WriteLn(Format('  形は正しいが別の局 %d 件のうち、%d 万件の実在一覧に載っていたのは %d 件',
     [TotalPlausible, KNOWN_LIST_SIZE div 10000, TotalInList]));
+
+  { この表が支えている判断を、そのまま検査にします。
+
+      (1) **2 回一致した符号に誤りが無い**  — 要件 FR-J.7 が「複数回の一致」を
+          一覧掲載の根拠にできるのは、これが成り立つ間だけです。崩れたら、
+          一致を根拠にするのをやめなければなりません。
+      (2) 誤りの多くは形の検査で弾ける  — 外部の実在確認（要件 FR-K）に通信と
+          プライバシーの代償を払う前に、無料で弾ける分がどれだけあるか。
+      (3) 静かなときは全局読める  — 表そのものが意味を持つ前提です。
+
+    The decisions this table supports, turned into checks. Agreement never
+    agreeing on a wrong callsign is what lets requirement FR-J.7 put a station
+    on the band map for it; most errors being malformed is what makes the free
+    check worth doing before paying network and privacy for an outside lookup
+    (requirement FR-K); and reading every station when it is quiet is the
+    premise that makes the table mean anything at all. }
+  Verdict('2 回一致した符号に誤りが無い', TotalAgreedWrong = 0,
+    Format('(正 %d / 誤 %d)', [TotalAgreedCorrect, TotalAgreedWrong]));
+  Verdict('誤りの多くは形の検査で弾ける', TotalMalformed >= TotalPlausible,
+    Format('(形で弾ける %d / 実在の確認が要る %d)',
+      [TotalMalformed, TotalPlausible]));
+  Verdict(Format('雑音 %.2f では全局読める', [NOISES[0]]),
+    QuietCorrect = Length(CALLS),
+    Format('(%d / %d)', [QuietCorrect, Length(CALLS)]));
   Known.Free;
+  Summary(Failures);
 end;
 
 { 呼出符号の形の検査そのものを、実在する符号の例で確かめます。
@@ -1021,8 +1276,28 @@ var
   Width: TTunerBandwidth;
   Line: string;
   K: Integer;
+  Failures, Read_: Integer;
+  AutoErr: array[0..High(OFFSETS)] of Double;
+  SafeOffset, WorstResidual: Double;
+
+  { 通らなかったものを数えたうえで書き出します。
+    A check's result, printed and counted. }
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What, '  ', Detail)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
 begin
   Rate := CAPTURE_RATE;
+  Failures := 0;
+  Read_ := 0;
+  WorstResidual := 0;
   WriteLn;
   WriteLn('track: 動いていく信号を追いかける / following a signal that moves');
 
@@ -1051,9 +1326,24 @@ begin
           Trim(Decoder.DecodeLongSamples(Chunk, Decoder.Metadata.SampleRate)));
       end;
       Line := Line + Format('%7.3f', [Total / Length(MESSAGES)]);
+      if Width = tbAuto then
+        AutoErr[K] := Total / Length(MESSAGES);
     end;
     WriteLn(Line);
   end;
+
+  { 自動の帯域幅で、誤りの出ないずれはどこまでか。**この数字が [2] の合否を
+    決めます。**追跡が残したずれがここに収まっていれば読め、はみ出せば読めま
+    せん。
+    How far the automatic bandwidth tolerates mistuning before errors appear.
+    **This number decides [2]:** a residual inside it reads, one outside does
+    not. }
+  SafeOffset := 0;
+  for K := 0 to High(OFFSETS) do
+    if AutoErr[K] = 0 then
+      SafeOffset := OFFSETS[K]
+    else
+      Break;
 
   { [2] 追跡がずれをどこまで詰めるか。文字誤り率ではなく、残ったずれで見ます。
     ずれが小さければ [1] の表がそのまま安全余裕になります。
@@ -1076,7 +1366,36 @@ begin
       [Copy(Reference, 1, 28), START_HZ + DRIFT_HZ - FixedHz,
        START_HZ + DRIFT_HZ - TrackedHz,
        BoolToStr(Tracked = Reference, '一致', '不一致')]));
+    if Tracked = Reference then
+      Inc(Read_);
+    if Abs(START_HZ + DRIFT_HZ - TrackedHz) > WorstResidual then
+      WorstResidual := Abs(START_HZ + DRIFT_HZ - TrackedHz);
   end;
+
+  { 表を検査にします。**追跡は「動いている」だけでは足りません。**残ったずれ
+    が [1] の読める範囲に収まっていて、はじめて意味があります。
+    The tables become checks. **A tracker that merely moves is not enough:** the
+    residual has to land inside the range [1] says can still be read. }
+  { 名前は測ったことだけを言います。**この本文は追跡が無くても読めました**
+    （±250 Hz の通過帯域が 150 Hz の移動を呑むため）。ここが見ているのは
+    「移動しても読めること」で、追跡の働きは次の 2 つが見ます。
+    The name says only what was measured: **these messages read without any
+    tracking at all**, the 250 Hz passband swallowing a 150 Hz drift. What is
+    checked here is that a moving signal reads; what tracking does is the two
+    below. }
+  Verdict('移動する信号が読める', Read_ = Length(MESSAGES),
+    Format('(%d / %d)', [Read_, Length(MESSAGES)]));
+  Verdict('追跡が残したずれが読める範囲に収まる',
+    (SafeOffset > 0) and (WorstResidual <= SafeOffset),
+    Format('(残り %.0f Hz / 読める範囲 %.0f Hz)', [WorstResidual, SafeOffset]));
+  { **「わずかに小さい」では追跡とは言えません。**移動の半分より小さいことを
+    求めます（実測は 13〜38 Hz、移動 150 Hz の 9〜25%）。
+    **Smaller by a hair is not a tracker.** Half the drift is the bar; the
+    measurement is 13 to 38 Hz against a 150 Hz drift. }
+  Verdict('追跡は残るずれを移動の半分より小さくする',
+    WorstResidual <= DRIFT_HZ / 2,
+    Format('(追跡あり %.0f Hz / 追跡なし %.0f Hz)', [WorstResidual, DRIFT_HZ]));
+  Summary(Failures);
 end;
 
 { 解析が入力に追いつかないときに、溜め込みが止まることを確かめます。
@@ -1102,9 +1421,11 @@ var
   Block: TSingleArray;
   I, Steps: Integer;
   Peak: Double;
+  Failures: Integer;
 begin
   WriteLn;
   WriteLn('overload: 追いつけないときに溜め込みが止まるか / buffering under overload');
+  Failures := 0;
 
   { [1] 解析が回る前に上限を超える量が溜まった場合。装置が実時間より速く音を
         返す、または Step が呼ばれる間隔が空きすぎた状況にあたる。上限を超えた
@@ -1130,13 +1451,19 @@ begin
     if Stream.PendingSeconds <= STREAM_MAX_BUFFER_SECONDS + 1 then
       WriteLn('       ok   上限で止まる')
     else
+    begin
       WriteLn(Format('       NG   上限を超えた（%.1f 秒）', [Stream.PendingSeconds]));
+      Inc(Failures);
+    end;
     { 12 秒を超えた分が捨てられているはず。丸めの余裕を見て 10 秒以上。
       The 12 seconds of excess should be dropped; allow for rounding at 10+. }
     if Stream.DroppedSeconds >= 10 then
       WriteLn(Format('       ok   捨てた量を正しく申告する（%.1f 秒）', [Stream.DroppedSeconds]))
     else
+    begin
       WriteLn(Format('       NG   捨てた量の申告が足りない（%.1f 秒）', [Stream.DroppedSeconds]));
+      Inc(Failures);
+    end;
   finally
     Stream.Free;
   end;
@@ -1170,10 +1497,14 @@ begin
     if Peak <= STREAM_MAX_SECONDS + 1 then
       WriteLn('       ok   解析の上限を超えて溜め込まない')
     else
+    begin
       WriteLn('       NG   溜め込みが止まらない');
+      Inc(Failures);
+    end;
   finally
     Stream.Free;
   end;
+  Summary(Failures);
 end;
 
 { 流し込み受信の帳尻が合っているかを確かめます。
@@ -2708,7 +3039,23 @@ var
   Text, Reference, Sample: string;
   Prepared: TSingleArray;
   Wide, Slice: TSpectrogram;
+  Failures: Integer;
+
+  { 通らなかったものを数えたうえで書き出します。
+    A check's result, printed and counted. }
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('        ok   ', What, '  ', Detail)
+    else
+    begin
+      WriteLn('        NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
 begin
+  Failures := 0;
   WriteLn;
   WriteLn('scale: 局数を増やしたときの費用と精度 / cost and accuracy as stations grow');
   WriteLn('  局数  間隔   検出   読めた  誤り率   1局あたり   1窓あたり   進み 7.5 秒に対して');
@@ -2829,11 +3176,32 @@ begin
       WriteLn(Format('        一括で読んだ場合の誤り率 %.2f（窓に分けた分の差 %.2f）',
         [WholeCer / Max(1, Matched),
          Cer / Max(1, Matched) - WholeCer / Max(1, Matched)]));
+
+      { 表の下に条件を置いても、誰も見ません。**条件は検査にします。**
+
+          (1) 局を取りこぼさない        — 見つけられない局は一覧に出ません
+          (2) 1 窓の解析が進み 7.5 秒を超えない — 超えれば入力に追いつけません
+          (3) 文字誤り率が 0.20 を超えない — 読めない一覧は無いのと同じです
+
+        A criterion printed under a table is a criterion nobody reads. These
+        are checks: no station is missed, one window is analysed in less than
+        the window advance -- past that the input can never be caught up with
+        -- and the error rate stays low enough for the band map to mean
+        something. }
+      Verdict(Format('%d 局とも見つける', [Count]), Matched = Count,
+        Format('(%d / %d)', [Matched, Count]));
+      Verdict(Format('1 窓の解析が進み %.1f 秒を超えない', [MULTI_ADVANCE_SECONDS]),
+        RoundMs / 1000 <= MULTI_ADVANCE_SECONDS,
+        Format('(%.0f ms)', [RoundMs]));
+      Verdict('文字誤り率が 0.20 を超えない',
+        Cer / Max(1, Matched) <= 0.20,
+        Format('(%.2f)', [Cer / Max(1, Matched)]));
     finally
       Multi.Free;
     end;
   end;
   WriteLn('  「1窓あたり」が「進み 7.5 秒」を超えると、解析が入力に追いつきません。');
+  Summary(Failures);
 end;
 
 { 長く走らせても、記憶も帳簿も増え続けないことを確かめます（第 10 章 10.8）。

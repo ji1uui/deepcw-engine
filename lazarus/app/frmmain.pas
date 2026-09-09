@@ -385,6 +385,11 @@ type
     FPrGroups: TSpinEdit;
     FPrWpm: TSpinEdit;
     FPrNoise: TTrackBar;
+    { 遅延表示（要件 FR-F.4）。**鳴った文字を、決めた秒数だけ遅らせて出します。**
+      Delayed reveal (requirement FR-F.4): **each character appears the set
+      number of seconds after it has sounded.** }
+    FPrDelay: TCheckBox;
+    FPrDelaySeconds: TSpinEdit;
     FPrPlay: TButton;
     FPrAgain: TButton;
     FPrStop: TButton;
@@ -396,6 +401,15 @@ type
     FPrMistakes: TLabel;
     FPrText: string;
     FPrSamples: TSingleArray;
+    { 各文字を見せてよい時刻（音の先頭から）と、鳴らし始めた時刻。
+      **時刻は鳴らし始めから測ります。**鳴り終わったあとにも、遅れた分の文字が
+      残っているためです。
+      When each character may be shown, counted from the start of the sound, and
+      when the sound was started. **The clock runs from the start**: after the
+      sound ends, the delayed characters are still to come. }
+    FPrRevealTimes: TDoubleArray;
+    FPrRevealFrom: TDateTime;
+    FPrRevealing: Boolean;
     FSettingsSheet: TTabSheet;
     FSetRecord: TCheckBox;
     FSetRecordInfo: TLabel;
@@ -419,6 +433,7 @@ type
     procedure PrAgainClick(Sender: TObject);
     procedure PrStopClick(Sender: TObject);
     procedure PrMarkClick(Sender: TObject);
+    procedure UpdatePracticeReveal;
 
     function ConfigFileName: string;
     procedure LoadSettings;
@@ -1427,7 +1442,7 @@ begin
 
   Options := TGroupBox.Create(Sheet);
   Options.Parent := Sheet;
-  Options.Height := 116;
+  Options.Height := 124;
   Options.Caption := '出題';
   Stretch(Options, alTop);
 
@@ -1457,6 +1472,26 @@ begin
 
   AddLabel(Options,
     '音程と音量は送信タブの設定を使います。', 620, 34);
+
+  { 遅延表示（要件 FR-F.4）。**既定は入れておきます。**「先に自分で写し、後から
+    正解を出す」がこのタブの狙いで、押さないと何も出ないより、遅れて出るほうが
+    練習の形に近いためです。切れば、これまでどおり答え合わせまで何も出ません。
+    Delayed reveal (requirement FR-F.4), **on by default**: copying first and
+    seeing the answer afterwards is what this tab is for, and an answer that
+    arrives late is closer to that than one that arrives only when asked.
+    Switched off, nothing appears until the copy is marked, as before. }
+  FPrDelay := TCheckBox.Create(Options);
+  FPrDelay.Parent := Options;
+  FPrDelay.SetBounds(14, 74, 210, 24);
+  FPrDelay.Caption := '遅らせて正解を出す';
+  FPrDelay.Checked := True;
+  FPrDelay.OnChange := @PrOptionsChanged;
+
+  AddLabel(Options, '遅らせる秒数', 230, 78);
+  FPrDelaySeconds := AddSpin(Options, 330, 74, 0, REVEAL_DELAY_MAX_SECONDS,
+    REVEAL_DELAY_DEFAULT_SECONDS, @PrOptionsChanged);
+  AddLabel(Options,
+    '鳴った文字が、この秒数だけ遅れて「正解」に出ます。', 440, 78);
 
   Buttons := AddTopPanel(Sheet, 40);
   FPrPlay := AddButton(Buttons, '出題して鳴らす', 12, 4, 150, @PrPlayClick);
@@ -1510,6 +1545,7 @@ var
   Options: TCWToneOptions;
 begin
   FPrSamples := nil;
+  FPrRevealTimes := nil;
   if FPrText = '' then
     Exit;
   Timing.CharWpm := FPrWpm.Value;
@@ -1521,12 +1557,20 @@ begin
   Options.NoiseAmplitude := FPrNoise.Position / 100;
   try
     FPrSamples := TextToPCM(FPrText, Timing, Options);
+    { 見せてよい時刻は、鳴らす音と**同じ設定から**作ります。別々に作れば、
+      速度を変えたときに片方だけが変わります（教訓 10.3）。
+      The reveal times are built from **the same settings as the sound**; built
+      separately, a change of speed would move one and not the other
+      (lesson 10.3). }
+    FPrRevealTimes := RevealTimes(FPrText, Timing, Options.LeadInSeconds,
+      FPrDelaySeconds.Value);
     FPrSummary.Caption := Format('%d 文字 / %.1f 秒',
       [Length(FPrText), Length(FPrSamples) / FTxSampleRate]);
   except
     on E: Exception do
     begin
       FPrSamples := nil;
+      FPrRevealTimes := nil;
       FPrSummary.Caption := E.Message;
     end;
   end;
@@ -1541,8 +1585,19 @@ begin
     Speed and noise take effect on the exercise in hand; a change of material
     takes effect at the next one. **What is being listened to must not turn into
     something else without being asked.** }
-  if (Sender = FPrWpm) or (Sender = FPrNoise) then
+  if (Sender = FPrWpm) or (Sender = FPrNoise) or
+     (Sender = FPrDelaySeconds) then
     PrRender;
+  { 遅延表示を切ったら、出ているものを引っ込めます。**答え合わせより前に
+    見えたままにはしません。**
+    Switching the delayed reveal off takes back what it has shown: **nothing
+    stays visible ahead of the marking.** }
+  if (Sender = FPrDelay) and (FPrDelay <> nil) and not FPrDelay.Checked then
+  begin
+    FPrRevealing := False;
+    if (FPrAnswer <> nil) and (FPrResult <> nil) and (FPrResult.Caption = '') then
+      FPrAnswer.Clear;
+  end;
 end;
 
 procedure TMainForm.PrPlayClick(Sender: TObject);
@@ -1557,6 +1612,7 @@ begin
   FPrAnswer.Clear;
   FPrResult.Caption := '';
   FPrMistakes.Caption := '';
+  FPrRevealing := False;
   PrRender;
   FPrAgain.Enabled := Length(FPrSamples) > 0;
   FPrMark.Enabled := FPrText <> '';
@@ -1581,6 +1637,15 @@ begin
     FTxPlaying := False;
     FPlayback.Play(FPrSamples, FTxSampleRate);
     FPrStop.Enabled := True;
+    { 遅らせて出すなら、ここから数えます。鳴らし直すたびに数え直します。
+      **前に鳴らしたぶんの続きから出しては、聴いていない文字が出ます。**
+      The reveal is counted from here and counted again on every replay:
+      continuing from where the previous playing left off would show characters
+      that were never heard. }
+    FPrRevealing := FPrDelay.Checked and (Length(FPrRevealTimes) > 0);
+    FPrRevealFrom := Now;
+    if FPrRevealing then
+      FPrAnswer.Clear;
     SetStatus('', '', '出題を鳴らしています。');
   except
     on E: Exception do
@@ -1592,6 +1657,10 @@ procedure TMainForm.PrStopClick(Sender: TObject);
 begin
   FPlayback.Stop;
   FPrStop.Enabled := False;
+  { 止めたら、出すのも止めます。**聴いていない文字の正解は出しません。**
+    Stopped means stopped: **the answer to what was not heard does not
+    appear.** }
+  FPrRevealing := False;
 end;
 
 { 写したものを突き合わせ、正解と間違いの傾向を出します（要件 FR-F.3・FR-F.5）。
@@ -1613,6 +1682,10 @@ begin
     SetStatus('', '', '先に「出題して鳴らす」を押してください。');
     Exit;
   end;
+  { 答え合わせが済めば、遅らせて出す意味はもうありません。全部を出します。
+    Once the copy is marked there is nothing left to delay; the whole answer
+    goes up. }
+  FPrRevealing := False;
   Score := ScoreCopy(FPrText, FPrCopy.Text);
   FPrAnswer.Text := FPrText;
   FPrResult.Caption := Format(
@@ -1624,6 +1697,51 @@ begin
     FPrMistakes.Caption := '間違いはありません。'
   else
     FPrMistakes.Caption := '間違えやすかった符号: ' + Mistakes;
+end;
+
+{ 遅らせて正解を出します（要件 FR-F.4）。
+
+  0.2 秒ごとに呼ばれ、鳴らし始めからの経過で「見せてよいところまで」を出します。
+  **鳴り終わったあとも続けます。**最後の文字は、鳴り終わってから遅延の秒数だけ
+  経ってようやく出るためです。
+
+  Reveals the answer late (requirement FR-F.4).
+
+  Called every 0.2 seconds, it shows as much as the time since the sound started
+  allows. **It carries on after the sound has ended**: the last character is due
+  only once the delay has passed since it finished sounding. }
+procedure TMainForm.UpdatePracticeReveal;
+var
+  Elapsed: Double;
+  Shown: string;
+begin
+  if not FPrRevealing then
+    Exit;
+  { 音が鳴らなかったのなら、正解を出す理由はありません。**聴いていないものの
+    答えを出すのは、練習ではなく答えを見せているだけです。**再生は別のスレッド
+    で失敗するため、ここで拾います。
+    If the sound never played there is no reason to show the answer: **showing
+    what was not heard is not practice.** The playing fails on a thread of its
+    own, so it is picked up here. }
+  if FPlayback.LastError <> '' then
+  begin
+    FPrRevealing := False;
+    SetStatus('', '', '音を鳴らせませんでした。正解は「答え合わせ」で出せます。');
+    Exit;
+  end;
+  Elapsed := (Now - FPrRevealFrom) * SecsPerDay;
+  Shown := RevealedText(FPrText, FPrRevealTimes, Elapsed);
+  { 同じ文字列を入れ直すと、選択位置と描画が毎回動きます。変わったときだけ。
+    Re-assigning the same text moves the caret and repaints for nothing; only
+    on a change. }
+  if FPrAnswer.Text <> Shown then
+    FPrAnswer.Text := Shown;
+  { 全部出たら数えるのをやめます。**止め時が無ければ、次の出題まで回り続けます。**
+    Once it is all shown there is nothing left to count: without a stopping
+    point this would keep running until the next exercise. }
+  if (Length(FPrRevealTimes) > 0) and
+     (Elapsed >= FPrRevealTimes[High(FPrRevealTimes)]) then
+    FPrRevealing := False;
 end;
 
 function TMainForm.BuildSettingsTab: TTabSheet;
@@ -1834,6 +1952,10 @@ begin
     FPrGroups.Value := ClampInt(Ini.ReadInteger('practice', 'groups', 10), 1, 50);
     FPrWpm.Value := ClampInt(Ini.ReadInteger('practice', 'wpm', 20), 5, 40);
     FPrNoise.Position := ClampInt(Ini.ReadInteger('practice', 'noise', 10), 0, 40);
+    FPrDelay.Checked := Ini.ReadBool('practice', 'delay', True);
+    FPrDelaySeconds.Value := ClampInt(
+      Ini.ReadInteger('practice', 'delay_seconds', REVEAL_DELAY_DEFAULT_SECONDS),
+      0, REVEAL_DELAY_MAX_SECONDS);
     FRxMode.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'mode', 0), 0, 2);
     FRxBand.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'band', 0),
       0, FRxBand.Items.Count - 1);
@@ -1907,6 +2029,8 @@ begin
       Ini.WriteInteger('practice', 'groups', FPrGroups.Value);
       Ini.WriteInteger('practice', 'wpm', FPrWpm.Value);
       Ini.WriteInteger('practice', 'noise', FPrNoise.Position);
+      Ini.WriteBool('practice', 'delay', FPrDelay.Checked);
+      Ini.WriteInteger('practice', 'delay_seconds', FPrDelaySeconds.Value);
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('receive', 'watch', FRxWatch.Text);
       Ini.WriteInteger('receive', 'band', FRxBand.ItemIndex);
@@ -4416,6 +4540,7 @@ begin
     (requirement FR-F.3). }
   if (FPrStop <> nil) and FPrStop.Enabled and not FPlayback.Running then
     FPrStop.Enabled := False;
+  UpdatePracticeReveal;
   { 解析が塞がっていて出せなかった読み直しを、ここで出します（要件 FR-C.3）。
     A re-reading that could not be issued because the analysis was busy is
     issued here (requirement FR-C.3). }

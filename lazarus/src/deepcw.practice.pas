@@ -120,6 +120,61 @@ function ScoreCopy(const Truth, Typed: string): TCopyScore;
   commonest first and only the top few. Empty when there are none. }
 function MistakeSummary(const Score: TCopyScore; Top: Integer = 3): string;
 
+{ 遅延表示（要件 FR-F.4）。
+
+  **「先に自分で写し、後から正解を出す」には、遅らせる時間が要ります。**
+  鳴った直後に正解が出れば、写す前に目が拾ってしまう。遅らせれば、頭の中で
+  読んでから答え合わせができる。
+
+  0 秒は「鳴ったそばから出す」で、これはこれで初心者の練習になります。
+
+  Delayed reveal (requirement FR-F.4).
+
+  **"Copy it yourself first, see the answer afterwards" needs a delay to be set.**
+  An answer that appears the instant the character sounds is picked up by the eye
+  before it is copied; delayed, the character is read in the head first and
+  checked afterwards.
+
+  Zero seconds means "as it sounds", which is itself how a beginner practises. }
+const
+  REVEAL_DELAY_DEFAULT_SECONDS = 5;
+  REVEAL_DELAY_MAX_SECONDS = 60;
+
+{ 出題の各文字を「見せてよい」時刻（音の先頭からの秒）。
+
+  文字が**鳴り終わった時刻**に `DelaySeconds` を足したものです。鳴り始めでは
+  ありません。鳴り終わる前に出せば、聴きながら読むことになります（教訓 10.29 と
+  同じ間違い方です）。
+
+  `LeadInSeconds` は音の頭の無音で、`TCWToneOptions.LeadInSeconds` と同じ値を
+  渡してください。ここを忘れると、表示が音より先に出ます。
+
+  返る配列は `NormalizeText(Text)` の 1 文字ごとに 1 つで、**必ず増加します。**
+  空白のように音を持たない文字は、直前の文字と同じ時刻になります。
+
+  When each character of the exercise may be shown, in seconds from the start of
+  the sound.
+
+  It is the time the character **finishes sounding** plus `DelaySeconds`, not the
+  time it starts: shown before it finishes, it would be read along with the
+  sound rather than copied (the same mistake as lesson 10.29).
+
+  `LeadInSeconds` is the silence before the code, the same value as
+  `TCWToneOptions.LeadInSeconds`; forgotten, the text runs ahead of the sound.
+
+  One entry per character of `NormalizeText(Text)`, **never decreasing**. A
+  character with no sound of its own, a space, takes the time of the one before
+  it. }
+function RevealTimes(const Text: string; const Timing: TCWTiming;
+  LeadInSeconds, DelaySeconds: Double): TDoubleArray;
+
+{ `ElapsedSeconds` の時点で見せてよいところまで。`RevealTimes` が返した配列を
+  そのまま渡してください。
+  As much of the exercise as may be shown at `ElapsedSeconds`, given the array
+  `RevealTimes` returned. }
+function RevealedText(const Text: string; const Times: TDoubleArray;
+  ElapsedSeconds: Double): string;
+
 implementation
 
 const
@@ -424,6 +479,67 @@ begin
     Counts[BestAt] := 0;
     Inc(Shown);
   end;
+end;
+
+function RevealTimes(const Text: string; const Timing: TCWTiming;
+  LeadInSeconds, DelaySeconds: Double): TDoubleArray;
+var
+  Normalized: string;
+  Segments: TCWSegments;
+  I, Index_: Integer;
+  At_, Ends: Double;
+begin
+  Result := nil;
+  Normalized := NormalizeText(Text);
+  if Normalized = '' then
+    Exit;
+  SetLength(Result, Length(Normalized));
+  for I := 0 to High(Result) do
+    Result[I] := 0;
+
+  Segments := TextToSegments(Normalized, Timing);
+  At_ := LeadInSeconds;
+  for I := 0 to High(Segments) do
+  begin
+    Ends := At_ + Segments[I].Duration;
+    Index_ := Segments[I].TextIndex;
+    { 語間（TextIndex = 0）は、どの文字のものでもありません。
+      A word gap belongs to no character. }
+    if (Index_ >= 1) and (Index_ <= Length(Result)) then
+      if Ends > Result[Index_ - 1] then
+        Result[Index_ - 1] := Ends;
+    At_ := Ends;
+  end;
+
+  { 音を持たない文字（空白）は、直前の文字と同じ時刻にします。そのうえで、
+    **戻らないことを保証します。**戻れば、いちど出た文字が消えます。
+    A character with no sound of its own takes the time of the one before it,
+    and the whole sequence is then forced not to go backwards: **a time that
+    went back would take away a character already shown.** }
+  for I := 1 to High(Result) do
+    if Result[I] < Result[I - 1] then
+      Result[I] := Result[I - 1];
+  for I := 0 to High(Result) do
+    Result[I] := Result[I] + DelaySeconds;
+end;
+
+function RevealedText(const Text: string; const Times: TDoubleArray;
+  ElapsedSeconds: Double): string;
+var
+  Normalized: string;
+  Count, I: Integer;
+begin
+  Normalized := NormalizeText(Text);
+  Count := 0;
+  for I := 0 to High(Times) do
+  begin
+    if I >= Length(Normalized) then
+      Break;
+    if Times[I] > ElapsedSeconds then
+      Break;
+    Count := I + 1;
+  end;
+  Result := Copy(Normalized, 1, Count);
 end;
 
 end.

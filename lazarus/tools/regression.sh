@@ -12,7 +12,8 @@
 # passed. This runs them together and fails as a whole if any one fails.
 #
 #   使い方 / usage:  tools/regression.sh [--quick]
-#     --quick  時間のかかる測定（scale・soak・track・wide）を飛ばします。
+#     --quick  時間のかかる測定（sweep・shift・image・bandwidth・scale・
+#              soak・track・wide）を飛ばします。
 #              飛ばしたことは最後に明示します。
 set -u
 
@@ -87,9 +88,19 @@ else
   step "cw_tune（同調・検出・多局・形・待ち符号・読み直し）" \
     ./cli/cw_tune --tests stream,correctness,overload,review,detect,multi,shape,callsign,watch,recheck
   if [ $QUICK -eq 1 ]; then
+    skip "cw_tune（同調の根拠）" "--quick"
     skip "cw_tune（規模・追跡・広帯域）" "--quick"
     skip "cw_tune（長時間・メモリ）" "--quick"
   else
+    # 同調・イメージ・帯域幅の測定は、付録 E.1〜E.3 の設計判断そのものです。
+    # **表を出すだけで一度も走らせていませんでした。**判定を付けたので、
+    # ここへ入れます（約 84 秒）。
+    # The tuning, image and bandwidth measurements are the design decisions of
+    # appendix E.1-E.3 themselves, and **they printed tables while never being
+    # run here at all.** Now that they reach a verdict, they belong in the
+    # regression (about 84 seconds).
+    step "cw_tune（同調の根拠: 掃引・偏移・イメージ・帯域幅）" \
+      ./cli/cw_tune --tests sweep,shift,image,bandwidth
     step "cw_tune（規模・追跡・広帯域）" \
       ./cli/cw_tune --tests scale,track,wide
     # 長時間の走行は**別のプロセスで**行います。規模の測定は 24 局ぶんの
