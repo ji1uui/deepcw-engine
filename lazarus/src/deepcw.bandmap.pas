@@ -57,24 +57,28 @@ const
 type
   { 呼出符号をどこまで信じてよいか。要件 FR-K の四段に対応します。
 
-    **第 3 段と第 4 段は、この版では設定されません。**手元の一覧との照合も実在の
-    確認も、まだ実装がないためです。段を先に用意してあるのは、一覧の見せ方
-    （どこまでを事実として出すか）が段に直結しており、あとから段を挿し込むと
-    表示の決めごとを作り直すことになるからです。
+    **第 3 段は、自局の交信記録で満たします**（要件 FR-K.11）。交信した相手は
+    確かに実在します。しかも**通信もプライバシーの代償も要りません。**手元の
+    一覧との照合（FR-K.9）と実在の確認（FR-K.3〜K.6）は、同じ第 3・第 4 段へ
+    あとから合流します。どの資料で満たしたのかは `TrustSource` に入ります。
+
+    **第 4 段は、この版では設定されません。**
 
     How far a call sign may be trusted, matching the four stages of requirement
     FR-K.
 
-    **The third and fourth stages are never set in this version**, there being no
-    implementation yet of the local list or of confirming existence. The stages
-    exist already because how the list presents a call sign — how much of it is
-    offered as fact — follows directly from them, and inserting a stage later
-    would mean redoing those decisions. }
+    **The third stage is met by the operator's own contact log**
+    (requirement FR-K.11): a station that has been worked certainly exists, and
+    **it costs neither traffic nor privacy to know it.** A locally held roster
+    (FR-K.9) and an outside check (FR-K.3-K.6) join the same two stages later;
+    what filled the stage is named in `TrustSource`.
+
+    **The fourth stage is never set in this version.** }
   TCallsignTrust = (
     ctNone,      { 候補が無い / no candidate }
     ctShape,     { 形が規則に合う。1 度きり / the shape fits, seen once }
     ctAgreed,    { 同じ符号が複数回出た / the same call sign came out repeatedly }
-    ctInRoster,  { 手元の一覧にある（未実装）/ in a list held locally (not built) }
+    ctInRoster,  { 手元の資料にある / in material held locally }
     ctVerified); { 実在を確認した（未実装）/ confirmed to exist (not built) }
 
   { 一覧の 1 行。/ One row of the list. }
@@ -154,6 +158,21 @@ type
       for is worse than staying silent. The measurement in appendix T.2 found
       that requiring it costs no misses. }
     Watched: string;
+
+    { 第 3 段を満たした資料の名前（要件 FR-K.11・FR-K.9）。空なら第 3 段では
+      ありません。
+
+      **どの資料で確かめたのかを残します。**「一覧にあり」とだけ出すと、
+      自分の交信記録で確かめたのか、配られた一覧にあったのかが分かりません。
+      根拠の強さが違うので、そこは同じ言葉にしません。
+
+      What material met the third stage (requirements FR-K.11, FR-K.9); empty
+      when the stage was not reached.
+
+      **Which material confirmed it is kept.** Shown only as "in a list", there
+      would be no telling one's own log from a roster someone distributed, and
+      those are not evidence of the same strength. }
+    TrustSource: string;
   end;
   TBandEntries = array of TBandEntry;
 
@@ -184,6 +203,10 @@ function BuildBandEntries(const Logs: TStationLogs; NowSeconds: Double;
 { 確からしさを、運用者に見せる短い言葉にします。
   Puts the trust into the few words shown to the operator. }
 function TrustCaption(Trust: TCallsignTrust): string;
+{ 何で確かめたのかまで含む表示（要件 FR-K.11）。
+  The same, naming what confirmed it (requirement FR-K.11). }
+function TrustCaption(const Entry: TBandEntry): string;
+
 
 { 1 行に出す名前。密集・確からしさ・交信済み・待っていた局の印まで含みます。
 
@@ -263,6 +286,21 @@ begin
     Result[I].Worked := Assigned(Worked) and
       (Result[I].Trust >= ctAgreed) and Worked(Result[I].Callsign);
 
+    { **交信した相手は、確かに実在します**（要件 FR-K.11）。自分の記録は、
+      配られた一覧よりも確かで、通信もプライバシーの代償も要りません。
+      記録が無ければ何も変わりません——**無いことを根拠にはしません。**
+
+      **A station that has been worked certainly exists** (requirement FR-K.11).
+      One's own record is better evidence than a distributed roster and costs
+      neither traffic nor privacy. With no log nothing changes: **its silence is
+      never taken as evidence.** }
+    Result[I].TrustSource := '';
+    if Result[I].Worked then
+    begin
+      Result[I].Trust := ctInRoster;
+      Result[I].TrustSource := '交信記録';
+    end;
+
     { 待っている符号との照合も、同じ確かさの条件で行います。条件を 2 つに分けると、
       一覧に出ていない符号で知らせが鳴りうることになります。
       The watch is matched on the same trust condition. Two different conditions
@@ -310,11 +348,23 @@ begin
   case Trust of
     ctShape: Result := '確認中';
     ctAgreed: Result := '一致';
-    ctInRoster: Result := '一覧にあり';
+    ctInRoster: Result := '資料あり';
     ctVerified: Result := '実在確認';
   else
     Result := '';
   end;
+end;
+
+function TrustCaption(const Entry: TBandEntry): string;
+begin
+  Result := TrustCaption(Entry.Trust);
+  { **何で確かめたのかまで出します。**「資料あり」だけでは、自分が交信した
+    相手なのか、誰かが配った一覧に載っていただけなのかが分かりません。
+    **What confirmed it is shown too**: "in material" alone would not say
+    whether this is a station one has worked or merely a name on a list somebody
+    handed out. }
+  if (Entry.TrustSource <> '') and (Entry.Trust = ctInRoster) then
+    Result := Entry.TrustSource + 'あり';
 end;
 
 end.

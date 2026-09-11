@@ -25,7 +25,7 @@ uses
   DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder,
   DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.Callsign,
-  DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, FistCases;
+  DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics, FistCases;
 
 var
   Meta: TDeepCWMetadata;
@@ -1503,6 +1503,151 @@ begin
   end;
 end;
 
+
+{ 不具合報告に添える診断情報の控え（要件 FR-G.5）。
+
+  **受入基準は「個人情報・音声内容を含まない」ことです。**受信した文章や
+  交信記録の中身は**そもそも控えに入れません**ので、ここで確かめるのは
+  もう 1 つのほう——**ファイルの場所に残る利用者の名前**を伏せることです。
+
+  The copy of the diagnostics for a bug report (FR-G.5). **The criterion is that
+  it holds no personal data and no audio.** What was received and what the log
+  holds are **never put in**, so what is checked here is the other half: that the
+  account name the paths carry is masked. }
+procedure TestDiagnostics;
+var
+  Report: string;
+begin
+  WriteLn;
+  WriteLn('DeepCW.Diagnostics（要件 FR-G.5）');
+
+  Check('利用者の場所を隠す',
+    MaskHome('設定ファイル: /home/hanako/.config/deepcw.ini', '/home/hanako') =
+      '設定ファイル: ~/.config/deepcw.ini',
+    MaskHome('設定ファイル: /home/hanako/.config/deepcw.ini', '/home/hanako'));
+  { 末尾の区切りの有無で結果が変わってはいけません。
+    A trailing separator must not change the answer. }
+  Check('末尾に区切りがあっても同じ',
+    MaskHome('/home/hanako/audio', '/home/hanako/') = '~/audio',
+    MaskHome('/home/hanako/audio', '/home/hanako/'));
+  Check('場所そのものも隠す',
+    MaskHome('家は /home/hanako です', '/home/hanako') = '家は ~ です',
+    MaskHome('家は /home/hanako です', '/home/hanako'));
+  Check('何度出てきても隠す',
+    Pos('hanako', MaskHome('/home/hanako/a と /home/hanako/b', '/home/hanako')) = 0,
+    MaskHome('/home/hanako/a と /home/hanako/b', '/home/hanako'));
+  Check('関わりのない文は変えない',
+    MaskHome('PortAudio: 19.6.0', '/home/hanako') = 'PortAudio: 19.6.0', '');
+  Check('場所が分からなければ何もしない',
+    MaskHome('/home/hanako/x', '') = '/home/hanako/x', '');
+
+  Report := BuildDiagnosticReport(
+    'エンジン: ONNX Runtime 1.29.0' + LineEnding +
+    '設定ファイル: /home/hanako/.config/deepcw.ini',
+    '/home/hanako', EncodeDate(2026, 9, 11) + EncodeTime(14, 5, 6, 0));
+  { **何が入っていないかを、控え自身が言うこと。**受け取った側が聞かずに
+    済み、渡す側が安心して貼れます。
+    **The copy says for itself what it does not hold**, so that the receiver
+    need not ask and the sender can paste it without worrying. }
+  Check('控えは、何が入っていないかを断っている',
+    Pos('受信した文章', Report) > 0, Copy(Report, 1, 60));
+  Check('控えに日時が入る（地域設定を通さない形）',
+    Pos('2026-09-11 14:05:06', Report) > 0, Copy(Report, 1, 60));
+  Check('控えの中身も隠れている', Pos('hanako', Report) = 0, Report);
+  Check('控えに診断情報そのものが入る',
+    Pos('ONNX Runtime 1.29.0', Report) > 0, '');
+end;
+
+
+{ デコーダが聴いている音（要件 FR-A.6）。
+
+  モニタ再生が鳴らすのは**生の受信音ではありません。**同調して帯域を絞った
+  あとの音、つまり復号へ渡すのとまったく同じものです。ここで確かめるのは、
+  その「同じもの」が本当に同調と帯域制限を受けているかです。
+
+  **これが生の音と変わらないなら、聴いても何も分かりません。**機械が読み違えた
+  ときに、機械に何が届いていたのかを耳で確かめる、という目的が果たせません。
+
+  What the decoder is listening to (requirement FR-A.6).
+
+  The monitor playback does not sound the raw input: it sounds the audio after
+  tuning and band limiting, which is the very thing handed to the decode. What
+  is checked here is that this thing really is tuned and really is limited.
+
+  **Were it no different from the raw audio, listening to it would tell nobody
+  anything** -- and hearing what reached the machine when it misread something
+  is the whole purpose. }
+procedure TestMonitorAudio;
+const
+  RATE = 8000;
+  WANTED_HZ = 1200;
+  NEIGHBOUR_HZ = 700;
+var
+  Wanted, Neighbour, Prepared: TSingleArray;
+  Timing: TCWTiming;
+  Options: TCWToneOptions;
+  Quiet, Loud: Double;
+
+  function Rms(const Samples: TSingleArray): Double;
+  var
+    I: Integer;
+  begin
+    Result := 0;
+    if Length(Samples) = 0 then
+      Exit;
+    for I := 0 to High(Samples) do
+      Result := Result + Sqr(Samples[I]);
+    Result := Sqrt(Result / Length(Samples));
+  end;
+
+  function Tone(Hz: Double): TSingleArray;
+  begin
+    Timing := DefaultTiming;
+    Timing.CharWpm := 20;
+    Timing.TextWpm := 20;
+    Options := DefaultToneOptions;
+    Options.SampleRate := RATE;
+    Options.ToneHz := Hz;
+    Result := TextToPCM('CQ DE JA1ABC K', Timing, Options);
+  end;
+
+begin
+  WriteLn;
+  WriteLn('デコーダが聴いている音（要件 FR-A.6）');
+  Wanted := Tone(WANTED_HZ);
+  Neighbour := Tone(NEIGHBOUR_HZ);
+
+  { 同調した音は、モデルが待っている音程へ寄る。
+    The tuned signal lands on the pitch the model expects. }
+  Prepared := PrepareForModel(Wanted, RATE, Meta.SampleRate, WANTED_HZ,
+    tbAuto, True);
+  Check('同調した音は、モデルの音程へ寄っている',
+    Abs(DetectToneHz(Prepared, Meta.SampleRate) - TUNER_TARGET_TONE_HZ) <= 8,
+    Format('(%.0f Hz / 目標 %.0f Hz)',
+      [DetectToneHz(Prepared, Meta.SampleRate), TUNER_TARGET_TONE_HZ]));
+  Check('標本化周波数はモデルのものになる',
+    Length(Prepared) > 0, Format('(%d 標本)', [Length(Prepared)]));
+  Loud := Rms(Prepared);
+
+  { 500 Hz 離れた隣の局は、帯域の外なので小さくなる。
+    A neighbour 500 Hz away falls outside the passband and comes out small. }
+  Prepared := PrepareForModel(Neighbour, RATE, Meta.SampleRate, WANTED_HZ,
+    tbAuto, True);
+  Quiet := Rms(Prepared);
+  Check('帯域の外の局は小さくなる', Quiet < Loud / 3,
+    Format('(隣 %.4f / 本命 %.4f)', [Quiet, Loud]));
+
+  { 同調していないときは音程を動かさない。**動かしてしまうと、同調していない
+    のに同調したかのように聞こえます。**
+    Untuned, the pitch is left alone: **moved anyway, it would sound tuned when
+    it is not.** }
+  Prepared := PrepareForModel(Wanted, RATE, Meta.SampleRate, 0, tbAuto, True);
+  Check('同調していなければ音程はそのまま',
+    Abs(DetectToneHz(Prepared, Meta.SampleRate) - WANTED_HZ) <= 8,
+    Format('(%.0f Hz / 受信機のまま %.0f Hz)',
+      [DetectToneHz(Prepared, Meta.SampleRate), Double(WANTED_HZ)]));
+end;
+
 procedure TestRecorder;
 const
   WAV_RATE = 8000;
@@ -1874,6 +2019,37 @@ begin
   Check('記録が無ければ交信済みと言わない', not Entries[0].Worked);
   Entries := BuildBandEntries(Logs, 10, @Answers.Always);
   Check('記録にあれば交信済みと分かる', Entries[0].Worked);
+
+  { 自局の交信記録を、確からしさの材料に使う（要件 FR-K.11）。**交信した相手は
+    確かに実在します。**しかも通信もプライバシーの代償も要りません。
+    The operator's own log as evidence (requirement FR-K.11): **a station that
+    has been worked certainly exists**, and knowing it costs neither traffic nor
+    privacy. }
+  Check('交信した相手は、実在の材料になる', Entries[0].Trust = ctInRoster,
+    TrustCaption(Entries[0].Trust));
+  Check('何で確かめたのかが分かる', Entries[0].TrustSource = '交信記録',
+    Entries[0].TrustSource);
+  Check('表示にも、何で確かめたのかが出る',
+    TrustCaption(Entries[0]) = '交信記録あり', TrustCaption(Entries[0]));
+  { **記録が無ければ使いません。**「記録に無い」は「実在しない」ではありません。
+    **With no log it is not used**: absence from a log is not absence from the
+    air. }
+  Entries := BuildBandEntries(Logs, 10, nil);
+  Check('記録が無ければ、確からしさは上げない', Entries[0].Trust = ctAgreed,
+    TrustCaption(Entries[0]));
+  Check('記録が無ければ、確かめた資料も無い', Entries[0].TrustSource = '',
+    Entries[0].TrustSource);
+  { 確かでない符号は、記録に当たっても上げません。**1 文字違いの別人の記録に
+    当たっているかもしれないためです。**
+    An uncertain call sign is not raised even on a match: **the match may be
+    with whoever is one letter away.** }
+  SetLength(Logs, 1);
+  Logs[0] := LogOf('CQ DE JH2XYZ K ', 1000, 0.99);
+  Entries := BuildBandEntries(Logs, 10, @Answers.Always);
+  Check('確かでない符号は、記録に当たっても上げない',
+    Entries[0].Trust = ctShape, TrustCaption(Entries[0]));
+  SetLength(Logs, 1);
+  Logs[0] := LogOf('CQ CQ DE JH2XYZ JH2XYZ K ', 1000, 0.99);
 
   { 待っている符号の照合も、交信済みと同じ確かさの条件で行うこと（要件 FR-I.4）。
     条件が食い違うと、一覧に出ていない符号で知らせが鳴ります。
@@ -2843,6 +3019,8 @@ begin
     TestRecorder;
     TestFist;
     TestFistLog;
+    TestDiagnostics;
+    TestMonitorAudio;
   finally
     Meta.Free;
   end;

@@ -35,7 +35,7 @@ uses
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
-  DeepCW.FistLog,
+  DeepCW.FistLog, DeepCW.Diagnostics,
   TranscriptView, WaterfallView, BandMapView;
 
 type
@@ -372,6 +372,8 @@ type
     FRxRate: TLabel;
     FRxTuneInfo: TLabel;
     FRxTuneClear: TButton;
+    { 復調音のモニタ再生（要件 FR-A.6） / monitor playback of the decoded audio }
+    FRxMonitor: TButton;
     FRxTrack: TCheckBox;
     FRxBusy: TLabel;
     FRxReplay: TButton;
@@ -455,6 +457,7 @@ type
     FFtSamples: TSingleArray;
     FFtMeasured: TFistMeasurement;
     FFtLost: Boolean;
+    FSetCopyInfo: TButton;
     FSettingsSheet: TTabSheet;
     FSetRecord: TCheckBox;
     FSetRecordInfo: TLabel;
@@ -479,6 +482,7 @@ type
     procedure PrStopClick(Sender: TObject);
     procedure PrMarkClick(Sender: TObject);
     procedure UpdatePracticeReveal;
+    procedure SetCopyInfoClick(Sender: TObject);
     function BuildFistTab: TTabSheet;
     function FistLogFileName: string;
     function FistBasis: TFistStandard;
@@ -610,6 +614,7 @@ type
     function SelectedBandwidth: TTunerBandwidth;
     procedure RxTuneChanged(Sender: TObject);
     procedure RxTuneClearClick(Sender: TObject);
+    procedure RxMonitorClick(Sender: TObject);
     procedure RxTrackChanged(Sender: TObject);
     procedure UpdateTuneInfo;
 
@@ -1261,6 +1266,14 @@ begin
   AddLabel(TuneTools, '読みたい信号をクリック。ホイールで微調整。', 6, 7);
   FRxTuneClear := AddButton(TuneTools, '同調を解除', 0, 2, 110, @RxTuneClearClick);
   Stretch(FRxTuneClear, alRight);
+  { **デコーダが聴いている音**を、そのまま鳴らします（要件 FR-A.6）。生の受信音
+    ではありません。同調して帯域を絞ったあとの音なので、**機械が読み違えたとき
+    に、機械に何が届いていたのかが耳で分かります。**
+    Plays **what the decoder is listening to** (requirement FR-A.6), not the raw
+    input: the audio after tuning and band limiting, so that when the machine
+    reads something wrongly, **what reached the machine can be heard.** }
+  FRxMonitor := AddButton(TuneTools, '復調音を聴く', 0, 2, 120, @RxMonitorClick);
+  Stretch(FRxMonitor, alRight);
   { 動いていく信号を追いかけるかどうか。既定は有効です。周波数を決め打ちで
     見張りたい場合のために、切れるようにしてあります（要件 FR-D.7）。
 
@@ -1839,6 +1852,24 @@ end;
   Nothing is transmitted. The transceiver's monitor tone comes in through the
   same input as reception (FR-H.1), which works into a dummy load or with the
   monitor alone. }
+{ 診断情報を控えとして写します（要件 FR-G.5）。
+
+  **写す前に作り直します。**設定タブを開いたまま時間が経っていることがあり、
+  古い数字を貼っても助けになりません。
+  Copies the diagnostics (requirement FR-G.5). **They are rebuilt first**: the
+  tab may have been open for a while, and stale figures are no help to anyone. }
+procedure TMainForm.SetCopyInfoClick(Sender: TObject);
+var
+  Report: string;
+begin
+  RefreshInfo;
+  Report := BuildDiagnosticReport(FSetInfo.Lines.Text, GetUserDir, Now);
+  Clipboard.AsText := Report;
+  SetStatus('', '', Format('診断情報を %d 行コピーしました。' +
+    '不具合報告にそのまま貼れます。',
+    [Length(FSetInfo.Lines.Text.Split([LineEnding])) + 3]));
+end;
+
 function TMainForm.BuildFistTab: TTabSheet;
 var
   Sheet: TTabSheet;
@@ -2431,6 +2462,17 @@ begin
     LocateDataFile('model.onnx.json'));
   FSetRuntime := AddPathEdit(Advanced, 'ONNX Runtime ライブラリ（空欄なら自動検索）', '');
   FSetPortAudio := AddPathEdit(Advanced, 'PortAudio ライブラリ（空欄なら自動検索）', '');
+
+  { 不具合報告に添えられるように、まとめて写せるようにします（要件 FR-G.5）。
+    **画面を撮って送るより、貼れるほうが正確です。**
+    So that it can be attached to a bug report (requirement FR-G.5): **pasting
+    is more accurate than sending a picture of the screen.** }
+  Row := AddTopPanel(Advanced, 40);
+  FSetCopyInfo := AddButton(Row, '診断情報をコピー', 12, 4, 180,
+    @SetCopyInfoClick);
+  AddLabel(Row,
+    '受信した文章・交信記録の中身・待っている符号は入りません。' +
+    'ファイルの場所の利用者名は ~ に置き換えます。', 200, 12);
 
   AddTopLabel(Advanced, '診断情報');
   FSetInfo := TMemo.Create(Advanced);
@@ -3915,7 +3957,7 @@ end;
   (requirement FR-J.3), in one gesture. }
 procedure TMainForm.RxStationChosen(Sender: TObject; Id: Int64; Hz: Double);
 var
-  Picked: string;
+  Picked, Evidence: string;
   I: Integer;
 begin
   { 選んだ行の呼出符号を控えます。作り直さずに控えの一覧から引くのは、速いから
@@ -3926,9 +3968,21 @@ begin
     operator pressed.** Rebuilding could yield a different one, from characters
     that arrived between the press and the move. }
   Picked := '';
+  Evidence := '';
   for I := 0 to High(FBandEntries) do
     if (FBandEntries[I].Id = Id) and (FBandEntries[I].Trust >= ctAgreed) then
+    begin
       Picked := FBandEntries[I].Callsign;
+      { 何でその符号を信じているのかを添えます（要件 FR-K.11）。**交信した相手
+        なら、実在は確かです。**根拠を言わずに確からしさだけ上げるのは、
+        黙って断定するのと同じです。
+        What the call sign is trusted on is said with it (requirement FR-K.11):
+        **a station one has worked certainly exists.** Raising the trust without
+        naming the reason would be asserting it silently. }
+      if FBandEntries[I].TrustSource <> '' then
+        Evidence := Format('（%s にあり＝実在は確かです）',
+          [FBandEntries[I].TrustSource]);
+    end;
   FRxWaterfall.TuneHz := Hz;
   FRxMode.ItemIndex := 0;
   FMode := rmContact;
@@ -3943,8 +3997,8 @@ begin
   if FStream <> nil then
     FStream.TuneHz := FRxWaterfall.TuneHz;
   UpdateTuneInfo;
-  SetStatus('', '', Format('%.0f Hz の局に同調し、交信モードへ移りました。',
-    [FRxWaterfall.TuneHz]));
+  SetStatus('', '', Format('%.0f Hz の局に同調し、交信モードへ移りました。%s%s',
+    [FRxWaterfall.TuneHz, Picked, Evidence]));
 end;
 
 { ---- 待っている呼出符号（要件 FR-I.4） ---- }
@@ -4655,9 +4709,16 @@ begin
     Only a response past the target (requirement NFR-1.3) is recorded in the
     diagnostics: **while it keeps up, nothing is said.** Writing every time would
     bury the one that was late. }
+  { **読み直した語そのものは残しません。**診断情報は不具合報告に添えるもので、
+    そこに受信した文字が入れば、報告するたびに交信の中身を配ることになります
+    （要件 FR-G.5・NFR-6）。遅かったのがどの語かは、長さで足ります。
+    **The word itself is not kept.** The diagnostics are made to be attached to a
+    bug report, and received characters in them would hand out the content of a
+    contact with every report (requirements FR-G.5, NFR-6). Which word was slow
+    is answered well enough by how long it was. }
   if Elapsed > 1000 then
     LogDiagnostic('語の読み直し',
-      Format('%d ms (target 1000 ms): %s', [Elapsed, FRecheckSent]));
+      Format('%d ms (target 1000 ms): %d 文字', [Elapsed, Length(FRecheckSent)]));
   { 出す場所は状態表示の案内欄です。**聴き直しの欄は、既定の窓の幅では右端の
     外にあって見えません。**見えない場所に答えを書くのは、答えないのと同じです。
     It goes in the status bar's guidance panel: **the replay label sits beyond
@@ -4771,6 +4832,81 @@ begin
     FRxWaterfall.HalfWidthHz := 0;
   end;
   FRxTuneClear.Enabled := FRxWaterfall.TuneHz > 0;
+end;
+
+{ デコーダが聴いている音を鳴らします（要件 FR-A.6）。
+
+  **生の受信音ではありません。**同調・帯域制限・標本化周波数の変換まで、
+  復号に渡すのとまったく同じ整形（`PrepareForDecoder`）を通した音です。
+  経路が同じでなければ「機械が聴いている音」とは言えないので、**別の整形を
+  書かず、復号と同じ 1 か所を通します**（教訓 10.11）。
+
+  直近の数秒だけを鳴らします。長く鳴らしても、確かめたいのは「いま届いて
+  いる音」だからです。
+
+  Plays what the decoder is listening to (requirement FR-A.6).
+
+  **Not the raw input**: the audio after the tuning, the band limiting and the
+  rate conversion -- exactly the preparation the decode receives
+  (`PrepareForDecoder`). It could not be called what the machine hears unless it
+  came through the same path, so **no second preparation is written here**
+  (lesson 10.11).
+
+  Only the last few seconds sound: what is being checked is what is arriving
+  now. }
+procedure TMainForm.RxMonitorClick(Sender: TObject);
+const
+  MONITOR_SECONDS = 5.0;
+var
+  Audio, Prepared: TSingleArray;
+  GotFrom, GotTo, Latest: Double;
+  Rate: Integer;
+begin
+  if (FHistory = nil) or (FReviewPlay = nil) then
+    Exit;
+  if not EnsureDecoder then
+    Exit;
+  Latest := FHistory.LatestSeconds;
+  Audio := FHistory.Extract(Max(0, Latest - MONITOR_SECONDS), Latest,
+    GotFrom, GotTo, Rate);
+  if Length(Audio) = 0 then
+  begin
+    SetStatus('', '', '鳴らせる音がまだありません。受信を始めてからお試しください。');
+    Exit;
+  end;
+  Prepared := PrepareForDecoder(Audio, Rate);
+  if Length(Prepared) = 0 then
+  begin
+    SetStatus('', '', '復調音を作れませんでした。');
+    Exit;
+  end;
+  if FPlayback.Running then
+  begin
+    FPlayback.Stop;
+    FTxPlaying := False;
+  end;
+  FReviewPlay.Stop;
+  FReviewPlay.Play(Prepared, FDecoder.Metadata.SampleRate);
+  if FReviewPlay.LastError <> '' then
+  begin
+    LogDiagnostic('復調音', FReviewPlay.LastError);
+    SetStatus('', '', StatusLine(FReviewPlay.LastError));
+    Exit;
+  end;
+  FRxReplayStop.Enabled := True;
+  { 何を鳴らしているのかを言います。**「もう一度聴く」と同じ音だと思われると、
+    聴き比べの意味が無くなります。**
+    What is sounding is said: **mistaken for the same audio as "listen again",
+    the comparison would lose its point.** }
+  if FRxWaterfall.TuneHz > 0 then
+    SetStatus('', '', Format(
+      'デコーダが聴いている音を %.1f 秒鳴らしています（%.0f Hz を %.0f Hz へ寄せ、帯域 ±%.0f Hz）。',
+      [GotTo - GotFrom, FRxWaterfall.TuneHz, TUNER_TARGET_TONE_HZ,
+       BandwidthHalfWidth(SelectedBandwidth)]))
+  else
+    SetStatus('', '', Format(
+      'デコーダが聴いている音を %.1f 秒鳴らしています（同調していないので、受信機の音程のままです）。',
+      [GotTo - GotFrom]));
 end;
 
 procedure TMainForm.RxTuneClearClick(Sender: TObject);
