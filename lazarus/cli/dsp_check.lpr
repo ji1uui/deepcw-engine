@@ -25,7 +25,7 @@ uses
   DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder,
   DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.Callsign,
-  DeepCW.Morse;
+  DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, FistCases;
 
 var
   Meta: TDeepCWMetadata;
@@ -1054,6 +1054,453 @@ begin
   Check('出題が無ければ時刻も無い', Length(RevealTimes('', Timing, LEAD_IN, 0)) = 0,
     '');
   Check('時刻が無ければ何も出ない', RevealedText('', nil, 100) = '', '');
+end;
+
+
+{ 送信訓練の測定と採点（要件 FR-H.4〜H.8）。
+
+  **ここで確かめたいのは「うまくない符号を測れること」です。**うまい符号だけを
+  測って通しても、直したい相手である下手な符号が測れるかは分かりません
+  （付録 A.2 の 2）。合成した 6 つの技量は、付録 A が測ったものと同じです。
+
+  Measurement and scoring for send practice (FR-H.4 to H.8).
+
+  **What matters here is that sending which is not good can be measured.**
+  Passing on good sending alone says nothing about the hand that most needs the
+  help (appendix A.2, finding 2). The six synthesised hands are the ones
+  appendix A measured. }
+procedure TestFist;
+const
+  RATE = 8000;
+  { 付録 A と同じ長さの課題文（68 文字の交信）。**短い課題文では、点数の振れが
+    技量の違いより大きくなります。**要素が 65 個しかなければ、ばらつきの
+    見積りそのものがばらつきます。
+    The same length of text as appendix A, a contact of 68 characters. **With a
+    short text the scatter of the score outgrows the difference between hands**:
+    with only 65 elements, the estimate of the spread is itself unsteady. }
+  TEXT = 'CQ CQ DE JA1ABC JA1ABC K JA1ABC DE JH2XYZ UR 599 599 QTH NAGOYA BK';
+var
+  Hands: TSendings;
+  Noisy: TSending;
+  Audio: TSingleArray;
+  M, M2, Free_: TFistMeasurement;
+  Score, Bug: TFistScore;
+  Own: TFistTarget;
+  Scores: array of Double;
+  I, Falling: Integer;
+  Sum, Sd, Mean_, Worst: Double;
+  Lowest: string;
+
+  { 課題文に含まれる短点と長点の数。/ How many dits and dahs the text holds. }
+  function ElementsIn(const Text: string): Integer;
+  var
+    Code: string;
+    K: Integer;
+  begin
+    Result := 0;
+    Code := TextToMorseCode(Text);
+    for K := 1 to Length(Code) do
+      if (Code[K] = '.') or (Code[K] = '-') then
+        Inc(Result);
+  end;
+
+  { それぞれの技量を、**その技量の基準で**採点します（要件 FR-H.7）。
+    ファンズワースを標準の間隔で採点すれば、間隔の点は当然低く出ます。
+    それは下手なのではなく、別の送り方だからです（設計原則：個性を減点しない）。
+    Each hand is scored **against its own basis** (FR-H.7). Marked against the
+    standard spacing, Farnsworth loses points on spacing as a matter of course
+    -- not for being worse, but for being a different way of sending. }
+  function BasisFor(const Hand: TSending): TFistStandard;
+  begin
+    if Pos('ファンズワース', Hand.Name) > 0 then
+      Result := fsFarnsworth
+    else if Pos('バグキー', Hand.Name) > 0 then
+      Result := fsBug
+    else
+      Result := fsStandard;
+  end;
+
+  function ScoreOf(const Hand: TSending; Seed: Integer;
+    out Measured: TFistMeasurement): TFistScore;
+  var
+    Sound: TSingleArray;
+  begin
+    Sound := SendText(TEXT, Hand, RATE, Seed);
+    Measured := MeasureAgainstText(Sound, RATE, Hand.ToneHz, TEXT);
+    Result := ScoreFist(Measured, BasisFor(Hand), Own, -1);
+  end;
+
+begin
+  WriteLn;
+  WriteLn('DeepCW.Fist（要件 FR-H.4〜H.8）');
+  Own := Default(TFistTarget);
+  Hands := AppendixCases;
+
+  { ---- 測定 ---- }
+  Audio := SendText(TEXT, Hands[0], RATE, 4242);
+  M := MeasureAgainstText(Audio, RATE, Hands[0].ToneHz, TEXT);
+  Check('課題文と突き合わせて測れる', M.Ok, M.Note);
+  { 雑音のある入力でも測れること。**音声装置から入ってくる音に雑音が無い
+    ことはありません。**
+    Measured through noise as well: **nothing arriving from a sound card is
+    ever clean.** }
+  Noisy := Hands[0];
+  Noisy.Noise := 0.05;
+  M2 := MeasureAgainstText(SendText(TEXT, Noisy, RATE, 4242), RATE,
+    Noisy.ToneHz, TEXT);
+  WriteLn(Format('  雑音のある入力: 短点 %.2f ms / 長短比 %.3f / 文字間 %.3f',
+    [M2.DitSeconds * 1000, M2.Ratio, M2.CharRatio]));
+  Check('雑音があっても課題文と突き合わせて測れる',
+    M2.Ok and (Abs(M2.DitSeconds - 1.2 / Noisy.Wpm) / (1.2 / Noisy.Wpm) <= 0.10)
+    and (Abs(M2.CharRatio - 3) / 3 <= 0.10),
+    Format('(%.2f ms / 文字間 %.2f) %s',
+      [M2.DitSeconds * 1000, M2.CharRatio, M2.Note]));
+  { 符号の数は課題文から数えます。**書き写した数を当てにすると、課題文を
+    変えたときに、試験のほうが間違えます。**
+    The count comes from the text: **a number copied into the test is the thing
+    that goes wrong when the text changes.** }
+  Check('要素の数が課題文どおり',
+    M.Stats[ekDit].Count + M.Stats[ekDah].Count = ElementsIn(TEXT),
+    Format('(短点 %d / 長点 %d / 課題文 %d)',
+      [M.Stats[ekDit].Count, M.Stats[ekDah].Count, ElementsIn(TEXT)]));
+
+  { **送出値を 10% 以内で復元できること**が受入基準です（要件 FR-H.5）。
+    The acceptance criterion is recovering what was sent to within ten per cent
+    (FR-H.5). }
+  Check('短点の長さを 10% 以内で測る',
+    Abs(M.DitSeconds - 1.2 / Hands[0].Wpm) / (1.2 / Hands[0].Wpm) <= 0.10,
+    Format('(%.1f ms / 送出 %.1f ms)',
+      [M.DitSeconds * 1000, 1200 / Hands[0].Wpm]));
+  Check('長短比を 10% 以内で測る',
+    Abs(M.Ratio - Hands[0].Ratio) / Hands[0].Ratio <= 0.10,
+    Format('(%.2f / 送出 %.2f)', [M.Ratio, Hands[0].Ratio]));
+  Check('文字間の比を 10% 以内で測る',
+    Abs(M.CharRatio - Hands[0].CharRatio) / Hands[0].CharRatio <= 0.10,
+    Format('(%.2f / 送出 %.2f)', [M.CharRatio, Hands[0].CharRatio]));
+  Check('語間の比を 10% 以内で測る',
+    Abs(M.WordRatio - Hands[0].WordRatio) / Hands[0].WordRatio <= 0.10,
+    Format('(%.2f / 送出 %.2f)', [M.WordRatio, Hands[0].WordRatio]));
+  WriteLn(Format('  熟練の測定: 短点 %.2f ms（送出 %.2f）/ 長短比 %.3f / 文字間 %.3f / 語間 %.3f / %.2f WPM',
+    [M.DitSeconds * 1000, 1200 / Hands[0].Wpm, M.Ratio, M.CharRatio,
+     M.WordRatio, M.EffectiveWpm]));
+  Check('実効 WPM を 10% 以内で測る',
+    Abs(M.EffectiveWpm - Hands[0].Wpm) / Hands[0].Wpm <= 0.10,
+    Format('(%.1f WPM / 送出 %.0f WPM)', [M.EffectiveWpm, Hands[0].Wpm]));
+
+  { ファンズワースは、しきい値方式が**測定不能**になる場合です（付録 A.2）。
+    課題文に対応づけていれば測れます。
+    Farnsworth is the case the threshold method **cannot measure at all**
+    (appendix A.2); against the text it can. }
+  Audio := SendText(TEXT, Hands[1], RATE, 77);
+  M := MeasureAgainstText(Audio, RATE, Hands[1].ToneHz, TEXT);
+  Check('ファンズワースの文字間 6 を 10% 以内で測る',
+    M.Ok and (Abs(M.CharRatio - 6) / 6 <= 0.10),
+    Format('(%.2f / 送出 6.00)', [M.CharRatio]));
+  Check('ファンズワースの語間 12 を 10% 以内で測る',
+    M.Ok and (Abs(M.WordRatio - 12) / 12 <= 0.10),
+    Format('(%.2f / 送出 12.00)', [M.WordRatio]));
+
+  { モニタートーンの音程は、人に入れさせずに見つけます。**入れ間違えれば
+    測れず、その理由も分かりません。**
+    The pitch is found, not asked for: **entered wrongly, nothing can be
+    measured and nothing says why.** }
+  Noisy := Hands[0];
+  Noisy.ToneHz := 620;
+  Noisy.Noise := 0.05;
+  Audio := SendText(TEXT, Noisy, RATE, 88);
+  Check('モニタートーンの音程を見つける',
+    Abs(DetectToneHz(Audio, RATE) - 620) <= 8,
+    Format('(%.0f Hz / 送出 620 Hz)', [DetectToneHz(Audio, RATE)]));
+  SetLength(Audio, RATE);
+  for I := 0 to High(Audio) do
+    Audio[I] := 0;
+  Check('無音からは音程を作らない', DetectToneHz(Audio, RATE) = 0,
+    Format('(%.0f Hz)', [DetectToneHz(Audio, RATE)]));
+
+  { 課題文なしだと、同じ音でも間隔の種別を取り違えます。**参考値だと
+    言わなければならない理由がここにあります**（要件 FR-H.3）。
+    Without the text the same sound has its gaps misfiled. **This is why it has
+    to be called indicative** (FR-H.3). }
+  Audio := SendText(TEXT, Hands[1], RATE, 77);
+  Free_ := MeasureFree(Audio, RATE, Hands[1].ToneHz);
+  Check('課題文なしでも測れる', Free_.Ok, Free_.Note);
+  Check('課題文なしは参考値だと分かる', Free_.Reference and (Free_.Note <> ''),
+    Free_.Note);
+  Check('課題文なしではファンズワースの語間を取り違える',
+    Abs(Free_.WordRatio - 12) / 12 > 0.10,
+    Format('(%.2f / 送出 12.00)', [Free_.WordRatio]));
+
+  { 速度の変化は、ばらつきとは別に測れなければなりません。
+    Drift has to be measurable apart from spread. }
+  Audio := SendText(TEXT, Hands[3], RATE, 31);
+  M := MeasureAgainstText(Audio, RATE, Hands[3].ToneHz, TEXT);
+  Check('速度の変化を見つける', M.Ok and (M.Drift > 0.10),
+    Format('(%.2f / 送出 0.25)', [M.Drift]));
+  Audio := SendText(TEXT, Hands[0], RATE, 31);
+  M := MeasureAgainstText(Audio, RATE, Hands[0].ToneHz, TEXT);
+  Check('速度が変わっていなければ、そうは言わない', M.Drift < 0.10,
+    Format('(%.2f)', [M.Drift]));
+
+  { 音の数が合わなければ、対応づけない。**ずれたまま測るより、測れないと
+    言うほうが正しい。**
+    Nothing is lined up when the counts differ: **saying it cannot be measured
+    is better than measuring it out of step.** }
+  Audio := SendText('CQ CQ DE JA1ABC JA1ABC', Hands[0], RATE, 5);
+  M := MeasureAgainstText(Audio, RATE, Hands[0].ToneHz, TEXT);
+  Check('符号の数が課題文と違えば、測れないと言う',
+    (not M.Ok) and (Pos('個', M.Note) > 0), M.Note);
+
+  { ---- 採点 ---- }
+  WriteLn('  技量ごとの点数（それぞれの基準で）');
+  SetLength(Scores, Length(Hands));
+  Falling := 0;
+  Worst := 100;
+  Lowest := '';
+  for I := 0 to High(Hands) do
+  begin
+    Score := ScoreOf(Hands[I], 9000 + I, M);
+    Scores[I] := Score.Overall;
+    WriteLn(Format('    %-38s 速度 %3.0f / 短長 %3.0f / 区切り %3.0f / 間隔 %3.0f → 総合 %3.0f  %s',
+      [Hands[I].Name, Score.Speed, Score.Clarity, Score.Separation,
+       Score.Spacing, Score.Overall, Score.Advice]));
+    if (I > 0) and (Scores[I] < Scores[I - 1]) then
+      Inc(Falling);
+    if I = High(Hands) then
+    begin
+      { 付録 A.2 の 4: 初級だけ「区切りの明瞭」が最も低い。
+        Appendix A.2, finding 4: for the beginner the break between characters
+        is the lowest of all. }
+      Worst := Min(Min(Score.Speed, Score.Clarity),
+        Min(Score.Separation, Score.Spacing));
+      if Score.Separation <= Worst then
+        Lowest := '区切り';
+    end;
+  end;
+  Check('上手い順に点数が下がる', Falling = High(Hands),
+    Format('(%d / %d)', [Falling, High(Hands)]));
+  Check('熟練は 90 点以上', Scores[0] >= 90, Format('(%.0f)', [Scores[0]]));
+  Check('初級は 40 点未満', Scores[High(Scores)] < 40,
+    Format('(%.0f)', [Scores[High(Scores)]]));
+  Check('初級は「区切りの明瞭」が最も低い', Lowest = '区切り', Lowest);
+
+  { 同じ技量で種だけ変えたときのばらつき。**5 点の改善が誤差でないと言える
+    精度が要ります**（要件 FR-H.10 の推移表示が意味を持つ根拠）。
+    The spread over seeds at one skill: **an improvement of five points has to
+    mean something** for the trend display to be worth showing (FR-H.10). }
+  Sum := 0;
+  SetLength(Scores, 5);
+  for I := 0 to 4 do
+  begin
+    Score := ScoreOf(Hands[4], 100 + I * 7, M);
+    Scores[I] := Score.Overall;
+    Sum := Sum + Score.Overall;
+  end;
+  Mean_ := Sum / 5;
+  Sd := 0;
+  for I := 0 to 4 do
+    Sd := Sd + Sqr(Scores[I] - Mean_);
+  Sd := Sqrt(Sd / 4);
+  WriteLn(Format('  同じ技量で種を 5 回変えた総合点: 平均 %.1f / 標準偏差 %.1f',
+    [Mean_, Sd]));
+  Check('同じ技量なら、種が変わっても点数の振れが 5 点未満', Sd < 5,
+    Format('(平均 %.1f / 標準偏差 %.1f)', [Mean_, Sd]));
+
+  { 基準を変えれば点数が変わること（要件 FR-H.7）。**バグキーの符号は、
+    バグキーの基準では上がります。個性を減点しないための仕組みです。**
+    The basis changes the score (FR-H.7): **a bug key's sending scores higher
+    against the bug-key basis** -- the mechanism by which an individual hand is
+    not marked down. }
+  Audio := SendText(TEXT, Hands[2], RATE, 555);
+  M := MeasureAgainstText(Audio, RATE, Hands[2].ToneHz, TEXT);
+  Score := ScoreFist(M, fsStandard, Own, -1);
+  Bug := ScoreFist(M, fsBug, Own, -1);
+  Check('バグキーの符号は、バグキーの基準のほうが高い',
+    Bug.Overall > Score.Overall,
+    Format('(標準 %.0f / バグキー %.0f)', [Score.Overall, Bug.Overall]));
+  Check('基準を変えても測定値は変わらない',
+    Abs(M.Ratio - 2.6) / 2.6 <= 0.10, Format('(%.2f)', [M.Ratio]));
+
+  { 自分の過去を基準にすると、同じ符号は満点近くになります。**「規範に合って
+    いるか」ではなく「先月より安定したか」を問えます。**
+    Against one's own past the same sending scores near full marks: **the
+    question becomes whether it is steadier than last month, not whether it
+    matches a norm.** }
+  Own := TargetFromMeasurement(M);
+  Score := ScoreFist(M, fsOwn, Own, -1);
+  Check('自分の過去を基準にすると「間隔の正確」が満点に近い',
+    Score.Spacing >= 99, Format('(%.1f)', [Score.Spacing]));
+
+  { 助言は 1 つだけ、最も低い項目のもの（要件 FR-H.8）。
+    One piece of advice, for the lowest item (FR-H.8). }
+  Audio := SendText(TEXT, Hands[5], RATE, 12);
+  M := MeasureAgainstText(Audio, RATE, Hands[5].ToneHz, TEXT);
+  Score := ScoreFist(M, fsStandard, Own, -1);
+  Check('助言が 1 文で出る',
+    (Score.Advice <> '') and (Pos('。', Score.Advice) > 0), Score.Advice);
+  Check('区切りが最も低ければ、区切りの助言が出る',
+    (Score.Separation > Min(Score.Speed, Min(Score.Clarity, Score.Spacing))) or
+    (Pos('文字と文字の間', Score.Advice) > 0), Score.Advice);
+
+  { 写しやすさは、渡されたときだけ点数に入ります。
+    Copyability counts only when it is supplied. }
+  Score := ScoreFist(M, fsStandard, Own, -1);
+  Check('文字誤り率を渡さなければ 4 項目で採点する', not Score.HasCopyability, '');
+  Score := ScoreFist(M, fsStandard, Own, 0.279);
+  Check('文字誤り率を渡せば 5 項目で採点する',
+    Score.HasCopyability and (Abs(Score.Copyability - 72.1) < 0.2),
+    Format('(%.1f)', [Score.Copyability]));
+
+  { 音が無いときに、数字を作らないこと。
+    No numbers are invented where there is no sound. }
+  SetLength(Audio, RATE);
+  for I := 0 to High(Audio) do
+    Audio[I] := 0;
+  M := MeasureAgainstText(Audio, RATE, 700, TEXT);
+  Check('無音からは測らない', (not M.Ok) and (M.Note <> ''), M.Note);
+  Score := ScoreFist(M, fsStandard, Own, -1);
+  Check('測れていなければ点数を出さない', Score.Overall = 0, Score.Advice);
+end;
+
+
+{ 送信訓練の記録（要件 FR-H.10・FR-H.12）。
+
+  **点数だけを残せば、重みを変えた日を境に、前と後が比べられなくなります。**
+  素の測定値も残っていることを確かめます。
+
+  The record of send practice (FR-H.10, FR-H.12). **With the scores alone, the
+  day the weights change is the day comparison stops working**; the raw figures
+  have to come back too. }
+procedure TestFistLog;
+var
+  Dir, Path: string;
+  Item: TFistRecord;
+  Back: TFistRecords;
+  Lines: TStringList;
+begin
+  WriteLn;
+  WriteLn('DeepCW.FistLog（要件 FR-H.10・FR-H.12）');
+  Dir := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw-fistlog-' +
+    IntToStr(Random(1000000));
+  Path := IncludeTrailingPathDelimiter(Dir) + 'fist.csv';
+
+  Item := Default(TFistRecord);
+  Item.When_ := EncodeDate(2026, 9, 11) + EncodeTime(21, 14, 0, 0);
+  Item.Seconds := 48;
+  Item.Key := 'パドル';
+  Item.Text_ := 'CQ CQ DE JA1ABC K';
+  Item.Characters := 17;
+  Item.Standard := fsBug;
+  Item.Measurement.Ok := True;
+  Item.Measurement.EffectiveWpm := 19.7;
+  Item.Measurement.DitSeconds := 0.0609;
+  Item.Measurement.Stats[ekDit].Cv := 0.0412;
+  Item.Measurement.Ratio := 2.61;
+  Item.Measurement.IntraRatio := 1.02;
+  Item.Measurement.CharRatio := 3.04;
+  Item.Measurement.WordRatio := 6.91;
+  Item.Measurement.ToneSeparation := 18.3;
+  Item.Measurement.GapSeparation := 9.4;
+  Item.Measurement.Drift := 0.031;
+  Item.Score.Speed := 100;
+  Item.Score.Clarity := 100;
+  Item.Score.Separation := 100;
+  Item.Score.Spacing := 95;
+  Item.Score.Overall := 99;
+
+  try
+    AppendFistRecord(Path, Item);
+    Check('記録するファイルが無ければ作る', FileExists(Path), Path);
+
+    Lines := TStringList.Create;
+    try
+      Lines.LoadFromFile(Path);
+      Check('1 行目は列の名前', (Lines.Count > 0) and (Lines[0] = FISTLOG_HEADER),
+        Copy(Lines[0], 1, 40));
+      Check('記録は 1 件で 1 行', Lines.Count = 2, Format('(%d 行)', [Lines.Count]));
+      { **小数点は地域設定に従わせません。**`,` になれば CSV の区切りと
+        衝突します（教訓 10.27）。
+        **The decimal point does not follow the locale**: as a comma it would
+        collide with the separator itself (lesson 10.27). }
+      Check('小数点は必ず「.」', Pos('19.7', Lines[1]) > 0, Lines[1]);
+      Check('日時は地域設定を通さない形', Pos('2026-09-11 21:14:00', Lines[1]) > 0,
+        Lines[1]);
+    finally
+      Lines.Free;
+    end;
+
+    Item.When_ := Item.When_ + 1;
+    Item.Key := 'バグ, 横振り';
+    AppendFistRecord(Path, Item);
+    Back := LoadFistRecords(Path);
+    Check('書いた分だけ読み戻せる', Length(Back) = 2,
+      Format('(%d 件)', [Length(Back)]));
+    Check('点数が読み戻せる',
+      (Length(Back) > 0) and (Back[0].Score.Overall = 99) and
+      (Back[0].Score.Spacing = 95), '');
+    { **素の測定値。**これが残っていなければ、重みを見直したときに過去を
+      採点し直せません。
+      **The raw figures**: without them a past session cannot be scored again
+      after the weights are revised. }
+    Check('素の測定値が読み戻せる',
+      (Length(Back) > 0) and (Abs(Back[0].Measurement.Ratio - 2.61) < 0.001) and
+      (Abs(Back[0].Measurement.Stats[ekDit].Cv - 0.0412) < 0.0001) and
+      (Abs(Back[0].Measurement.GapSeparation - 9.4) < 0.01),
+      Format('(長短比 %.3f / CV %.4f)',
+        [Back[0].Measurement.Ratio, Back[0].Measurement.Stats[ekDit].Cv]));
+    Check('採点基準が読み戻せる',
+      (Length(Back) > 0) and (Back[0].Standard = fsBug),
+      FIST_STANDARD_NAMES[Back[0].Standard]);
+    { 区切りを含む値は引用して書き、読み戻しても同じであること。
+      A field holding a separator is quoted, and comes back as it went in. }
+    Check('区切りを含む値も同じものが戻る',
+      (Length(Back) > 1) and (Back[1].Key = 'バグ, 横振り'), Back[1].Key);
+    Check('課題文が読み戻せる',
+      (Length(Back) > 0) and (Back[0].Text_ = 'CQ CQ DE JA1ABC K'), Back[0].Text_);
+
+    { 列を足しても古い記録が読めること。**名前で引いているからです。**
+      A record from an older, narrower file still reads: **the columns are found
+      by name.** }
+    Lines := TStringList.Create;
+    try
+      Lines.Add('datetime,overall,key');
+      Lines.Add('2026-01-02 03:04:05,77,縦振り');
+      Lines.SaveToFile(Path);
+    finally
+      Lines.Free;
+    end;
+    Back := LoadFistRecords(Path);
+    Check('列が足りない古い記録も読める',
+      (Length(Back) = 1) and (Back[0].Score.Overall = 77) and
+      (Back[0].Key = '縦振り'), '');
+
+    { 並びが違っても読めること。**これが「名前で引く」ということです。**
+      並びを当てにしていれば、ここで別の列を読みます。
+      Read though the order differs: **that is what reading by name means.**
+      Anything relying on the order would pick up a different column here. }
+    Lines := TStringList.Create;
+    try
+      Lines.Add('key,overall,wpm,datetime,ratio');
+      Lines.Add('エレキー,88,23.5,2026-02-03 04:05:06,3.12');
+      Lines.SaveToFile(Path);
+    finally
+      Lines.Free;
+    end;
+    Back := LoadFistRecords(Path);
+    Check('列の並びが違っても読める',
+      (Length(Back) = 1) and (Back[0].Key = 'エレキー') and
+      (Back[0].Score.Overall = 88) and
+      (Abs(Back[0].Measurement.EffectiveWpm - 23.5) < 0.01) and
+      (Abs(Back[0].Measurement.Ratio - 3.12) < 0.001),
+      Format('(%s / %.0f / %.1f / %.2f)', [Back[0].Key, Back[0].Score.Overall,
+        Back[0].Measurement.EffectiveWpm, Back[0].Measurement.Ratio]));
+
+    Check('無いファイルからは何も返さない',
+      Length(LoadFistRecords(Path + '.none')) = 0, '');
+  finally
+    if FileExists(Path) then
+      DeleteFile(Path);
+    RemoveDir(Dir);
+  end;
 end;
 
 procedure TestRecorder;
@@ -2303,11 +2750,40 @@ begin
     Halt(1);
 end;
 
+
+{ 不完全な送信の WAV を書き出します。**実機の画面で採点の経路を確かめる
+  ためのものです。**この容器には音声装置が無く、鍵も無いので、録音から
+  採点する道が無ければ画面側は一度も動きません。
+  Writes a WAV of imperfect sending. **It exists so that the scoring path can be
+  exercised in the real window**: this container has no audio device and no key,
+  and without scoring from a recording the screen side would never run at all. }
+procedure WriteFistWav(const Path, Which, Text: string);
+const
+  RATE = 8000;
+var
+  Hands: TSendings;
+  I, Chosen: Integer;
+begin
+  Hands := AppendixCases;
+  Chosen := 0;
+  for I := 0 to High(Hands) do
+    if (Which <> '') and (Pos(Which, Hands[I].Name) > 0) then
+      Chosen := I;
+  SaveWavMono(Path, SendText(Text, Hands[Chosen], RATE, 4242), RATE);
+  WriteLn(Format('%s に書きました（%s / %s）', [Path, Hands[Chosen].Name, Text]));
+end;
+
 begin
   MetadataPath := '';
   if ParamStr(1) = '--record-until-killed' then
   begin
     RecordUntilKilled(ParamStr(2));
+    Halt(0);
+  end;
+  if ParamStr(1) = '--fist-wav' then
+  begin
+    WriteFistWav(ParamStr(2), ParamStr(3),
+      ParamStr(4) + ParamStr(5) + ParamStr(6));
     Halt(0);
   end;
   if ParamStr(1) = '--wav-check' then
@@ -2365,6 +2841,8 @@ begin
     TestWatch;
     TestPractice;
     TestRecorder;
+    TestFist;
+    TestFistLog;
   finally
     Meta.Free;
   end;

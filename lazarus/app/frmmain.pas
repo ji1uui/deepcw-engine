@@ -34,7 +34,8 @@ uses
   DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
-  DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice,
+  DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
+  DeepCW.FistLog,
   TranscriptView, WaterfallView, BandMapView;
 
 type
@@ -103,6 +104,11 @@ type
     FChars: TDecodedChars;
     FError: string;
     FRecheck: Boolean;
+    { 送信訓練の採点のための解析かどうか。**受信テキストへ流さないのは
+      読み直しと同じ理由です。**
+      Whether this analysis is for scoring send practice. **It does not flow
+      into the transcript, for the same reason a re-reading does not.** }
+    FFist: Boolean;
     FOnDone: TNotifyEvent;
     procedure ReportDone;
   protected
@@ -139,8 +145,16 @@ type
     constructor CreateRecheck(ADecoder: TDeepCWDecoder;
       const ASamples: TSingleArray; ASampleRate: Integer;
       AOnDone: TNotifyEvent);
+    { 送信訓練の音を、採点のために 1 度だけ読みます（要件 FR-H.6 の
+      「写しやすさ」）。**読み取れた文字は画面の受信テキストには出しません。**
+      Reads the send-practice audio once, for the copyability score (FR-H.6).
+      **What it reads does not appear in the transcript.** }
+    constructor CreateFist(ADecoder: TDeepCWDecoder;
+      const ASamples: TSingleArray; ASampleRate: Integer;
+      AOnDone: TNotifyEvent);
     property Chars: TDecodedChars read FChars;
     property Recheck: Boolean read FRecheck;
+    property Fist: Boolean read FFist;
     property Error: string read FError;
   end;
 
@@ -410,6 +424,37 @@ type
     FPrRevealTimes: TDoubleArray;
     FPrRevealFrom: TDateTime;
     FPrRevealing: Boolean;
+    { 送信訓練（要件 FR-H）。**電波は出しません。**無線機のモニタートーンを
+      受信と同じ入力から取り込むだけです。
+      Send practice (requirement FR-H). **Nothing is transmitted**: the
+      transceiver's monitor tone is taken in through the same input as
+      reception. }
+    FFtKind: TComboBox;
+    FFtGroups: TSpinEdit;
+    FFtKey: TComboBox;
+    FFtBasis: TComboBox;
+    FFtFree: TCheckBox;
+    FFtNew: TButton;
+    FFtStart: TButton;
+    FFtStop: TButton;
+    FFtWav: TButton;
+    FFtStatus: TLabel;
+    FFtText: TMemo;
+    FFtResult: TMemo;
+    FFtAdvice: TLabel;
+    FFtHistory: TMemo;
+    FFtCapture: TAudioCapture;
+    FFtRing: TAudioRing;
+    FFtRate: Integer;
+    FFtExercise: string;
+    FFtBegan: TDateTime;
+    { 採点しようとしている音と、その測定。**文字誤り率は別のスレッドで
+      あとから届くので、その間これを持っておきます。**
+      The audio being scored and its measurement. **The character error rate
+      arrives later from another thread, so these wait here meanwhile.** }
+    FFtSamples: TSingleArray;
+    FFtMeasured: TFistMeasurement;
+    FFtLost: Boolean;
     FSettingsSheet: TTabSheet;
     FSetRecord: TCheckBox;
     FSetRecordInfo: TLabel;
@@ -434,6 +479,19 @@ type
     procedure PrStopClick(Sender: TObject);
     procedure PrMarkClick(Sender: TObject);
     procedure UpdatePracticeReveal;
+    function BuildFistTab: TTabSheet;
+    function FistLogFileName: string;
+    function FistBasis: TFistStandard;
+    function FistOwnTarget: TFistTarget;
+    procedure FtNewClick(Sender: TObject);
+    procedure FtStartClick(Sender: TObject);
+    procedure FtStopClick(Sender: TObject);
+    procedure FtWavClick(Sender: TObject);
+    procedure FtOptionsChanged(Sender: TObject);
+    procedure FtScore(const Samples: TSingleArray; SampleRate: Integer;
+      Seconds: Double);
+    procedure FtFinish(Cer: Double);
+    procedure FtShowHistory;
 
     function ConfigFileName: string;
     procedure LoadSettings;
@@ -593,6 +651,13 @@ constructor TDecodeThread.CreateRecheck(ADecoder: TDeepCWDecoder;
   const ASamples: TSingleArray; ASampleRate: Integer; AOnDone: TNotifyEvent);
 begin
   FRecheck := True;
+  Create(ADecoder, ASamples, ASampleRate, AOnDone);
+end;
+
+constructor TDecodeThread.CreateFist(ADecoder: TDeepCWDecoder;
+  const ASamples: TSingleArray; ASampleRate: Integer; AOnDone: TNotifyEvent);
+begin
+  FFist := True;
   Create(ADecoder, ASamples, ASampleRate, AOnDone);
 end;
 
@@ -765,6 +830,15 @@ begin
     FPollTimer.Enabled := False;
   if FCapture <> nil then
     FCapture.Stop;
+  { 送信訓練の取り込みも止めます。**止めずに閉じると、装置を握ったまま
+    プロセスが消えます。**
+    The send-practice capture is stopped too: **left running, the process would
+    disappear still holding the device.** }
+  if FFtCapture <> nil then
+  begin
+    FFtCapture.Stop;
+    FreeAndNil(FFtCapture);
+  end;
   { 録音は閉じる前に終えます。**見出しは書き足すたびに直しているので、ここで
     落ちても読めますが、終えれば最後の一息まで入ります。**
     The recording is finished before closing: **the headers are kept correct as
@@ -794,6 +868,7 @@ begin
   FStream.Free;
   FDiagnostics.Free;
   FCapture.Free;
+  FFtRing.Free;
   FPlayback.Free;
   FReviewPlay.Free;
   FAlerts.Free;
@@ -842,6 +917,7 @@ begin
   BuildTransmitTab;
   BuildReceiveTab;
   BuildPracticeTab;
+  BuildFistTab;
   FSettingsSheet := BuildSettingsTab;
   { 起動直後の画面は受信です。ここから受信開始まで操作 1 回で届きます
     （要件 FR-A.2）。
@@ -1744,6 +1820,473 @@ begin
     FPrRevealing := False;
 end;
 
+
+{ 送信訓練のタブ（要件 FR-H）。
+
+  **ここでは課題文を画面に出します。**受信練習（FR-F.3）とは逆です。あちらは
+  写す練習なので答えを伏せますが、こちらは**その文を自分の鍵で送る**練習
+  なので、見えていなければ始まりません。
+
+  電波は出しません。無線機のモニタートーンを、受信と同じ入力から取り込むだけ
+  です（要件 FR-H.1）。ダミーロードでも、モニターだけでも同じように動きます。
+
+  The send-practice tab (requirement FR-H).
+
+  **The text is shown here**, unlike the receive practice (FR-F.3): there the
+  answer is kept back because copying is the exercise, here the exercise is to
+  send that text with one's own key, and nothing can begin unless it is visible.
+
+  Nothing is transmitted. The transceiver's monitor tone comes in through the
+  same input as reception (FR-H.1), which works into a dummy load or with the
+  monitor alone. }
+function TMainForm.BuildFistTab: TTabSheet;
+var
+  Sheet: TTabSheet;
+  Options: TGroupBox;
+  Buttons: TPanel;
+  Kind: TExerciseKind;
+  Standard_: TFistStandard;
+begin
+  Sheet := FPages.AddTabSheet;
+  Sheet.Caption := '送信訓練';
+  Result := Sheet;
+
+  Options := TGroupBox.Create(Sheet);
+  Options.Parent := Sheet;
+  Options.Height := 124;
+  Options.Caption := '課題文と採点';
+  Stretch(Options, alTop);
+
+  AddLabel(Options, '課題文の内容', 14, 8);
+  FFtKind := TComboBox.Create(Options);
+  FFtKind.Parent := Options;
+  FFtKind.SetBounds(14, 28, 200, 28);
+  FFtKind.Style := csDropDownList;
+  for Kind := Low(TExerciseKind) to High(TExerciseKind) do
+    FFtKind.Items.Add(EXERCISE_NAMES[Kind]);
+  FFtKind.ItemIndex := Ord(ekQso);
+  FFtKind.OnChange := @FtOptionsChanged;
+
+  AddLabel(Options, '出す数', 230, 8);
+  FFtGroups := AddSpin(Options, 230, 30, 1, 20, 3, @FtOptionsChanged);
+
+  AddLabel(Options, '鍵の種類', 330, 8);
+  FFtKey := TComboBox.Create(Options);
+  FFtKey.Parent := Options;
+  FFtKey.SetBounds(330, 28, 150, 28);
+  FFtKey.Style := csDropDownList;
+  FFtKey.Items.Add('縦振り');
+  FFtKey.Items.Add('パドル');
+  FFtKey.Items.Add('バグ');
+  FFtKey.Items.Add('エレキー');
+  FFtKey.ItemIndex := 0;
+  FFtKey.OnChange := @FtOptionsChanged;
+
+  AddLabel(Options, '採点の基準', 496, 8);
+  FFtBasis := TComboBox.Create(Options);
+  FFtBasis.Parent := Options;
+  FFtBasis.SetBounds(496, 28, 180, 28);
+  FFtBasis.Style := csDropDownList;
+  for Standard_ := Low(TFistStandard) to High(TFistStandard) do
+    FFtBasis.Items.Add(FIST_STANDARD_NAMES[Standard_]);
+  FFtBasis.ItemIndex := 0;
+  FFtBasis.OnChange := @FtOptionsChanged;
+  AddLabel(Options,
+    '基準は「正しさ」ではありません。バグキーの符号は、バグキーの基準で測ります。',
+    692, 34);
+
+  { 課題文なしでも測れますが、間隔の種別をしきい値で分けるため**参考値**に
+    なります（要件 FR-H.3）。画面でそう分かるようにします。
+    Without a text it still measures, but the kinds of gap are split at a
+    threshold and the result is **indicative only** (FR-H.3); the screen says
+    so. }
+  FFtFree := TCheckBox.Create(Options);
+  FFtFree.Parent := Options;
+  FFtFree.SetBounds(14, 74, 300, 24);
+  FFtFree.Caption := '課題文なしで送る（採点は参考値）';
+  FFtFree.OnChange := @FtOptionsChanged;
+
+  FFtNew := AddButton(Options, '課題文を出す', 330, 70, 150, @FtNewClick);
+
+  Buttons := AddTopPanel(Sheet, 40);
+  FFtStart := AddButton(Buttons, '訓練開始', 12, 4, 120, @FtStartClick);
+  FFtStop := AddButton(Buttons, '終了して採点', 140, 4, 150, @FtStopClick);
+  FFtStop.Enabled := False;
+  FFtWav := AddButton(Buttons, 'WAV から採点', 298, 4, 150, @FtWavClick);
+  FFtStatus := AddLabel(Buttons,
+    '「課題文を出す」を押し、無線機のモニター音が届く状態で「訓練開始」を押してください。',
+    460, 12);
+
+  AddTopLabel(Sheet, '課題文（この文を自分の鍵で送ってください。書き換えられます）');
+  FFtText := TMemo.Create(Sheet);
+  FFtText.Parent := Sheet;
+  FFtText.Height := 66;
+  { **書き換えられるようにします。**自分で決めた文を送りたいことがあり、
+    録音から採点するときは、その録音で送った文をここへ入れます。
+    **It can be edited**: an operator may want to send a text of their own, and
+    scoring from a recording means putting in the text that recording holds. }
+  FFtText.ReadOnly := False;
+  FFtText.ScrollBars := ssAutoVertical;
+  FFtText.Font.Size := 14;
+  Stretch(FFtText, alTop);
+
+  AddTopLabel(Sheet, '採点');
+  FFtResult := TMemo.Create(Sheet);
+  FFtResult.Parent := Sheet;
+  FFtResult.Height := 128;
+  FFtResult.ReadOnly := True;
+  FFtResult.ScrollBars := ssAutoVertical;
+  Stretch(FFtResult, alTop);
+
+  FFtAdvice := AddTopLabel(Sheet, '');
+
+  AddTopLabel(Sheet, 'これまでの記録');
+  FFtHistory := TMemo.Create(Sheet);
+  FFtHistory.Parent := Sheet;
+  FFtHistory.ReadOnly := True;
+  FFtHistory.ScrollBars := ssAutoVertical;
+  FFtHistory.Align := alClient;
+  FFtHistory.Parent := Sheet;
+  FtShowHistory;
+end;
+
+{ 記録の置き場所。交信記録や録音と同じ場所に置きます。
+  Where the records live: the same place as the contact log and the recordings. }
+function TMainForm.FistLogFileName: string;
+begin
+  Result := IncludeTrailingPathDelimiter(
+    ExtractFilePath(ConfigFileName)) + 'fist.csv';
+end;
+
+function TMainForm.FistBasis: TFistStandard;
+begin
+  if (FFtBasis = nil) or (FFtBasis.ItemIndex < 0) or
+     (FFtBasis.ItemIndex > Ord(High(TFistStandard))) then
+    Exit(fsStandard);
+  Result := TFistStandard(FFtBasis.ItemIndex);
+end;
+
+{ 「自分の過去」の基準。**直近の記録の素の測定値**を使います。記録が無ければ
+  標準に落ちます（要件 FR-H.7）。
+  The basis for "my own past": **the raw figures of the latest record**, falling
+  back to the standard when there is none (FR-H.7). }
+function TMainForm.FistOwnTarget: TFistTarget;
+var
+  Records_: TFistRecords;
+begin
+  Result := FistTargetFor(fsStandard, Default(TFistTarget));
+  Records_ := LoadFistRecords(FistLogFileName);
+  if Length(Records_) = 0 then
+    Exit;
+  Result.Ratio := Records_[High(Records_)].Measurement.Ratio;
+  Result.IntraRatio := Records_[High(Records_)].Measurement.IntraRatio;
+  Result.CharRatio := Records_[High(Records_)].Measurement.CharRatio;
+  Result.WordRatio := Records_[High(Records_)].Measurement.WordRatio;
+end;
+
+procedure TMainForm.FtOptionsChanged(Sender: TObject);
+begin
+  MarkSettingsDirty;
+  if (FFtFree <> nil) and (FFtNew <> nil) then
+  begin
+    FFtNew.Enabled := not FFtFree.Checked;
+    FFtKind.Enabled := not FFtFree.Checked;
+    FFtGroups.Enabled := not FFtFree.Checked;
+    if FFtFree.Checked then
+      FFtText.Text := '課題文なしで送ります。採点は参考値です。';
+  end;
+end;
+
+procedure TMainForm.FtNewClick(Sender: TObject);
+var
+  Kind: TExerciseKind;
+begin
+  Kind := ekQso;
+  if (FFtKind <> nil) and (FFtKind.ItemIndex >= 0) and
+     (FFtKind.ItemIndex <= Ord(High(TExerciseKind))) then
+    Kind := TExerciseKind(FFtKind.ItemIndex);
+  FFtExercise := MakeExercise(Kind, FFtGroups.Value,
+    Round(Frac(Now) * MSecsPerDay) + Random(1000));
+  FFtText.Text := FFtExercise;
+  FFtResult.Clear;
+  FFtAdvice.Caption := '';
+  SetStatus('', '', '課題文を出しました。準備ができたら「訓練開始」を押してください。');
+end;
+
+{ 訓練を始めます。**受信と同じ入力を使うので、受信中には始められません。**
+  1 つの装置を 2 つの経路が同時に開けるとは限らず、開けたとしても、どちらの
+  音を測っているのか分からなくなります。
+  Starts the training. **It cannot start while reception is running**, because
+  it uses the same input: one device may not open twice, and even where it does,
+  which of the two is being measured would no longer be clear. }
+procedure TMainForm.FtStartClick(Sender: TObject);
+begin
+  if FFtCapture <> nil then
+    Exit;
+  if FCapture <> nil then
+  begin
+    SetStatus('', '', '受信中は訓練を始められません。先に「受信停止」を押してください。');
+    Exit;
+  end;
+  if (not FFtFree.Checked) and (Trim(FFtText.Text) = '') then
+  begin
+    SetStatus('', '', '先に「課題文を出す」を押すか、送る文を書いてください。');
+    Exit;
+  end;
+  try
+    if not LoadPortAudio(FSetPortAudio.Text) then
+      raise EDeepCW.Create(PortAudioLoadError);
+    FFtRate := SelectedCaptureRate;
+    { 保持は 10 分ぶんです。**超えた分は古いほうから落ちます。**落ちたことは
+      採点のときに画面へ出します（黙って捨てない）。
+      Ten minutes are held, **the oldest falling off beyond that** -- and that it
+      fell off is said on the screen when the scoring comes (nothing is dropped
+      in silence). }
+    FreeAndNil(FFtRing);
+    FFtRing := TAudioRing.Create(FFtRate * 600);
+    FFtCapture := TAudioCapture.Create(FFtRing, FFtRate, SelectedDeviceIndex);
+    FFtCapture.Start;
+    FFtBegan := Now;
+    FFtStart.Enabled := False;
+    FFtStop.Enabled := True;
+    FFtResult.Clear;
+    FFtAdvice.Caption := '';
+    SetStatus('', Format('訓練中 %d Hz', [FFtRate]),
+      '送ってください。終わったら「終了して採点」を押してください。');
+  except
+    on E: Exception do
+    begin
+      FreeAndNil(FFtCapture);
+      FFtStart.Enabled := True;
+      FFtStop.Enabled := False;
+      ReportError('送信訓練の開始', E);
+    end;
+  end;
+end;
+
+procedure TMainForm.FtStopClick(Sender: TObject);
+var
+  Samples: TSingleArray;
+  Seconds: Double;
+begin
+  if FFtCapture = nil then
+    Exit;
+  FFtCapture.Stop;
+  FreeAndNil(FFtCapture);
+  FFtStart.Enabled := True;
+  FFtStop.Enabled := False;
+  Samples := FFtRing.Snapshot;
+  { 保持を超えた分が落ちたかどうかを、そのまま伝えます。
+    Whether anything fell off the buffer is said as it is. }
+  FFtLost := (FFtRing <> nil) and (FFtRing.Written > FFtRing.Capacity);
+  Seconds := (Now - FFtBegan) * SecsPerDay;
+  FtScore(Samples, FFtRate, Seconds);
+end;
+
+{ 録音した WAV からも採点できます（要件 FR-E.8 の録音をそのまま使えます）。
+  **この容器のように音声装置が無い環境でも、経路全体を確かめられます。**
+  Scoring from a recorded WAV as well -- the recordings of requirement FR-E.8
+  serve directly. **It also makes the whole path checkable where there is no
+  audio device at all, as in a container.** }
+procedure TMainForm.FtWavClick(Sender: TObject);
+var
+  Samples: TSingleArray;
+  SampleRate: Integer;
+begin
+  if FFtCapture <> nil then
+  begin
+    SetStatus('', '', '訓練中です。先に「終了して採点」を押してください。');
+    Exit;
+  end;
+  if FRxFile.Text = '' then
+  begin
+    SetStatus('', '', '受信タブの「WAV ファイルから受信」に、採点したい録音を選んでください。');
+    Exit;
+  end;
+  try
+    LoadWavMono(FRxFile.Text, Samples, SampleRate);
+  except
+    on E: Exception do
+    begin
+      ReportError('WAV の読み込み', E);
+      Exit;
+    end;
+  end;
+  FFtLost := False;
+  FFtBegan := Now;
+  FtScore(Samples, SampleRate, Length(Samples) / Max(1, SampleRate));
+end;
+
+{ 測って採点します。**文字誤り率だけは、あとから別のスレッドで届きます。**
+  ここで同期に読むと、長い録音では画面が止まります。
+  Measures and scores. **The character error rate alone arrives later from
+  another thread**: read synchronously here, a long recording would stop the
+  screen. }
+procedure TMainForm.FtScore(const Samples: TSingleArray; SampleRate: Integer;
+  Seconds: Double);
+var
+  ToneHz: Double;
+begin
+  FFtSamples := nil;
+  FFtMeasured := Default(TFistMeasurement);
+  if Length(Samples) = 0 then
+  begin
+    FFtResult.Text := '音が取り込めませんでした。入力装置と音量を確かめてください。';
+    Exit;
+  end;
+  ToneHz := DetectToneHz(Samples, SampleRate);
+  if ToneHz <= 0 then
+  begin
+    FFtResult.Text := 'モニター音が見つかりませんでした。' + LineEnding +
+      '無線機のモニター音量と、受信タブで選んだ入力装置を確かめてください。';
+    Exit;
+  end;
+
+  { 課題文は画面に出ているものが本物です。**変数に控えたほうを使うと、
+    書き換えた文と採点する文が食い違います。**
+    The text on the screen is the text: **scoring against a copy kept in a
+    variable would score something the operator can no longer see.** }
+  FFtExercise := Trim(FFtText.Text);
+  if FFtFree.Checked then
+    FFtMeasured := MeasureFree(Samples, SampleRate, ToneHz)
+  else
+    FFtMeasured := MeasureAgainstText(Samples, SampleRate, ToneHz, FFtExercise);
+  FFtMeasured.Seconds := Seconds;
+  if not FFtMeasured.Ok then
+  begin
+    FFtResult.Text := '採点できませんでした。' + LineEnding + FFtMeasured.Note;
+    FFtAdvice.Caption := '';
+    SetStatus('', '', '採点できませんでした。');
+    Exit;
+  end;
+
+  { 写しやすさは、課題文があるときだけ measurable です。エンジンが無い、
+    または解析が塞がっているときは 4 項目で採点します。**待たせません。**
+    Copyability can be measured only against a text; without the engine, or
+    while an analysis is running, the score is out of the other four.
+    **Nobody is kept waiting.** }
+  if (not FFtFree.Checked) and (FDecoder <> nil) and (not DecoderBusy) then
+  begin
+    FFtSamples := Samples;
+    SetStatus('', '', '採点しています…');
+    FDecodeThread := TDecodeThread.CreateFist(FDecoder, Samples, SampleRate,
+      @DecodeFinished);
+  end
+  else
+    FtFinish(-1);
+end;
+
+{ 採点を締めくくり、記録に残します（要件 FR-H.10）。
+  Finishes the scoring and keeps the record (FR-H.10). }
+procedure TMainForm.FtFinish(Cer: Double);
+var
+  Score: TFistScore;
+  Item: TFistRecord;
+  Lines: TStringList;
+begin
+  if not FFtMeasured.Ok then
+    Exit;
+  Score := ScoreFist(FFtMeasured, FistBasis, FistOwnTarget, Cer);
+
+  Lines := TStringList.Create;
+  try
+    Lines.Add(Format('総合 %.0f 点（%s の基準）', [Score.Overall,
+      FIST_STANDARD_NAMES[FistBasis]]));
+    Lines.Add(Format('  速度の安定 %3.0f ／ 短長の明瞭 %3.0f ／ 区切りの明瞭 %3.0f ／ 間隔の正確 %3.0f',
+      [Score.Speed, Score.Clarity, Score.Separation, Score.Spacing]));
+    if Score.HasCopyability then
+      Lines.Add(Format('  写しやすさ %3.0f（文字誤り率 %.1f%%）',
+        [Score.Copyability, 100 * Cer]))
+    else
+      Lines.Add('  写しやすさ —（課題文と読み合わせていません）');
+    Lines.Add('');
+    Lines.Add(Format('実効 %.1f WPM ／ 短点 %.1f ms（ばらつき %.1f%%）／ 長短比 %.2f',
+      [FFtMeasured.EffectiveWpm, FFtMeasured.DitSeconds * 1000,
+       100 * FFtMeasured.Stats[ekDit].Cv, FFtMeasured.Ratio]));
+    Lines.Add(Format('間隔の比: 符号内 %.2f ／ 文字間 %.2f ／ 語間 %.2f',
+      [FFtMeasured.IntraRatio, FFtMeasured.CharRatio, FFtMeasured.WordRatio]));
+    Lines.Add(Format('分離度: 短点と長点 %.1f ／ 符号内と文字間 %.1f ／ 速度の変化 %.0f%%',
+      [FFtMeasured.ToneSeparation, FFtMeasured.GapSeparation,
+       100 * FFtMeasured.Drift]));
+    if FFtMeasured.Reference then
+      Lines.Add('※ 課題文なしで測りました。間隔の種別はしきい値で分けています（参考値）。');
+    if FFtLost then
+      Lines.Add('※ 10 分を超えた分は保持から落ちました。最後の 10 分だけを採点しています。');
+    FFtResult.Text := Lines.Text;
+  finally
+    Lines.Free;
+  end;
+  { **点数の低さは、余地であって誤りではありません。**助言はそのように書きます。
+    **A low score is room to grow, not a fault**, and the advice is written to
+    say so. }
+  FFtAdvice.Caption := '直すとよい点: ' + Score.Advice;
+
+  Item := Default(TFistRecord);
+  Item.When_ := Now;
+  Item.Seconds := FFtMeasured.Seconds;
+  if FFtKey.ItemIndex >= 0 then
+    Item.Key := FFtKey.Items[FFtKey.ItemIndex];
+  if FFtFree.Checked then
+    Item.Text_ := ''
+  else
+    Item.Text_ := FFtExercise;
+  Item.Characters := FFtMeasured.Characters;
+  Item.Reference := FFtMeasured.Reference;
+  Item.Standard := FistBasis;
+  Item.Score := Score;
+  Item.Measurement := FFtMeasured;
+  Item.Measurement.Elements := nil;
+  try
+    AppendFistRecord(FistLogFileName, Item);
+  except
+    on E: Exception do
+      LogDiagnostic('送信訓練の記録', E.Message);
+  end;
+  FtShowHistory;
+  SetStatus('', '', Format('採点しました。総合 %.0f 点。', [Score.Overall]));
+end;
+
+{ これまでの記録を新しい順に出します（要件 FR-H.10 の入口）。
+  折れ線での推移はまだ作っていません。**まず、残っていることと読めることです。**
+  The records, newest first (the way in to FR-H.10). The trend line is not built
+  yet: **first they have to be kept, and readable.** }
+procedure TMainForm.FtShowHistory;
+var
+  Records_: TFistRecords;
+  Lines: TStringList;
+  I, Shown: Integer;
+  Best: Double;
+begin
+  if FFtHistory = nil then
+    Exit;
+  Records_ := LoadFistRecords(FistLogFileName);
+  Lines := TStringList.Create;
+  try
+    if Length(Records_) = 0 then
+      Lines.Add('まだ記録はありません。記録は ' + FistLogFileName + ' に CSV で残ります。')
+    else
+    begin
+      Best := 0;
+      for I := 0 to High(Records_) do
+        if Records_[I].Score.Overall > Best then
+          Best := Records_[I].Score.Overall;
+      Lines.Add(Format('%d 件 ／ 自己ベスト 総合 %.0f 点 ／ %s',
+        [Length(Records_), Best, FistLogFileName]));
+      Shown := 0;
+      I := High(Records_);
+      while (I >= 0) and (Shown < 12) do
+      begin
+        Lines.Add(FistRecordCaption(Records_[I]));
+        Dec(I);
+        Inc(Shown);
+      end;
+    end;
+    FFtHistory.Text := Lines.Text;
+  finally
+    Lines.Free;
+  end;
+end;
+
 function TMainForm.BuildSettingsTab: TTabSheet;
 var
   Sheet: TTabSheet;
@@ -1956,6 +2499,15 @@ begin
     FPrDelaySeconds.Value := ClampInt(
       Ini.ReadInteger('practice', 'delay_seconds', REVEAL_DELAY_DEFAULT_SECONDS),
       0, REVEAL_DELAY_MAX_SECONDS);
+    FFtKind.ItemIndex := ClampInt(Ini.ReadInteger('fist', 'kind', Ord(ekQso)),
+      0, FFtKind.Items.Count - 1);
+    FFtGroups.Value := ClampInt(Ini.ReadInteger('fist', 'groups', 3), 1, 20);
+    FFtKey.ItemIndex := ClampInt(Ini.ReadInteger('fist', 'key', 0),
+      0, FFtKey.Items.Count - 1);
+    FFtBasis.ItemIndex := ClampInt(Ini.ReadInteger('fist', 'standard', 0),
+      0, FFtBasis.Items.Count - 1);
+    FFtFree.Checked := Ini.ReadBool('fist', 'free', False);
+    FtOptionsChanged(nil);
     FRxMode.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'mode', 0), 0, 2);
     FRxBand.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'band', 0),
       0, FRxBand.Items.Count - 1);
@@ -2031,6 +2583,11 @@ begin
       Ini.WriteInteger('practice', 'noise', FPrNoise.Position);
       Ini.WriteBool('practice', 'delay', FPrDelay.Checked);
       Ini.WriteInteger('practice', 'delay_seconds', FPrDelaySeconds.Value);
+      Ini.WriteInteger('fist', 'kind', FFtKind.ItemIndex);
+      Ini.WriteInteger('fist', 'groups', FFtGroups.Value);
+      Ini.WriteInteger('fist', 'key', FFtKey.ItemIndex);
+      Ini.WriteInteger('fist', 'standard', FFtBasis.ItemIndex);
+      Ini.WriteBool('fist', 'free', FFtFree.Checked);
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('receive', 'watch', FRxWatch.Text);
       Ini.WriteInteger('receive', 'band', FRxBand.ItemIndex);
@@ -2295,6 +2852,26 @@ begin
     A re-reading turns back here (requirement FR-C.3): **it does not flow into
     the transcript.** What was read in order to check something must not rewrite
     the thing it checked (requirement FR-B.2). }
+  { 送信訓練の採点のための解析は、ここで折り返します（要件 FR-H.6）。
+    **受信テキストへは流しません。**送った符号を機械が読んだ結果は、
+    「写しやすさ」の材料であって、受信の記録ではありません。
+    An analysis for the send-practice score turns back here (FR-H.6) and **does
+    not flow into the transcript**: what the machine made of one's own sending
+    is material for the copyability score, not a record of reception. }
+  if Thread.Fist then
+  begin
+    if Thread.Error <> '' then
+    begin
+      LogDiagnostic('送信訓練の採点', Thread.Error);
+      FtFinish(-1);
+    end
+    else
+      FtFinish(CharErrorRate(NormalizeText(FFtExercise),
+        Trim(DecodedText(Thread.Chars))));
+    FCompletedThread := Thread;
+    Exit;
+  end;
+
   if Thread.Recheck then
   begin
     if Thread.Error <> '' then
@@ -2678,6 +3255,15 @@ procedure TMainForm.RxStartClick(Sender: TObject);
 begin
   if FCapture <> nil then
     Exit;
+  { 送信訓練が同じ入力を握っています。**両方が同じ装置を開こうとすると、
+    開けないか、どちらが何を測っているのか分からなくなります。**
+    Send practice holds the same input. **Both opening the one device would
+    either fail or leave it unclear which is measuring what.** }
+  if FFtCapture <> nil then
+  begin
+    SetStatus('', '', '送信訓練の最中です。先に「終了して採点」を押してください。');
+    Exit;
+  end;
   if not EnsureDecoder then
     Exit;
   try
@@ -4541,6 +5127,13 @@ begin
   if (FPrStop <> nil) and FPrStop.Enabled and not FPlayback.Running then
     FPrStop.Enabled := False;
   UpdatePracticeReveal;
+  { 訓練中は、経過した時間を出します。**押しっぱなしで席を立った人が、
+    戻ってきて分かるようにするためです。**
+    While training, the time so far is shown: **so that someone who left the
+    room can see what happened when they come back.** }
+  if (FFtCapture <> nil) and (FFtStatus <> nil) then
+    FFtStatus.Caption := Format('訓練中 %s。終わったら「終了して採点」を押してください。',
+      [SecondsAsClock((Now - FFtBegan) * SecsPerDay)]);
   { 解析が塞がっていて出せなかった読み直しを、ここで出します（要件 FR-C.3）。
     A re-reading that could not be issued because the analysis was busy is
     issued here (requirement FR-C.3). }

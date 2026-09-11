@@ -85,8 +85,8 @@ if [ -z "${DEEPCW_ONNXRUNTIME:-}" ] && [ ! -f ./libonnxruntime.so ]; then
   skip "cw_loopback ほか" "ONNX Runtime が見つかりません"
 else
   step "cw_loopback（6 種の本文を完全一致で読む）" ./cli/cw_loopback
-  step "cw_tune（同調・検出・多局・形・待ち符号・読み直し）" \
-    ./cli/cw_tune --tests stream,correctness,overload,review,detect,multi,shape,callsign,watch,recheck
+  step "cw_tune（同調・検出・多局・形・待ち符号・読み直し・送信訓練）" \
+    ./cli/cw_tune --tests stream,correctness,overload,review,detect,multi,shape,callsign,watch,recheck,fist
   if [ $QUICK -eq 1 ]; then
     skip "cw_tune（同調の根拠）" "--quick"
     skip "cw_tune（規模・追跡・広帯域）" "--quick"

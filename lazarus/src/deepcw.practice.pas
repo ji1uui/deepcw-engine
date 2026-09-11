@@ -26,7 +26,7 @@ unit DeepCW.Practice;
 interface
 
 uses
-  SysUtils, DeepCW.Types, DeepCW.Morse, DeepCW.Callsign;
+  SysUtils, Math, DeepCW.Types, DeepCW.Morse, DeepCW.Callsign;
 
 type
   { 出題の種類。**文字集合の選択でもあります**（要件 FR-F.3 の受入基準）。
@@ -174,6 +174,21 @@ function RevealTimes(const Text: string; const Timing: TCWTiming;
   `RevealTimes` returned. }
 function RevealedText(const Text: string; const Times: TDoubleArray;
   ElapsedSeconds: Double): string;
+
+{ 文字誤り率です。編集距離を参照文の長さで割ります。
+
+  **`ScoreCopy` とは別のものです。**あちらは人が写したものを人に見せるための
+  採点で、空白を点に数えません。こちらは機械が読んだ結果と課題文を比べる
+  ための 1 つの数で、空白も 1 文字として数えます。混ぜると、どちらの問いにも
+  正しく答えられません。
+
+  The character error rate: the edit distance over the length of the reference.
+
+  **It is not `ScoreCopy`.** That marks what a person copied, for a person to
+  read, and does not score the spaces. This is one number comparing what the
+  machine read against the text, spaces included. Merged, neither question would
+  be answered properly. }
+function CharErrorRate(const Reference, Actual: string): Double;
 
 implementation
 
@@ -541,5 +556,36 @@ begin
   end;
   Result := Copy(Normalized, 1, Count);
 end;
+
+
+function CharErrorRate(const Reference, Actual: string): Double;
+var
+  Previous, Current: array of Integer;
+  I, J, Cost: Integer;
+begin
+  if Length(Reference) = 0 then
+    Exit(Ord(Length(Actual) > 0));
+  SetLength(Previous, Length(Actual) + 1);
+  SetLength(Current, Length(Actual) + 1);
+  for J := 0 to Length(Actual) do
+    Previous[J] := J;
+  for I := 1 to Length(Reference) do
+  begin
+    Current[0] := I;
+    for J := 1 to Length(Actual) do
+    begin
+      if Reference[I] = Actual[J] then
+        Cost := 0
+      else
+        Cost := 1;
+      Current[J] := Min(Min(Current[J - 1] + 1, Previous[J] + 1),
+        Previous[J - 1] + Cost);
+    end;
+    for J := 0 to Length(Actual) do
+      Previous[J] := Current[J];
+  end;
+  Result := Previous[Length(Actual)] / Length(Reference);
+end;
+
 
 end.

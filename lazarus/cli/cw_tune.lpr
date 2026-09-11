@@ -28,7 +28,8 @@ uses
   SysUtils, Classes, DateUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Decoder, DeepCW.Dsp, DeepCW.Morse, DeepCW.Tuner, DeepCW.Stream,
   DeepCW.Callsign, DeepCW.Review, DeepCW.Stations, DeepCW.Multi,
-  DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch, DeepCW.Platform;
+  DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch, DeepCW.Platform,
+  DeepCW.Fist, DeepCW.Practice, FistCases;
 
 const
   { 試験に使う本文。実際の交信に出てくる形をなぞっています。
@@ -52,36 +53,6 @@ var
     more a narrow bandwidth matters. }
   Wpm: Double = 22;
   Decoder: TDeepCWDecoder;
-
-{ 文字誤り率です。編集距離を参照文の長さで割ります。
-  Character error rate: edit distance over the length of the reference. }
-function CharErrorRate(const Reference, Actual: string): Double;
-var
-  Previous, Current: array of Integer;
-  I, J, Cost: Integer;
-begin
-  if Length(Reference) = 0 then
-    Exit(Ord(Length(Actual) > 0));
-  SetLength(Previous, Length(Actual) + 1);
-  SetLength(Current, Length(Actual) + 1);
-  for J := 0 to Length(Actual) do
-    Previous[J] := J;
-  for I := 1 to Length(Reference) do
-  begin
-    Current[0] := I;
-    for J := 1 to Length(Actual) do
-    begin
-      if Reference[I] = Actual[J] then
-        Cost := 0
-      else
-        Cost := 1;
-      Current[J] := Min(Min(Current[J - 1] + 1, Previous[J] + 1), Previous[J - 1] + Cost);
-    end;
-    for J := 0 to Length(Actual) do
-      Previous[J] := Current[J];
-  end;
-  Result := Previous[Length(Actual)] / Length(Reference);
-end;
 
 { 決まった種から符号を合成します。試験のたびに同じ雑音になります。
   Synthesises code from a fixed seed, so every run sees the same noise. }
@@ -1395,6 +1366,113 @@ begin
   Verdict('追跡は残るずれを移動の半分より小さくする',
     WorstResidual <= DRIFT_HZ / 2,
     Format('(追跡あり %.0f Hz / 追跡なし %.0f Hz)', [WorstResidual, DRIFT_HZ]));
+  Summary(Failures);
+end;
+
+
+{ 送信訓練の点数と、実際の読みやすさの関係を測ります（要件 FR-H.6、付録 A.2 の 5）。
+
+  **点数の低い符号と、読めない符号は違います。**付録 A は、12% のばらつき・
+  長短比 2.6・25% の速度ドリフトを、いずれも文字誤り率 0% で読んだと記録して
+  います。この試験は、**その主張がいまも本当かを確かめます。**
+
+  本当であることには意味が 2 つあります。1 つは、タイミング比を仮定しない
+  設計の利点が数値で確かめられること。もう 1 つは、**点数が「いま読めるか」では
+  なく「余裕があるか」を測っていると説明できること**です。低い点数が人を
+  責めるものにならないのは、この説明があるからです。
+
+  How the score relates to how readable the sending actually is (FR-H.6,
+  appendix A.2, finding 5).
+
+  **Sending that scores low and sending that cannot be read are not the same.**
+  Appendix A records a 12% spread, a ratio of 2.6 and a 25% drift all read at
+  zero character errors. This test asks **whether that is still true.**
+
+  It matters twice over: it is the number behind a design that assumes no timing
+  ratios, and it is what lets the score be explained as "how much margin there
+  is", not "whether it can be read right now" -- which is why a low score does
+  not stand as a reproach. }
+procedure RunFist;
+const
+  RATE = 8000;
+  TEXT = 'CQ CQ DE JA1ABC JA1ABC K JA1ABC DE JH2XYZ UR 599 599 QTH NAGOYA BK';
+var
+  Hands: TSendings;
+  Hand: TSending;
+  Audio: TSingleArray;
+  M: TFistMeasurement;
+  Score: TFistScore;
+  Own: TFistTarget;
+  Reference, Read_: string;
+  Cer, WorstReadable: Double;
+  I, Failures: Integer;
+  Basis: TFistStandard;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What, '  ', Detail)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('fist: 送信訓練の点数と、実際の読みやすさ / the score against real readability');
+  Failures := 0;
+  Own := Default(TFistTarget);
+  Hands := AppendixCases;
+  Reference := NormalizeText(TEXT);
+  WorstReadable := 0;
+  WriteLn('  技量                                   総合  区切り  文字誤り率  読めた本文');
+  for I := 0 to High(Hands) do
+  begin
+    Hand := Hands[I];
+    Audio := SendText(TEXT, Hand, RATE, 3300 + I);
+    M := MeasureAgainstText(Audio, RATE, Hand.ToneHz, TEXT);
+    if Pos('ファンズワース', Hand.Name) > 0 then
+      Basis := fsFarnsworth
+    else if Pos('バグキー', Hand.Name) > 0 then
+      Basis := fsBug
+    else
+      Basis := fsStandard;
+    Read_ := Trim(Decoder.DecodeLongSamples(
+      ToModelRate(FrequencyShift(Audio, RATE, Hand.ToneHz - TUNER_TARGET_TONE_HZ),
+        RATE, BandwidthHalfWidth(tbAuto)), Decoder.Metadata.SampleRate));
+    Cer := CharErrorRate(Reference, Read_);
+    Score := ScoreFist(M, Basis, Own, Cer);
+    WriteLn(Format('  %-38s %4.0f   %5.0f     %6.3f    %s',
+      [Hand.Name, Score.Overall, Score.Separation, Cer, Copy(Read_, 1, 28)]));
+    if not M.Ok then
+      Verdict('測れる: ' + Hand.Name, False, M.Note);
+    { 初級以外は、読めなければなりません。**読めないのが当たり前なら、
+      「点数が低くても読める」という主張は成り立ちません。**
+      Every hand but the beginner has to be readable: **the claim that a low
+      score still reads means nothing if they do not.** }
+    if I < High(Hands) then
+      WorstReadable := Max(WorstReadable, Cer)
+    else
+    begin
+      Verdict('初級の符号は、実際に読めない', Cer > 0.10,
+        Format('(文字誤り率 %.3f)', [Cer]));
+      Verdict('初級は「区切りの明瞭」が 20 点未満', Score.Separation < 20,
+        Format('(%.0f 点)', [Score.Separation]));
+    end;
+  end;
+  Verdict('点数が低くても、初級以外はすべて読める', WorstReadable <= 0.05,
+    Format('(最悪の文字誤り率 %.3f)', [WorstReadable]));
+
+  { 写しやすさの点数は、渡した文字誤り率そのものから作られます。**別の数字を
+    作っていないことを確かめます。**
+    The copyability score is made from the error rate handed in. **Check that it
+    is not some other number.** }
+  Score := ScoreFist(M, fsStandard, Own, 0.25);
+  Verdict('写しやすさは文字誤り率のとおりに出る',
+    Abs(Score.Copyability - 75) < 0.001, Format('(%.1f)', [Score.Copyability]));
+
   Summary(Failures);
 end;
 
@@ -3549,6 +3627,8 @@ begin
       RunScale;
     if Pos('recheck', Tests) > 0 then
       RunRecheck;
+    if Pos('fist', Tests) > 0 then
+      RunFist;
     if Pos('soak', Tests) > 0 then
       RunSoak;
     if Pos('track', Tests) > 0 then
