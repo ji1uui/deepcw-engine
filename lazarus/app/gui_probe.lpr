@@ -21,8 +21,8 @@ uses
   DeepCW.Types, DeepCW.Morse, DeepCW.Tuner, DeepCW.Decoder,
   DeepCW.Review, DeepCW.Multi, DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Platform,
-  DeepCW.FistLog,
-  WaterfallView, TranscriptView, BandMapView, TrendView;
+  DeepCW.FistLog, DeepCW.Fist,
+  WaterfallView, TranscriptView, BandMapView, TrendView, HistogramView;
 
 type
   { 部品の保護された入力処理は、そのままでは外から呼べません。派生させて
@@ -386,6 +386,8 @@ var
   Worst, Err, T, Fed: Double;
   Step_, Shown_: Integer;
   Trend: TFistTrendView;
+  Bars: TFistHistogramView;
+  Sent: TFistMeasurement;
   Png: TPortableNetworkGraphic;
   Sessions: TFistRecords;
   LeftY, RightY, Ink, Coloured: Integer;
@@ -1698,6 +1700,132 @@ begin
     Shot.Free;
   end;
   Trend.Visible := False;
+  View.Visible := True;
+  Application.ProcessMessages;
+
+
+  { ── 符号の長さの分布（要件 FR-H.9）──
+    **重なりが目で分かること**が受入基準です。分布を離して渡したときと
+    重ねて渡したときで、絵が変わらなければ、見ても何も分かりません。
+
+    The distributions of element lengths (requirement FR-H.9). The criterion is
+    that **the overlap can be seen**; if the picture does not change between
+    distributions that are apart and distributions that overlap, looking at it
+    tells nobody anything. }
+  WriteLn;
+  WriteLn('符号の長さの分布 / the distribution of element lengths');
+  Trend.Visible := False;
+  Bars := TFistHistogramView.Create(Form);
+  Bars.Parent := Form;
+  Bars.Align := alClient;
+  Bars.Visible := True;
+  Application.ProcessMessages;
+
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(Form.ClientWidth, Form.ClientHeight);
+
+    Sent := Default(TFistMeasurement);
+    Bars.SetMeasurement(Sent);
+    Bars.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+    Check('測定が無くても描画できる', Bars.Count = 0);
+
+    { きれいな送信: 符号内 1・文字間 3 が離れている。
+      A clean hand: one and three, well apart. }
+    Sent := Default(TFistMeasurement);
+    Sent.Ok := True;
+    Sent.DitSeconds := 0.06;
+    SetLength(Sent.Elements, 60);
+    for Step_ := 0 to High(Sent.Elements) do
+    begin
+      Sent.Elements[Step_].AtSeconds := Step_ * 0.1;
+      case Step_ mod 4 of
+        0: begin
+             Sent.Elements[Step_].Kind := ekDit;
+             Sent.Elements[Step_].Seconds := 0.06;
+           end;
+        1: begin
+             Sent.Elements[Step_].Kind := ekDah;
+             Sent.Elements[Step_].Seconds := 0.18;
+           end;
+        2: begin
+             Sent.Elements[Step_].Kind := ekIntra;
+             Sent.Elements[Step_].Seconds := 0.06;
+           end;
+      else
+        Sent.Elements[Step_].Kind := ekChar;
+        Sent.Elements[Step_].Seconds := 0.18;
+      end;
+    end;
+    Bars.SetMeasurement(Sent);
+    Bars.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+    Check('要素を渡せば数えられる', Bars.Count = 60, Format('(%d)', [Bars.Count]));
+
+    { 符号内と文字間が、**別の位置**に描かれること。横に見て、それぞれの色が
+      最初に現れる桁を比べます。
+      The gap inside a character and the gap between them are drawn **in
+      different places**: the column each colour first appears in is compared. }
+    Thin := -1;
+    Thick := -1;
+    for Step_ := 0 to Shot.Width - 1 do
+      for Y := 2 to Shot.Height - 3 do
+      begin
+        if (Thin < 0) and (Shot.Canvas.Pixels[Step_, Y] = ElementColor(ekIntra)) then
+          Thin := Step_;
+        if (Thick < 0) and (Shot.Canvas.Pixels[Step_, Y] = ElementColor(ekChar)) then
+          Thick := Step_;
+      end;
+    Check('符号内の山が描かれる', Thin > 0, Format('(%d 桁目)', [Thin]));
+    Check('文字間の山が描かれる', Thick > 0, Format('(%d 桁目)', [Thick]));
+    Check('離れて送れば、2 つの山も離れて描かれる', Thick > Thin + 8,
+      Format('(符号内 %d 桁目 / 文字間 %d 桁目)', [Thin, Thick]));
+    Underlined := Thick - Thin;
+
+    { 下手な送信: 符号内と文字間が重なっている。**近づけて渡せば、絵でも
+      近づくこと。**近づかないなら、その絵は分布を映していません。
+      A poor hand, the two gaps overlapping: **handed closer together, they are
+      drawn closer together** -- otherwise the picture does not follow the
+      distribution at all. }
+    for Step_ := 0 to High(Sent.Elements) do
+      if Sent.Elements[Step_].Kind = ekChar then
+        Sent.Elements[Step_].Seconds := 0.08;
+    Bars.SetMeasurement(Sent);
+    Bars.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+    Thin := -1;
+    Thick := -1;
+    for Step_ := 0 to Shot.Width - 1 do
+      for Y := 2 to Shot.Height - 3 do
+      begin
+        if (Thin < 0) and (Shot.Canvas.Pixels[Step_, Y] = ElementColor(ekIntra)) then
+          Thin := Step_;
+        if (Thick < 0) and (Shot.Canvas.Pixels[Step_, Y] = ElementColor(ekChar)) then
+          Thick := Step_;
+      end;
+    Check('重なって送れば、2 つの山も近づいて描かれる',
+      (Thick > 0) and (Thin > 0) and (Thick - Thin < Underlined),
+      Format('(離れ %d 桁 → %d 桁)', [Underlined, Thick - Thin]));
+
+    Png := TPortableNetworkGraphic.Create;
+    try
+      Png.Assign(Shot);
+      Png.SaveToFile(IncludeTrailingPathDelimiter(OutDir) + 'fist_histogram.png');
+      WriteLn('  書き出し: ',
+        IncludeTrailingPathDelimiter(OutDir) + 'fist_histogram.png');
+    finally
+      Png.Free;
+    end;
+
+    Started := Now;
+    for Repeats := 1 to 20 do
+      Bars.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+    PaintMs := MilliSecondsBetween(Now, Started) / 20;
+    WriteLn(Format('  分布の描画: %.1f ms', [PaintMs]));
+    Check('分布の描画が 1 枚 33 ms 未満', PaintMs < 33,
+      Format('(%.1f ms)', [PaintMs]));
+  finally
+    Shot.Free;
+  end;
+  Bars.Visible := False;
   View.Visible := True;
   Application.ProcessMessages;
 

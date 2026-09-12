@@ -36,7 +36,7 @@ uses
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
   DeepCW.FistLog, DeepCW.Diagnostics,
-  TranscriptView, WaterfallView, BandMapView, TrendView;
+  TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView;
 
 type
   { 受信のしかた（要件 FR-I.6）。
@@ -467,6 +467,11 @@ type
     FFtTrendItem: TComboBox;
     FFtTrendKey: TComboBox;
     FFtStreak: TLabel;
+    { 分布（要件 FR-H.9）。**点数の元になった分布そのものを見せます。**
+      The distributions (requirement FR-H.9): **the very thing the score came
+      from.** }
+    FFtHistogram: TFistHistogramView;
+    FFtBottomKind: TComboBox;
     { 前回選んでいた鍵。一覧は記録から作り直すので、**選び直せるように名前で
       持っておきます。**
       The key chosen last time. The list is rebuilt from the records, so **the
@@ -515,6 +520,7 @@ type
     procedure FtFinish(Cer: Double);
     procedure FtShowHistory;
     procedure FtTrendChanged(Sender: TObject);
+    procedure FtBottomChanged(Sender: TObject);
     procedure FtShowTrend(const Items: TFistRecords);
 
     function ConfigFileName: string;
@@ -2047,10 +2053,26 @@ begin
   StackBelow(Buttons);
   Buttons.Align := alTop;
   Buttons.BevelOuter := bvNone;
-  AddLabel(Buttons, '推移に出す項目', 12, 12);
+  { 下の欄に何を出すか（要件 FR-H.9・FR-H.10）。**推移は「回を追って」、
+    分布は「いまの 1 回の中で」を見るものです。**同時に出すには場所が足りず、
+    どちらも小さくするより、選べるほうがよいと判断しました。
+    What the panel below shows (FR-H.9, FR-H.10): **the trend looks across
+    sessions, the distributions inside one.** There is not room for both, and
+    choosing beats shrinking each to half. }
+  AddLabel(Buttons, '下に出すもの', 12, 12);
+  FFtBottomKind := TComboBox.Create(Buttons);
+  FFtBottomKind.Parent := Buttons;
+  FFtBottomKind.SetBounds(104, 6, 130, 28);
+  FFtBottomKind.Style := csDropDownList;
+  FFtBottomKind.Items.Add('推移');
+  FFtBottomKind.Items.Add('分布');
+  FFtBottomKind.ItemIndex := 0;
+  FFtBottomKind.OnChange := @FtBottomChanged;
+
+  AddLabel(Buttons, '推移に出す項目', 252, 12);
   FFtTrendItem := TComboBox.Create(Buttons);
   FFtTrendItem.Parent := Buttons;
-  FFtTrendItem.SetBounds(120, 6, 160, 28);
+  FFtTrendItem.SetBounds(360, 6, 150, 28);
   FFtTrendItem.Style := csDropDownList;
   FFtTrendItem.Items.Add('総合');
   FFtTrendItem.Items.Add('5 項目すべて');
@@ -2059,20 +2081,25 @@ begin
   FFtTrendItem.ItemIndex := 0;
   FFtTrendItem.OnChange := @FtTrendChanged;
 
-  AddLabel(Buttons, '鍵の種類', 300, 12);
+  AddLabel(Buttons, '鍵の種類', 526, 12);
   FFtTrendKey := TComboBox.Create(Buttons);
   FFtTrendKey.Parent := Buttons;
-  FFtTrendKey.SetBounds(370, 6, 150, 28);
+  FFtTrendKey.SetBounds(596, 6, 140, 28);
   FFtTrendKey.Style := csDropDownList;
   FFtTrendKey.Items.Add('すべて');
   FFtTrendKey.ItemIndex := 0;
   FFtTrendKey.OnChange := @FtTrendChanged;
 
-  FFtStreak := AddLabel(Buttons, '', 540, 12);
+  FFtStreak := AddLabel(Buttons, '', 752, 12);
 
   FFtTrend := TFistTrendView.Create(Bottom);
   FFtTrend.Parent := Bottom;
   FFtTrend.Align := alClient;
+
+  FFtHistogram := TFistHistogramView.Create(Bottom);
+  FFtHistogram.Parent := Bottom;
+  FFtHistogram.Align := alClient;
+  FFtHistogram.Visible := False;
 
   FtShowHistory;
 end;
@@ -2369,6 +2396,13 @@ begin
     on E: Exception do
       LogDiagnostic('送信訓練の記録', E.Message);
   end;
+  { 分布は、いま採点した回のものを出します（要件 FR-H.9）。**記録には要素まで
+    残していない**ので、出せるのはこの 1 回だけです。
+    The distributions are those of the session just scored (FR-H.9): **the
+    record does not keep the elements**, so this one session is what there is
+    to show. }
+  if FFtHistogram <> nil then
+    FFtHistogram.SetMeasurement(FFtMeasured);
   FtShowHistory;
   SetStatus('', '', Format('採点しました。総合 %.0f 点。', [Score.Overall]));
 end;
@@ -2482,6 +2516,26 @@ begin
     FFtStreak.Caption := Format('%d 日続いています', [Days])
   else
     FFtStreak.Caption := '';
+end;
+
+{ 下の欄を、推移と分布で入れ替えます（要件 FR-H.9）。
+  Swaps the panel below between the trend and the distributions (FR-H.9). }
+procedure TMainForm.FtBottomChanged(Sender: TObject);
+var
+  ShowTrend: Boolean;
+begin
+  MarkSettingsDirty;
+  if (FFtTrend = nil) or (FFtHistogram = nil) then
+    Exit;
+  ShowTrend := (FFtBottomKind = nil) or (FFtBottomKind.ItemIndex = 0);
+  FFtTrend.Visible := ShowTrend;
+  FFtHistogram.Visible := not ShowTrend;
+  { 推移の操作は、推移を出しているときだけ押せます。**押しても何も起きない
+    操作は、壊れているように見えます。**
+    The trend's controls can be used only while the trend is shown: **a control
+    that does nothing when pressed looks broken.** }
+  FFtTrendItem.Enabled := ShowTrend;
+  FFtTrendKey.Enabled := ShowTrend;
 end;
 
 procedure TMainForm.FtTrendChanged(Sender: TObject);
@@ -2729,6 +2783,9 @@ begin
       new key would show the trend of a different one -- the same reasoning as
       remembering the input device. }
     FFtTrendKeyWanted := Ini.ReadString('fist', 'trend_key', '');
+    FFtBottomKind.ItemIndex := ClampInt(Ini.ReadInteger('fist', 'bottom', 0),
+      0, FFtBottomKind.Items.Count - 1);
+    FtBottomChanged(nil);
     FtOptionsChanged(nil);
     FRxMode.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'mode', 0), 0, 2);
     FRxBand.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'band', 0),
@@ -2810,6 +2867,7 @@ begin
       Ini.WriteInteger('fist', 'key', FFtKey.ItemIndex);
       Ini.WriteInteger('fist', 'standard', FFtBasis.ItemIndex);
       Ini.WriteBool('fist', 'free', FFtFree.Checked);
+      Ini.WriteInteger('fist', 'bottom', FFtBottomKind.ItemIndex);
       Ini.WriteInteger('fist', 'trend_item', FFtTrendItem.ItemIndex);
       if FFtTrendKey.ItemIndex > 0 then
         Ini.WriteString('fist', 'trend_key',

@@ -1809,6 +1809,92 @@ begin
     Format('(%.2f)', [PaceInterval(2.0, 0.5)]));
 end;
 
+
+{ 分布のヒストグラム（要件 FR-H.9）。
+
+  **絵にする前に、何を数えるのかを決めます。**横軸は短点いくつぶんか、
+  範囲の外は端の升へ——この 2 つが違っていれば、絵は正しく描いても嘘になります。
+
+  The histogram (requirement FR-H.9). **What is counted is settled before it is
+  drawn**: the axis in dits, and anything past the end into the last bucket.
+  Get those wrong and a faithfully drawn picture still lies. }
+procedure TestHistogram;
+const
+  DIT = 0.06;
+var
+  Elements: TElements;
+  Counts: TCounts;
+  I, Total: Integer;
+
+  procedure Put(Index_: Integer; Kind: TElementKind; Units_: Double);
+  begin
+    Elements[Index_].Kind := Kind;
+    Elements[Index_].Seconds := Units_ * DIT;
+    Elements[Index_].AtSeconds := Index_ * 0.1;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('分布のヒストグラム（要件 FR-H.9）');
+  SetLength(Elements, 6);
+  Put(0, ekDit, 1.0);
+  Put(1, ekDit, 1.1);
+  Put(2, ekDah, 3.0);
+  Put(3, ekChar, 3.0);
+  Put(4, ekChar, 12.0);   { 範囲（9）の外 / past the end }
+  Put(5, ekWord, 7.0);
+
+  Counts := Histogram(Elements, ekDit, DIT);
+  Total := 0;
+  for I := 0 to High(Counts) do
+    Total := Total + Counts[I];
+  Check('数えた数が、その種別の要素の数と合う', Total = 2,
+    Format('(%d)', [Total]));
+  { 短点 2 つは、どちらも 1 短点ぶんの升に入る。**秒ではなく短点で数えるので、
+    速度が変わっても同じ絵になります。**
+    Both dits land in the bucket for one dit: **counted in dits, not seconds, the
+    picture is the same at another speed.** }
+  Check('短点は、短点 1 つぶんの升に入る',
+    Counts[Trunc(1.0 / FIST_HISTOGRAM_MAX_UNITS * FIST_HISTOGRAM_BUCKETS)] = 2,
+    Format('(%d)', [Counts[Trunc(1.0 / FIST_HISTOGRAM_MAX_UNITS * FIST_HISTOGRAM_BUCKETS)]]));
+
+  { **範囲の外を捨てません**（教訓 10.9）。捨てると、極端に長い間隔が 1 つも
+    無かったように見えます。
+    **Nothing past the end is dropped** (lesson 10.9): dropped, a wildly long
+    gap would look like no gap at all. }
+  Counts := Histogram(Elements, ekChar, DIT);
+  Total := 0;
+  for I := 0 to High(Counts) do
+    Total := Total + Counts[I];
+  Check('範囲の外の値も数に入っている', Total = 2, Format('(%d)', [Total]));
+  Check('範囲の外は、端の升に入る', Counts[High(Counts)] = 1,
+    Format('(%d)', [Counts[High(Counts)]]));
+
+  { 速度が変わっても同じ絵になること。**秒で数えていれば、ここで崩れます。**
+    The same picture at another speed: **counted in seconds it would break
+    here.** }
+  for I := 0 to High(Elements) do
+    Elements[I].Seconds := Elements[I].Seconds * 2;
+  Check('速度が半分でも、同じ升に入る',
+    Histogram(Elements, ekDit, DIT * 2)[
+      Trunc(1.0 / FIST_HISTOGRAM_MAX_UNITS * FIST_HISTOGRAM_BUCKETS)] = 2, '');
+
+  Check('短点の長さが分からなければ、数えない',
+    Length(Histogram(Elements, ekDit, 0)) = FIST_HISTOGRAM_BUCKETS, '');
+  Counts := Histogram(Elements, ekDit, 0);
+  Total := 0;
+  for I := 0 to High(Counts) do
+    Total := Total + Counts[I];
+  Check('短点の長さが分からなければ、数は 0', Total = 0, Format('(%d)', [Total]));
+  { 許容は 1E-6。**桁の最後まで同じであることを求めているのではなく、
+    「範囲 ÷ 升の数」であることを確かめています。**
+    A tolerance of 1E-6: **what is checked is that it is the range over the
+    count, not that the last digit agrees.** }
+  Check('升の幅は、範囲を升の数で割ったもの',
+    Abs(BucketUnits - FIST_HISTOGRAM_MAX_UNITS / FIST_HISTOGRAM_BUCKETS) < 1E-6,
+    Format('(%.4f)', [BucketUnits]));
+end;
+
 procedure TestRecorder;
 const
   WAV_RATE = 8000;
@@ -3183,6 +3269,7 @@ begin
     TestDiagnostics;
     TestMonitorAudio;
     TestPacing;
+    TestHistogram;
   finally
     Meta.Free;
   end;

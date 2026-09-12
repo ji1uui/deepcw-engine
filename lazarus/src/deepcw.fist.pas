@@ -215,6 +215,47 @@ function FistTargetFor(Standard: TFistStandard; const Own: TFistTarget): TFistTa
   Turns a measurement into a basis -- the material for "my own past". }
 function TargetFromMeasurement(const M: TFistMeasurement): TFistTarget;
 
+{ 分布のヒストグラム（要件 FR-H.9）。
+
+  **点数は「どれだけ離れているか」を 1 つの数にしたものです。**その数の元に
+  なった分布そのものを見せると、**なぜその点数なのかが目で分かります。**
+  符号内の間隔と文字間の山が重なっていれば、区切りの明瞭が低い理由はそれです。
+
+  横軸は**短点いくつぶんか**です。秒で測ると、速度を変えたときに同じ癖が別の
+  形に見えます。短点で測れば、20 WPM でも 30 WPM でも同じ絵になります。
+
+  範囲の外に出た値は、**捨てずに端の升へ入れます**（教訓 10.9）。捨てると、
+  極端に長い間隔が 1 つも無かったように見えます。
+
+  The histogram of the distributions (requirement FR-H.9).
+
+  **A score is how far apart things are, reduced to one number.** Showing the
+  distributions it came from **makes the reason for that number visible**: where
+  the gap inside a character and the gap between characters overlap, that is why
+  the break between characters scores low.
+
+  The axis is in **dits, not seconds**: measured in seconds the same habit looks
+  like a different shape at another speed, while in dits it draws the same
+  picture at 20 WPM and at 30.
+
+  Anything past the end goes **into the last bucket rather than away**
+  (lesson 10.9): dropped, a wildly long gap would look like no gap at all. }
+const
+  FIST_HISTOGRAM_BUCKETS = 27;
+  { 語間の目安 7 に少し余裕を見た範囲。/ Room past the seven a word gap wants. }
+  FIST_HISTOGRAM_MAX_UNITS = 9.0;
+
+type
+  TCounts = array of Integer;
+
+function Histogram(const Elements: TElements; Kind: TElementKind;
+  DitSeconds: Double; Buckets: Integer = FIST_HISTOGRAM_BUCKETS;
+  MaxUnits: Double = FIST_HISTOGRAM_MAX_UNITS): TCounts;
+
+{ 升 1 つぶんの幅（短点いくつぶんか）。/ One bucket's width, in dits. }
+function BucketUnits(Buckets: Integer = FIST_HISTOGRAM_BUCKETS;
+  MaxUnits: Double = FIST_HISTOGRAM_MAX_UNITS): Double;
+
 { 採点します（要件 FR-H.6・FR-H.8）。`Cer` に 0 以上を渡すと「写しやすさ」も
   点数に入ります。渡さなければ 4 項目で採点し、`HasCopyability` は False です。
   Scores the measurement (FR-H.6, FR-H.8). Pass `Cer` at zero or above to
@@ -1188,5 +1229,40 @@ begin
         '速さは後からついてきます。';
     end;
 end;
+
+
+function BucketUnits(Buckets: Integer; MaxUnits: Double): Double;
+begin
+  if Buckets <= 0 then
+    Exit(0);
+  Result := MaxUnits / Buckets;
+end;
+
+function Histogram(const Elements: TElements; Kind: TElementKind;
+  DitSeconds: Double; Buckets: Integer; MaxUnits: Double): TCounts;
+var
+  I, Index_: Integer;
+  Units_: Double;
+begin
+  Result := nil;
+  if (Buckets <= 0) or (MaxUnits <= 0) then
+    Exit;
+  SetLength(Result, Buckets);
+  for I := 0 to High(Result) do
+    Result[I] := 0;
+  if DitSeconds <= 0 then
+    Exit;
+  for I := 0 to High(Elements) do
+  begin
+    if Elements[I].Kind <> Kind then
+      Continue;
+    Units_ := Elements[I].Seconds / DitSeconds;
+    Index_ := Trunc(Units_ / MaxUnits * Buckets);
+    { **範囲の外は端の升へ入れます。捨てません**（教訓 10.9）。
+      **Past the end goes into the end bucket, not away** (lesson 10.9). }
+    Result[ClampInt(Index_, 0, Buckets - 1)] := Result[ClampInt(Index_, 0, Buckets - 1)] + 1;
+  end;
+end;
+
 
 end.
