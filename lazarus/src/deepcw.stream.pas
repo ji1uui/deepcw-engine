@@ -35,8 +35,42 @@ const
   STREAM_TAIL_GUARD_SECONDS = 1.25;
   { これより短い先頭部分は確定させません。/ Nothing shorter than this commits. }
   STREAM_MIN_CONFIRMED_SECONDS = 2.0;
-  { 解析を回す最小の間隔。/ Shortest interval between analyses. }
-  STREAM_MIN_INTERVAL_SECONDS = 1.0;
+  { 解析にどれだけの機械の力を使ってよいか。1 コアに対する割合です
+    （要件 FR-G.4・NFR-1.4・NFR-1.5）。
+
+    **同じ音を何度も解析することが、費用の正体です。**確定していない部分は
+    次の解析でもまた頭から読み直すため、解析を細かく回すほど、同じ音の上を
+    何度も往復します。速い機械では気になりませんが、遅い機械ではここで
+    1 コアを使い切ります。
+
+    **間隔を緩めれば、確定は遅くなりますが、機械は追いつきます。**捨ててから
+    「捨てました」と言うより、遅れて読めるほうがよい（要件 NFR-4 の fail-soft
+    より前に打てる手があります）。
+
+    How much of the machine the analysis may use, as a fraction of one core
+    (requirements FR-G.4, NFR-1.4, NFR-1.5).
+
+    **The cost is in analysing the same audio again and again**: whatever is not
+    yet confirmed is read from the top once more at the next analysis, so the
+    finer the analyses, the more times the same seconds are traversed. On a fast
+    machine this goes unnoticed; on a slow one it is where a whole core goes.
+
+    **Easing the interval delays the confirmation but lets the machine keep
+    up** -- better than dropping audio and saying so afterwards; there is a move
+    to play before the fail-soft of requirement NFR-4. }
+  STREAM_CPU_BUDGET = 0.7;
+
+  { 緩めても、これ以上は待ちません。**これを超えて待つくらいなら、その機械では
+    実時間に追いつかないと言うべきです。**
+    The interval is never eased past this. **Waiting longer than this would be
+    worth less than saying plainly that the machine cannot keep up.** }
+  STREAM_MAX_INTERVAL_SECONDS = 6.0;
+
+  { 解析 1 回の費用をならす重み。**1 回の遅れで間隔を跳ね上げないためです。**
+    新しい値をこの割合で混ぜます。
+    How much of a new measurement enters the running cost: **one slow analysis
+    must not send the interval leaping.** }
+  STREAM_COST_SMOOTHING = 0.3;
 
   { 画面が音声を渡してくる刻み。
 
@@ -157,6 +191,20 @@ type
       differ the result describes audio that no longer exists and is dropped
       whole (appendix K). }
     FEpoch: Int64;
+    { 解析 1 回の費用（秒、ならしたもの）と、その 1 回が扱った音の長さ。
+      **実時間比は、この 2 つの比です**（要件 FR-G.4）。
+      The cost of one analysis in seconds, smoothed, and the length of audio it
+      covered: **the real-time ratio is the one over the other** (FR-G.4). }
+    FStepCost: Double;
+    FStepAudio: Double;
+    { 前回の解析を始めた時点の、受け取った音の長さ。**壁の時計ではなく音の
+      時計で数えます。**試験は実時間より速く音を流し込むので、壁の時計で
+      間隔を測ると、測っている動作点が実機と別物になります。
+      The audio clock at the last analysis -- **the audio's clock, not the
+      wall's**: a harness feeds faster than real time, and gating on the wall
+      would put the test at an operating point the real thing never sees. }
+    FPacedFrom: Double;
+    FCpuBudget: Double;
     FTailGuard: Double;
     FMinConfirmed: Double;
     FSquelch: Double;
@@ -186,6 +234,9 @@ type
       analysis thread. When input outruns analysis, the oldest is discarded to
       stay within the limit. }
     procedure CapBuffer;
+    { 解析 1 回の費用を控え、次に解析してよい時点を決め直します（要件 FR-G.4）。
+      Notes what one analysis cost and settles when the next may run (FR-G.4). }
+    procedure NotePace(AudioSeconds, CostSeconds: Double);
     { 呼び出し側は FLock を保持していること。/ The caller must hold FLock. }
     function SnapToSample(Seconds: Double; Rate: Integer;
       out Samples: Integer): Double;
@@ -277,8 +328,45 @@ type
       Nothing shorter than this from the start is committed. }
     property MinConfirmedSeconds: Double read FMinConfirmed write FMinConfirmed;
 
+    { 解析にどれだけの機械の力を使ってよいか（要件 FR-G.4）。1 コアに対する
+      割合です。0 にすると間隔を緩めません。
+      How much of the machine the analysis may use (FR-G.4), as a fraction of
+      one core; zero never eases the interval. }
+    property CpuBudget: Double read FCpuBudget write FCpuBudget;
+
+    { 解析 1 回の費用（秒、ならしたもの）。まだ測っていなければ 0 です。
+      The cost of one analysis in seconds, smoothed; zero before the first. }
+    function StepCostSeconds: Double;
+
+    { 実時間比。音 1 秒あたり何倍の速さで解析できているか。**1 を下回ると、
+      その機械では実時間に追いつきません。**測っていなければ 0 です。
+      The real-time ratio: how many times faster than real time the analysis
+      runs. **Below one the machine cannot keep up.** Zero before the first
+      measurement. }
+    function RealTimeRatio: Double;
+
+    { いま守っている解析の間隔（音の秒数）。0 なら緩めていません。
+      The interval now kept between analyses, in seconds of audio; zero means
+      nothing is being eased. }
+    function PaceSeconds: Double;
+
     property Decoder: TDeepCWDecoder read FDecoder;
   end;
+
+{ 次の解析まで待つ音の長さ（秒）。**費用を予算で割るだけです。**
+  1 回 3 秒かかる解析を 1 コアの 7 割で回すなら、4.3 秒ぶんの音が来るまで
+  待てばよい、という計算です。
+
+  費用が測れていない（0）なら 0——**最初の 1 回は待ちません。**待ってから
+  測るのでは、何を待てばよいのか分かりません。
+
+  How long to wait, in seconds of audio, before the next analysis: **the cost
+  divided by the budget.** An analysis costing three seconds, at seven tenths of
+  a core, wants 4.3 seconds of audio between runs.
+
+  With no measurement yet the answer is zero: **the first analysis never
+  waits**, there being nothing yet to wait on. }
+function PaceInterval(CostSeconds, Budget: Double): Double;
 
 implementation
 
@@ -294,6 +382,7 @@ begin
   FTailGuard := STREAM_TAIL_GUARD_SECONDS;
   FMinConfirmed := STREAM_MIN_CONFIRMED_SECONDS;
   FSquelch := STREAM_SQUELCH_LEVEL;
+  FCpuBudget := STREAM_CPU_BUDGET;
   FSourceRate := ADecoder.Metadata.SampleRate;
   InitCriticalSection(FLock);
 end;
@@ -592,9 +681,89 @@ begin
   DropLeading(Drop);
 end;
 
+function PaceInterval(CostSeconds, Budget: Double): Double;
+begin
+  if (CostSeconds <= 0) or (Budget <= 0) then
+    Exit(0);
+  Result := Min(STREAM_MAX_INTERVAL_SECONDS, CostSeconds / Budget);
+end;
+
+function TStreamingDecoder.StepCostSeconds: Double;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := FStepCost;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TStreamingDecoder.RealTimeRatio: Double;
+begin
+  EnterCriticalSection(FLock);
+  try
+    if FStepCost > 0 then
+      Result := FStepAudio / FStepCost
+    else
+      Result := 0;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TStreamingDecoder.PaceSeconds: Double;
+begin
+  Result := PaceInterval(StepCostSeconds, FCpuBudget);
+end;
+
+{ 解析にかけてよいか。溜まった量と、**前回からどれだけ音が来たか**の 2 つで
+  決めます（要件 FR-G.4）。
+
+  速い機械では、費用 0.3 秒 ÷ 予算 0.7 で 0.43 秒——溜まる量の条件
+  （2 秒）のほうが先に効くので、**動作点は変わりません。**遅い機械でだけ
+  間隔が伸び、CPU は予算に収まります。
+
+  Whether an analysis may run: from what has accumulated and **how much audio
+  has arrived since the last one** (requirement FR-G.4).
+
+  On a fast machine a cost of 0.3 seconds over a budget of 0.7 asks for 0.43
+  seconds, which the two-second minimum already covers -- **the operating point
+  does not move.** The interval grows only on a machine that needs it, and the
+  processor stays inside its budget. }
+procedure TStreamingDecoder.NotePace(AudioSeconds, CostSeconds: Double);
+begin
+  if CostSeconds < 0 then
+    CostSeconds := 0;
+  EnterCriticalSection(FLock);
+  try
+    { **1 回の遅れで間隔を跳ね上げません。**他の仕事に取られた 1 回で
+      「この機械は遅い」と決めつけると、そのあとずっと確定が遅れます。
+      **One slow run does not send the interval leaping**: deciding the machine
+      is slow from a single analysis that lost its turn would delay every
+      confirmation after it. }
+    if FStepCost <= 0 then
+      FStepCost := CostSeconds
+    else
+      FStepCost := (1 - STREAM_COST_SMOOTHING) * FStepCost +
+        STREAM_COST_SMOOTHING * CostSeconds;
+    FStepAudio := AudioSeconds;
+    FPacedFrom := FConfirmedSeconds + FPendingCount / Max(1, FSourceRate);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
 function TStreamingDecoder.Ready: Boolean;
+var
+  Interval: Double;
 begin
   Result := PendingSeconds >= STREAM_MIN_PENDING_SECONDS;
+  if not Result then
+    Exit;
+  Interval := PaceSeconds;
+  if Interval <= 0 then
+    Exit;
+  Result := ElapsedSeconds - FPacedFrom >= Interval;
 end;
 
 function TStreamingDecoder.PendingSeconds: Double;
@@ -717,6 +886,7 @@ var
   Forced: Boolean;
   Epoch: Int64;
   DropSamples: Integer;
+  Started: TDateTime;
 begin
   Result := False;
   { まず溜め込みの上限を掛けます。入力が解析に追いつかないときは、ここで古い
@@ -747,8 +917,14 @@ begin
   Prepared := PrepareForModel(Audio);
   if Length(Prepared) = 0 then
     Exit;
+  { **解析の費用は、ここで測ります**（要件 FR-G.4）。測った値は、次にいつ
+    解析してよいかを決めるのに使います。
+    **The cost of an analysis is measured here** (requirement FR-G.4); what it
+    measures decides when the next one may run. }
+  Started := Now;
   Chars := DropLeadArtifacts(
     FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate));
+  NotePace(AnalysisSeconds, (Now - Started) * SecsPerDay);
 
   { 上限まで溜まったら、末尾のガードを外してでも前へ進めます。
     Once the buffer is full, commit even without the tail guard. }

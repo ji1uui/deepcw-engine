@@ -1476,6 +1476,166 @@ begin
   Summary(Failures);
 end;
 
+
+{ 実時間比の自己計測と、推論間隔の自動調整を確かめます（要件 FR-G.4・NFR-1.4）。
+
+  **遅い機械はこの容器にありません。**そこで、予算のほうを絞ります。
+  「1 コアの 7 割」を「1 コアの 2%」にすれば、いまの機械はその予算に対して
+  50 倍遅い機械とまったく同じ立場に置かれます。制御としては同じものを
+  確かめたことになります。
+
+  見るのは 2 つです。**CPU が予算に収まること**と、**予算を絞っても文字が
+  壊れないこと**。緩めた結果、読めなくなっては意味がありません。
+
+  Checks the self-measured real-time ratio and the easing of the analysis
+  interval (FR-G.4, NFR-1.4).
+
+  **There is no slow machine in this container**, so the budget is narrowed
+  instead: at two per cent of a core rather than seventy, this machine stands in
+  exactly the position of one fifty times slower, and the control loop under
+  test is the same one.
+
+  Two things are looked at: **that the processor share lands inside the
+  budget**, and **that narrowing it does not break the text** -- easing the
+  interval is worth nothing if what comes out can no longer be read. }
+procedure RunPace;
+const
+  RATE = 8000;
+  TONE_HZ = 700;
+var
+  Audio, Chunk: TSingleArray;
+  Stream: TStreamingDecoder;
+  Reference, Got: string;
+  Position, Taken, Steps, I, Failures: Integer;
+  Seconds, Cost, Started, Budget, Share: Double;
+  Begun: TDateTime;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What, '  ', Detail)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
+  { 1 回ぶん流し込み、解析の費用と回数を測ります。
+    Feeds the whole recording once, measuring what the analyses cost. }
+  procedure FeedAll(ABudget: Double; out ACost: Double; out ASteps: Integer;
+    out AText: string);
+  begin
+    Stream := TStreamingDecoder.Create(Decoder);
+    try
+      Stream.CpuBudget := ABudget;
+      Stream.SquelchLevel := 0;
+      Position := 0;
+      ASteps := 0;
+      ACost := 0;
+      while Position < Length(Audio) do
+      begin
+        Taken := Min(Round(STREAM_FEED_SECONDS * RATE), Length(Audio) - Position);
+        Stream.Append(Copy(Audio, Position, Taken), RATE);
+        Inc(Position, Taken);
+        { **実機と同じ回し方にします。**画面は 0.2 秒ごとに 1 回だけ解析を
+          始めます。`while Ready do Step` と書くと、確定できる区切りが見つから
+          ない間ずっと回り続け、**間隔を緩める規則が、その無限の回転を止める
+          役目まで負ってしまいます。**規則を外して確かめようとすると、
+          落ちるのではなく戻ってこなくなりました。
+          **Driven as the real thing drives it**: the display starts at most one
+          analysis every 0.2 seconds. Written as `while Ready do Step` it spins
+          for as long as no split can be found, and **the easing rule ends up
+          holding that spin back as well** -- taking the rule away to check it
+          did not fail the test, it simply never returned. }
+        if Stream.Ready then
+        begin
+          Begun := Now;
+          Stream.Step;
+          ACost := ACost + (Now - Begun) * SecsPerDay;
+          Inc(ASteps);
+        end;
+      end;
+      Stream.Finish;
+      AText := Trim(DecodedText(Stream.ConfirmedChars));
+    finally
+      Stream.Free;
+    end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('pace: 推論間隔の自動調整 / easing the analysis interval');
+  Failures := 0;
+  Reference := NormalizeText(MESSAGES[1]);
+  Audio := Synthesise(Reference, RATE, TONE_HZ, Noise, 6100);
+  Seconds := Length(Audio) / RATE;
+
+  { [1] 既定の予算。**速い機械では何も変わらないこと。** }
+  FeedAll(STREAM_CPU_BUDGET, Cost, Steps, Got);
+  Share := Cost / Seconds;
+  WriteLn(Format('  [1] 予算 %.2f: 解析 %d 回 / 費用 %.2f 秒 / 音 %.1f 秒 → CPU %.3f コア相当',
+    [STREAM_CPU_BUDGET, Steps, Cost, Seconds, Share]));
+  Verdict('既定の予算では、本文が完全に読める', Got = Reference, Copy(Got, 1, 40));
+  Verdict('既定の予算では、CPU が予算に収まる', Share <= STREAM_CPU_BUDGET,
+    Format('(%.3f コア相当)', [Share]));
+  Started := Steps;
+
+  { [2] 予算を 2% に絞る。**50 倍遅い機械と同じ立場。** }
+  Budget := 0.02;
+  FeedAll(Budget, Cost, Steps, Got);
+  Share := Cost / Seconds;
+  WriteLn(Format('  [2] 予算 %.2f: 解析 %d 回 / 費用 %.2f 秒 → CPU %.3f コア相当',
+    [Budget, Steps, Cost, Share]));
+  { **解析の回数が減っていること。**減っていなければ、間隔を緩めていません。
+    **The analyses grow fewer**, or the interval was never eased. }
+  Verdict('予算を絞ると、解析の回数が減る', Steps < Started,
+    Format('(%d 回 → %d 回)', [Round(Started), Steps]));
+  { **CPU が予算に収まること。**これが受入基準そのものです。上限（6 秒）で
+    頭打ちになるため、予算に対して 2 倍までは許します。
+    **The processor share lands inside the budget**, which is the acceptance
+    criterion itself; twice the budget is allowed, the interval being capped at
+    six seconds. }
+  Verdict('予算を絞ると、CPU も下がる', Share <= 2 * Budget,
+    Format('(%.3f コア相当 / 予算 %.2f)', [Share, Budget]));
+  { **緩めても、読めること。**読めなくなるなら、緩める意味がありません。
+    **What comes out can still be read**: easing that costs the text is not
+    worth doing. }
+  Verdict('予算を絞っても、本文は完全に読める', Got = Reference, Copy(Got, 1, 40));
+
+  { [3] 測った実時間比が、実際の費用と合っていること。
+        [3] The measured ratio agrees with what the analyses actually cost. }
+  Stream := TStreamingDecoder.Create(Decoder);
+  try
+    Stream.SquelchLevel := 0;
+    Verdict('測る前は、実時間比も間隔も 0', (Stream.RealTimeRatio = 0) and
+      (Stream.PaceSeconds = 0), Format('(%.1f / %.2f)',
+        [Stream.RealTimeRatio, Stream.PaceSeconds]));
+    Position := 0;
+    while (Position < Length(Audio)) and (Stream.StepCostSeconds = 0) do
+    begin
+      Taken := Min(Round(STREAM_FEED_SECONDS * RATE), Length(Audio) - Position);
+      Stream.Append(Copy(Audio, Position, Taken), RATE);
+      Inc(Position, Taken);
+      if Stream.Ready then
+        Stream.Step;
+    end;
+    WriteLn(Format('  [3] 解析 1 回 %.3f 秒 / 実時間比 %.0f 倍 / 間隔 %.2f 秒',
+      [Stream.StepCostSeconds, Stream.RealTimeRatio, Stream.PaceSeconds]));
+    Verdict('実時間比を自分で測っている', Stream.RealTimeRatio > 1,
+      Format('(%.0f 倍)', [Stream.RealTimeRatio]));
+    Verdict('間隔は、費用を予算で割ったものになっている',
+      Abs(Stream.PaceSeconds -
+        Min(STREAM_MAX_INTERVAL_SECONDS,
+          Stream.StepCostSeconds / STREAM_CPU_BUDGET)) < 0.001,
+      Format('(%.3f 秒)', [Stream.PaceSeconds]));
+  finally
+    Stream.Free;
+  end;
+
+  Summary(Failures);
+end;
+
 { 解析が入力に追いつかないときに、溜め込みが止まることを確かめます。
 
   常設シャックは何時間も動かしたままになる。**入ってくる速さが解析の速さを
@@ -3629,6 +3789,8 @@ begin
       RunRecheck;
     if Pos('fist', Tests) > 0 then
       RunFist;
+    if Pos('pace', Tests) > 0 then
+      RunPace;
     if Pos('soak', Tests) > 0 then
       RunSoak;
     if Pos('track', Tests) > 0 then

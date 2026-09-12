@@ -22,7 +22,7 @@ uses
     unit that uses one, or the program dies the moment one starts.** }
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes, SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
-  DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder,
+  DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder, DeepCW.Stream,
   DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.Callsign,
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics, FistCases;
@@ -1744,6 +1744,71 @@ begin
   Check('記録が無ければ 0 日', ConsecutiveDays(Items, Today) = 0, '');
 end;
 
+
+{ 推論間隔の自動調整（要件 FR-G.4・NFR-1.4）。
+
+  **速い機械では何も変えず、遅い機械でだけ間隔を緩める**のが、この規則の
+  値打ちです。変えてしまえば、いま満たしている遅延目標（NFR-1.1）を、
+  遅くない機械で自ら壊すことになります。
+
+  The automatic easing of the analysis interval (FR-G.4, NFR-1.4).
+
+  **Nothing changes on a machine that is fast enough; the interval eases only
+  where it must.** Changing it anywhere else would break, on machines that are
+  not slow, the latency target the application already meets (NFR-1.1). }
+procedure TestPacing;
+begin
+  WriteLn;
+  WriteLn('推論間隔の自動調整（要件 FR-G.4）');
+
+  { 測る前は待たない。**待ってから測るのでは、何を待てばよいのか分かりません。**
+    Nothing waits before the first measurement: **waiting first would be
+    waiting on nothing.** }
+  Check('費用が分からないうちは待たない', PaceInterval(0, STREAM_CPU_BUDGET) = 0,
+    Format('(%.2f)', [PaceInterval(0, STREAM_CPU_BUDGET)]));
+
+  { 速い機械: 1 回 0.3 秒。予算 0.7 なら 0.43 秒ぶんの音で足りる。
+    **溜まる量の条件（2 秒）のほうが先に効くので、動作点は変わりません。**
+    A fast machine: 0.3 s an analysis wants 0.43 s of audio, which the
+    two-second minimum already covers -- **the operating point does not move.** }
+  Check('速い機械では、溜まる量の条件より短い間隔で足りる',
+    PaceInterval(0.3, STREAM_CPU_BUDGET) < STREAM_MIN_PENDING_SECONDS,
+    Format('(%.2f 秒 / 溜まる量 %.1f 秒)',
+      [PaceInterval(0.3, STREAM_CPU_BUDGET), STREAM_MIN_PENDING_SECONDS]));
+
+  { 遅い機械: 1 回 3 秒。予算 0.7 なら 4.29 秒。
+    A slow machine: three seconds an analysis wants 4.29 s. }
+  Check('遅い機械では、費用を予算で割った間隔になる',
+    Abs(PaceInterval(3.0, 0.7) - 3.0 / 0.7) < 0.001,
+    Format('(%.2f 秒)', [PaceInterval(3.0, 0.7)]));
+
+  { **緩めるにも限りがあります。**これを超えて待つくらいなら、その機械では
+    実時間に追いつかないと言うべきです。
+    **There is a limit to the easing**: waiting longer would be worth less than
+    saying the machine cannot keep up. }
+  Check('どれだけ遅くても、上限を超えて待たない',
+    PaceInterval(100, 0.7) = STREAM_MAX_INTERVAL_SECONDS,
+    Format('(%.1f 秒)', [PaceInterval(100, 0.7)]));
+
+  { 予算を広げれば間隔は縮み、狭めれば伸びること。**向きが逆なら、
+    遅い機械ほど CPU を使うことになります。**
+    A wider budget shortens the interval and a narrower one lengthens it: **the
+    other way round, a slow machine would use more of the processor, not
+    less.** }
+  Check('予算を広げると間隔は縮む',
+    PaceInterval(3.0, 0.9) < PaceInterval(3.0, 0.5),
+    Format('(%.2f / %.2f)', [PaceInterval(3.0, 0.9), PaceInterval(3.0, 0.5)]));
+  Check('予算を 0 にすると緩めない', PaceInterval(3.0, 0) = 0, '');
+
+  { 予算どおりに割り振れていること。**間隔 × 予算 = 費用**が成り立っていなければ、
+    CPU 使用率は目標に収まりません（要件 FR-G.4 の受入基準）。
+    The arithmetic holds: **interval times budget equals cost**, or the
+    processor share would not land on its target (the acceptance criterion). }
+  Check('間隔 × 予算 が費用に等しい',
+    Abs(PaceInterval(2.0, 0.5) * 0.5 - 2.0) < 0.001,
+    Format('(%.2f)', [PaceInterval(2.0, 0.5)]));
+end;
+
 procedure TestRecorder;
 const
   WAV_RATE = 8000;
@@ -3117,6 +3182,7 @@ begin
     TestFistLog;
     TestDiagnostics;
     TestMonitorAudio;
+    TestPacing;
   finally
     Meta.Free;
   end;

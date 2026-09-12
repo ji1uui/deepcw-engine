@@ -194,6 +194,11 @@ type
       committed once that analysis finishes; doing it at the moment of
       stopping would collide with the analysis in flight. }
     FFinishPending: Boolean;
+    { 「間隔を緩めています」と最後に伝えた時刻。**毎秒言えば、案内の欄が
+      それだけで埋まります。**
+      When the eased interval was last mentioned: **said every second it would
+      fill the guidance panel by itself.** }
+    FPaceToldAt: TDateTime;
 
     { 音声 / audio }
     FRing: TAudioRing;
@@ -2897,6 +2902,14 @@ begin
     if FStream <> nil then
     begin
       Lines.Add(Format('未解析の音声: %.1f 秒', [FStream.PendingSeconds]));
+      { 実時間比と、いま守っている解析の間隔（要件 FR-G.4・FR-G.3）。
+        **どちらも、遅い機械で何が起きているのかを説明する数字です。**
+        The real-time ratio and the interval now kept (FR-G.4, FR-G.3): **the
+        two numbers that explain what is happening on a slow machine.** }
+      if FStream.RealTimeRatio > 0 then
+        Lines.Add(Format('解析 1 回: %.2f 秒 / 実時間比 %.0f 倍 / 推論間隔 %.2f 秒',
+          [FStream.StepCostSeconds, FStream.RealTimeRatio,
+           FStream.PaceSeconds]));
       { 追いつけずに捨てた分は、黙って消えてはいけません。読めなかった理由が
         そこにあるかもしれないからです（要件 NFR-4、FR-G.3）。
         Audio dropped through falling behind must not vanish silently: it may
@@ -5444,6 +5457,22 @@ begin
   if (FPrStop <> nil) and FPrStop.Enabled and not FPlayback.Running then
     FPrStop.Enabled := False;
   UpdatePracticeReveal;
+  { 推論間隔を緩めたときは、そう言います（要件 FR-G.4）。**黙って遅くすると、
+    「今日はなぜ確定が遅いのか」が誰にも分かりません。**速い機械では
+    この案内は出ません。
+    When the interval is eased, it is said (requirement FR-G.4): **eased in
+    silence, nobody could tell why the text is slower to settle today.** On a
+    machine that does not need it, this never appears. }
+  if (FStream <> nil) and (FCapture <> nil) and
+     (FStream.PaceSeconds > STREAM_MIN_PENDING_SECONDS) and
+     (SecondsBetween(Now, FPaceToldAt) >= 60) then
+  begin
+    FPaceToldAt := Now;
+    SetStatus('', '', Format(
+      'この機械では解析が追いつきにくいため、確定の間隔を %.0f 秒に緩めています' +
+      '（実時間比 %.1f 倍）。読み落としはしません。',
+      [FStream.PaceSeconds, FStream.RealTimeRatio]));
+  end;
   { 訓練中は、経過した時間を出します。**押しっぱなしで席を立った人が、
     戻ってきて分かるようにするためです。**
     While training, the time so far is shown: **so that someone who left the
