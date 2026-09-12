@@ -574,6 +574,7 @@ type
     function CallsignToLog: string;
     procedure ReadTranscript;
     procedure AnnounceReference;
+    procedure UpdateTranscriptMessage;
     procedure ShowStationLabels;
     function SelectedBand: string;
     function WithoutWorked(const Entries: TBandEntries): TBandEntries;
@@ -1446,6 +1447,12 @@ begin
   FRxTranscript.Parent := TextPanel;
   FRxTranscript.OnCharChosen := @RxCharChosen;
   FRxTranscript.Font.Size := 14;
+  { まだ何も始めていない状態の言葉を、作った時点で入れます（要件 FR-B.1）。
+    **起動直後の欄が白いままだと、起動できていないようにも読めます。**
+    The words for the not-started state go in as the control is made
+    (requirement FR-B.1): **a blank area just after launch reads as a program
+    that did not start.** }
+  FRxTranscript.Message_ := '受信を開始すると、ここに読めた文字が出ます。';
   Stretch(FRxTranscript, alClient);
 
   { バンドマップは受信テキストと同じ場所に置き、モードで入れ替えます。並べて
@@ -3122,6 +3129,13 @@ begin
     Exit;
   FRxBusy.Caption := 'デコード中...';
   FDecodeThread := TDecodeThread.Create(FDecoder, Samples, SampleRate, @DecodeFinished);
+  { 解析が始まってから言い直します。**始める前に呼ぶと、まだ走っていないので
+    「まだ始めていない」ほうの言葉になります。**長いファイルほど、その空白は
+    長く続きます（要件 FR-B.1）。
+    Said after the analysis has begun: **called before, nothing is running yet
+    and the words would be the not-started ones.** The longer the file, the
+    longer that blank lasts (requirement FR-B.1). }
+  UpdateTranscriptMessage;
 end;
 
 procedure TMainForm.DecodeFinished(Sender: TObject);
@@ -3219,6 +3233,12 @@ begin
     when it is not** -- and it is what a screenshot of the running program
     actually showed (appendix AN). }
   AnnounceReference;
+  { 解析が終われば、欄はもう「解析しています」ではありません。文字が 1 つも
+    出なかったとき（雑音だけの音）に、その言葉が残ります。
+    With the analysis done the area is no longer "analysing"; those words would
+    otherwise stay behind when not one character came out, as with sound that
+    held only noise. }
+  UpdateTranscriptMessage;
 
   { 受信を止めたあとに解析が終わったなら、ここで残りを確定させます。
     If reception was stopped while this analysis ran, the tail is committed
@@ -3555,6 +3575,7 @@ begin
     FRxBusy.Caption := 'デコード中...';
     FDecodeThread := TDecodeThread.CreateMultiFile(FMulti, Samples, SampleRate,
       @DecodeFinished);
+    UpdateTranscriptMessage;
     Exit;
   end;
   StartDecode(PrepareForDecoder(Samples, SampleRate),
@@ -3621,6 +3642,7 @@ begin
       capturing is called receiving: **one word with two meanings would read as
       recording when nothing is being recorded.** }
     SetStatus('', Format('受信中 %d Hz', [FCaptureRate]), '受信を開始しました。');
+    UpdateTranscriptMessage;
     if FSetRecord.Checked then
       StartRecording;
   except
@@ -3687,6 +3709,7 @@ begin
   if FJournal <> nil then
     FJournal.Flush;
   SetStatus('', '待機中', '受信を停止しました。');
+  UpdateTranscriptMessage;
 end;
 
 procedure TMainForm.RxClearClick(Sender: TObject);
@@ -3697,6 +3720,11 @@ begin
     asked for is dropped. }
   FRecheckPending := False;
   ReadTranscript;
+  { 消せば欄は再び空になります。**いまどの状態なのかを言い直さないと、
+    消したあとだけ何も出ない欄になります。**
+    A clear empties the area again: **without saying which state it is in, the
+    area would be the one blank thing left after a clear.** }
+  UpdateTranscriptMessage;
   FAlerts.Reset;
   if FStream <> nil then
     FStream.Reset;
@@ -3812,6 +3840,47 @@ begin
     Exit;
   FReferenceShown := Latest;
   SetStatus('', '', Latest + ' を読みました。');
+end;
+
+{ 文字がまだ 1 つも無いあいだ、受信テキストの欄に何と出すかを決めます
+  （要件 FR-B.1）。
+
+  この機械は音をある長さまとめてから読みます。だから**受信を始めてから最初の
+  文字が出るまでには数秒かかり**、そのあいだ欄は白いままです。要件 FR-B.1 は
+  「エンジンの入力長制限を利用者に露出しない」と言っています。**秒数を説明する
+  のではなく、待てばよいと分かる状態にする**、という意味に採りました。
+
+  白い欄は「動いている」とも「壊れている」とも読めます。**どちらなのかを、
+  待っているあいだも言葉で言います。**
+
+  3 つの状態を分けます。受信しているか、ファイルを解析しているか、まだ何も
+  始めていないか。**どれなのかを知っているのはこちらだけ**なので、部品には
+  言葉だけを渡します。
+
+  Decides what the transcript area says while there is not one character yet
+  (requirement FR-B.1).
+
+  This machine reads sound a stretch at a time, so **seconds pass between
+  starting and the first character**, and the area stays blank meanwhile.
+  Requirement FR-B.1 says not to expose the engine's input-length limit to the
+  operator; that is read here as **making the wait legible rather than
+  explaining the seconds.**
+
+  A blank area reads as "working" and as "broken" alike. **Which one it is gets
+  said in words while the wait lasts.**
+
+  Three states are told apart: receiving, analysing a file, or not started.
+  **Only this form knows which**, so the control is handed the words alone. }
+procedure TMainForm.UpdateTranscriptMessage;
+begin
+  if FRxTranscript = nil then
+    Exit;
+  if FCapture <> nil then
+    FRxTranscript.Message_ := '受信中です。最初の文字が出るまで数秒かかります。'
+  else if DecoderBusy then
+    FRxTranscript.Message_ := '読み込んだ音を解析しています。'
+  else
+    FRxTranscript.Message_ := '受信を開始すると、ここに読めた文字が出ます。';
 end;
 
 { 呼出符号と信号報告だけをクリップボードへ送ります（要件 FR-E.2）。

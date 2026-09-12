@@ -80,6 +80,9 @@ type
       Where the references are (requirement FR-E.6); ascending and
       non-overlapping, as the call signs are. }
     FReferences: TReferences;
+    { 文字が 1 つも無いときに出す言葉（要件 FR-B.1）。
+      The words shown while there is not one character (requirement FR-B.1). }
+    FMessage: string;
     procedure SetSelected(Value: Integer);
     procedure Rescan;
     procedure GoToMatch(Which: Integer);
@@ -92,6 +95,7 @@ type
     procedure UpdateScrollBar;
     procedure ScrollBarChanged(Sender: TObject);
     procedure SetShowDoubt(Value: Boolean);
+    procedure SetMessage(const Value: string);
     procedure SetDoubtStrength(Value: Single);
     procedure SetTopLine(Value: Integer);
     function ShadeFor(Index: Integer): TColor;
@@ -203,6 +207,36 @@ type
     function CallsignSpan(Which: Integer): TExchangeSpan;
     { 相手と見た符号の番号。無ければ -1。/ The chosen call sign, or -1. }
     property ChosenCallsign: Integer read FChosenCallsign;
+
+    { 文字が 1 つも無いあいだに出す言葉（要件 FR-B.1）。
+
+      **受信を始めてから最初の文字が出るまでには、数秒かかります。**この機械は
+      音をある長さまとめてから読むためで、そのあいだ画面は白いままです。**白い
+      画面は「動いている」とも「壊れている」とも読めます。**どちらなのかを、
+      待っているあいだも言葉で示します。
+
+      どの言葉を出すかは呼ぶ側が決めます。待っているのか、解析しているのか、
+      まだ始めていないのかを知っているのは呼ぶ側だからです。ウォーターフォール
+      （`TWaterfallView.Message_`）と同じ作りにしてあります。
+
+      The words shown while there is not one character (requirement FR-B.1).
+
+      **Seconds pass between starting reception and the first character**: this
+      machine reads sound a stretch at a time, and the display stays blank
+      meanwhile. **A blank display reads as "working" and as "broken" alike**,
+      so which one it is gets said in words while the wait lasts.
+
+      Which words is the caller's business -- only the caller knows whether it
+      is waiting, analysing, or not started. It is built as the waterfall's
+      `Message_` is. }
+    property Message_: string read FMessage write SetMessage;
+    { いま言葉を出しているか。**描いたかどうかを、描かずに言えるようにします。**
+      この部品の `PaintTo` は中身を描かないため（付録 S.7）、画素では確かめ
+      られません。
+      Whether the words are being shown: **so that what is drawn can be told
+      without drawing it.** This control's `PaintTo` renders no content
+      (appendix S.7), so pixels cannot answer it. }
+    function ShowsMessage: Boolean;
 
     { 選ばれている文字。設定すると、その文字が枠で囲まれます。
       The chosen character; setting it draws a box around that character. }
@@ -401,6 +435,24 @@ begin
     Exit;
   FDoubtStrength := Value;
   Invalidate;
+end;
+
+procedure TTranscriptView.SetMessage(const Value: string);
+begin
+  if FMessage = Value then
+    Exit;
+  FMessage := Value;
+  { 文字が出ている間は、この言葉は描かれません。描き直す必要があるのは、
+    いま出しているときだけです。
+    While characters are showing these words are not drawn, so a repaint is
+    needed only when they are. }
+  if Length(FChars) = 0 then
+    Invalidate;
+end;
+
+function TTranscriptView.ShowsMessage: Boolean;
+begin
+  Result := (FMessage <> '') and (Length(FChars) = 0);
 end;
 
 procedure TTranscriptView.SetChars(const Value: TDecodedChars);
@@ -814,8 +866,23 @@ begin
   Canvas.Font := Font;
   Canvas.Brush.Style := bsClear;
 
+  { 文字がまだ 1 つも無ければ、待っていることを言葉で出します（要件 FR-B.1）。
+    **ここで何も描かずに戻ると、白いままの画面が残ります。**
+    With not one character yet, the wait is said in words (requirement FR-B.1):
+    **returning without drawing would leave the display blank.** }
   if Length(FLines) = 0 then
+  begin
+    { 出すかどうかは `ShowsMessage` が決めます。**ここに同じ条件をもう一度
+      書くと、試験が見ている条件と描いている条件が別物になります。**
+      `ShowsMessage` decides: **written out again here, the condition the test
+      looks at and the condition that draws would be two different things.** }
+    if ShowsMessage then
+    begin
+      Canvas.Font.Color := BlendColor(Color, Font.Color, 0.55);
+      Canvas.TextOut(4, 1, FMessage);
+    end;
     Exit;
+  end;
 
   Row := 0;
   LineIndex := FTopLine;

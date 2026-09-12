@@ -1287,6 +1287,44 @@ begin
 
     Those spans come from `ReadExchange` in decoded-character indices:
     **shifting them by one on the way in does make this fail.** }
+  { ── 待っているあいだの言葉（要件 FR-B.1）──
+    この機械は音をある長さまとめてから読むので、最初の文字までに数秒かかる。
+    **そのあいだ欄が白いままだと、動いているのか壊れているのか読めない。**
+
+    ここで見るのは「文字が無いときだけ出て、出たら引っ込む」ことである。
+    **引っ込まなければ、読めた文字の上に言葉が重なる。**
+
+    The words shown while waiting (requirement FR-B.1). This machine reads sound
+    a stretch at a time, so seconds pass before the first character. **A blank
+    area through that wait reads as working and as broken alike.**
+
+    What is checked here is that the words appear only while there is no
+    character, and go when one arrives: **staying, they would be drawn over the
+    text that was read.** }
+  WriteLn;
+  WriteLn('待っているあいだの言葉の検証 / waiting message checks');
+  Transcript.Clear;
+  Transcript.Message_ := '受信中です。';
+  Application.ProcessMessages;
+  Check('文字が無いときは言葉を出す', Transcript.ShowsMessage);
+  Transcript.SetChars(CharsFrom('CQ'));
+  Check('文字が出たら言葉は引っ込む', not Transcript.ShowsMessage);
+  Transcript.Clear;
+  Check('消せばまた言葉が出る', Transcript.ShowsMessage);
+  { 言葉を空にすれば何も出しません。呼ぶ側が「何も言わない」を選べること。
+    An empty message shows nothing: the caller can choose to say nothing. }
+  Transcript.Message_ := '';
+  Check('言葉が空なら何も出さない', not Transcript.ShowsMessage);
+  { 空白だけの受信文でも、文字はあるので言葉は出しません。**空白も読めた文字
+    です。**
+    A transcript of spaces still holds characters, so no words: **a space is a
+    character that was read.** }
+  Transcript.Message_ := '受信中です。';
+  Transcript.SetChars(CharsFrom('   '));
+  Check('空白だけでも文字があれば言葉は出さない', not Transcript.ShowsMessage);
+  Transcript.Clear;
+  Transcript.Message_ := '';
+
   WriteLn;
   WriteLn('参照番号の強調の検証 / reference highlight checks');
   Chars := CharsFrom('QTH IS JP6T0123 PSE QSL');
