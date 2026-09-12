@@ -67,6 +67,51 @@ function LoadFistRecords(const FileName: string): TFistRecords;
 { 表示用の 1 行。/ One line for display. }
 function FistRecordCaption(const Item: TFistRecord): string;
 
+{ 推移に出す項目（要件 FR-H.10）。**総合だけでは、何が伸びたのかが分かりません。**
+  The items a trend can show (requirement FR-H.10). **The overall alone does not
+  say what improved.** }
+type
+  TFistItem = (
+    fiOverall,      { 総合 }
+    fiSpeed,        { 速度の安定 }
+    fiClarity,      { 短長の明瞭 }
+    fiSeparation,   { 区切りの明瞭 }
+    fiSpacing,      { 間隔の正確 }
+    fiCopyability   { 写しやすさ }
+  );
+  TFistItems = set of TFistItem;
+
+const
+  FIST_ITEM_NAMES: array[TFistItem] of string = (
+    '総合', '速度の安定', '短長の明瞭', '区切りの明瞭', '間隔の正確', '写しやすさ');
+  FIST_ALL_ITEMS = [fiOverall, fiSpeed, fiClarity, fiSeparation, fiSpacing,
+    fiCopyability];
+
+{ 1 件の、ある項目の点数。/ One record's score for one item. }
+function ItemScore(const Item: TFistRecord; Which: TFistItem): Double;
+
+{ 鍵の種類で絞ります。**鍵が違えば送り方が違うので、混ぜて並べた線は、
+  上達ではなく持ち替えを映します**（要件 FR-H.10 の受入基準）。空文字なら
+  すべてを返します。
+  Narrowed to one kind of key. **A different key is a different way of sending,
+  so a line drawn through both shows the change of key, not progress** (the
+  acceptance criterion of FR-H.10). An empty string returns everything. }
+function FilterByKey(const Items: TFistRecords; const Key: string): TFistRecords;
+
+{ 記録に出てくる鍵の種類を、出てきた順に返します。**選べる一覧を決め打ちに
+  しないためです。**
+  The kinds of key the records hold, in the order they first appear, **so that
+  the choices are not a list written in advance.** }
+function KeysUsed(const Items: TFistRecords): TStringArray;
+
+{ 今日から数えて何日続いているか（要件 FR-H.11）。今日の記録が無ければ、
+  昨日までの連続として数えます。**その日の練習がまだでも、昨日までの連続は
+  途切れていません。**記録が無ければ 0 です。
+  How many days in a row up to today (requirement FR-H.11). With nothing today
+  it counts the run ending yesterday: **a day not yet practised has not broken
+  anything.** Zero when there are no records. }
+function ConsecutiveDays(const Items: TFistRecords; Today: TDateTime): Integer;
+
 implementation
 
 { CSV の 1 つぶんの値。**区切りと引用符と改行を含むものは引用します。**
@@ -317,5 +362,97 @@ begin
   if Item.Reference then
     Result := Result + '（参考値）';
 end;
+
+
+function ItemScore(const Item: TFistRecord; Which: TFistItem): Double;
+begin
+  case Which of
+    fiSpeed: Result := Item.Score.Speed;
+    fiClarity: Result := Item.Score.Clarity;
+    fiSeparation: Result := Item.Score.Separation;
+    fiSpacing: Result := Item.Score.Spacing;
+    fiCopyability: Result := Item.Score.Copyability;
+  else
+    Result := Item.Score.Overall;
+  end;
+end;
+
+function FilterByKey(const Items: TFistRecords; const Key: string): TFistRecords;
+var
+  I, Count: Integer;
+begin
+  if Key = '' then
+    Exit(Items);
+  SetLength(Result, Length(Items));
+  Count := 0;
+  for I := 0 to High(Items) do
+    if Items[I].Key = Key then
+    begin
+      Result[Count] := Items[I];
+      Inc(Count);
+    end;
+  SetLength(Result, Count);
+end;
+
+function KeysUsed(const Items: TFistRecords): TStringArray;
+var
+  I, J, Count: Integer;
+  Seen: Boolean;
+begin
+  SetLength(Result, Length(Items));
+  Count := 0;
+  for I := 0 to High(Items) do
+  begin
+    if Items[I].Key = '' then
+      Continue;
+    Seen := False;
+    for J := 0 to Count - 1 do
+      if Result[J] = Items[I].Key then
+        Seen := True;
+    if Seen then
+      Continue;
+    Result[Count] := Items[I].Key;
+    Inc(Count);
+  end;
+  SetLength(Result, Count);
+end;
+
+function ConsecutiveDays(const Items: TFistRecords; Today: TDateTime): Integer;
+var
+  I: Integer;
+  Day, Wanted: TDateTime;
+  Found: Boolean;
+begin
+  Result := 0;
+  if Length(Items) = 0 then
+    Exit;
+  { 今日の記録が無ければ、昨日から数え始めます。**まだ練習していない today で
+    連続が 0 になると、続けている人に「途切れた」と言うことになります。**
+    With nothing today the count starts at yesterday: **zero on a day not yet
+    practised would tell someone who is keeping it up that they broke it.** }
+  Wanted := Int(Today);
+  Found := False;
+  for I := 0 to High(Items) do
+    if Int(Items[I].When_) = Wanted then
+      Found := True;
+  if not Found then
+    Wanted := Wanted - 1;
+
+  repeat
+    Found := False;
+    for I := 0 to High(Items) do
+    begin
+      Day := Int(Items[I].When_);
+      if Day = Wanted then
+        Found := True;
+    end;
+    if Found then
+    begin
+      Inc(Result);
+      Wanted := Wanted - 1;
+    end;
+  until not Found;
+end;
+
 
 end.

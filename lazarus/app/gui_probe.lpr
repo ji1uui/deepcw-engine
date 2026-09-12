@@ -21,7 +21,8 @@ uses
   DeepCW.Types, DeepCW.Morse, DeepCW.Tuner, DeepCW.Decoder,
   DeepCW.Review, DeepCW.Multi, DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Platform,
-  WaterfallView, TranscriptView, BandMapView;
+  DeepCW.FistLog,
+  WaterfallView, TranscriptView, BandMapView, TrendView;
 
 type
   { 部品の保護された入力処理は、そのままでは外から呼べません。派生させて
@@ -384,6 +385,10 @@ var
   Aligned: TDecodedChars;
   Worst, Err, T, Fed: Double;
   Step_, Shown_: Integer;
+  Trend: TFistTrendView;
+  Png: TPortableNetworkGraphic;
+  Sessions: TFistRecords;
+  LeftY, RightY, Ink, Coloured: Integer;
 
 begin
   OutDir := ParamStr(1);
@@ -1529,6 +1534,172 @@ begin
     Check('描画を繰り返してもメモリが増え続けない',
       After_.Kilobytes - Before.Kilobytes < 20000,
       Format('(差 %d kB)', [After_.Kilobytes - Before.Kilobytes]));
+
+
+  { ── 送信訓練の推移（要件 FR-H.10）──
+    **上がった記録を渡したのに線が下がっていたら、絵が嘘をついています。**
+    描いた画素を数えて、右のほうが高いことを確かめます。
+
+    The send-practice trend (requirement FR-H.10). **Handed records that rise, a
+    line that falls would be a picture that lies**, so the pixels are counted and
+    the right-hand end shown to sit higher. }
+  WriteLn;
+  WriteLn('送信訓練の推移 / the send-practice trend');
+  View.Visible := False;
+  Trend := TFistTrendView.Create(Form);
+  Trend.Parent := Form;
+  Trend.Align := alClient;
+  Trend.Visible := True;
+  Application.ProcessMessages;
+
+  Shot := TBitmap.Create;
+  try
+    Shot.SetSize(Form.ClientWidth, Form.ClientHeight);
+
+    { 記録が無くても描けること。/ It paints with no records at all. }
+    Trend.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+    Check('記録が無くても描画できる', Trend.Count = 0);
+
+    SetLength(Sessions, 5);
+    for Step_ := 0 to 4 do
+    begin
+      Sessions[Step_] := Default(TFistRecord);
+      Sessions[Step_].When_ := EncodeDate(2026, 9, 1) + Step_;
+      Sessions[Step_].Key := '縦振り';
+      { 40 点から 80 点へ上がっていく記録。
+        Records that climb from forty to eighty. }
+      Sessions[Step_].Score.Overall := 40 + Step_ * 10;
+      Sessions[Step_].Score.Separation := 90 - Step_ * 10;
+      Sessions[Step_].Score.Speed := 50;
+      Sessions[Step_].Score.Clarity := 50;
+      Sessions[Step_].Score.Spacing := 50;
+      Sessions[Step_].Measurement.Ok := True;
+    end;
+    Trend.SetItems(Sessions);
+    Trend.SetShown([fiOverall]);
+    Trend.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+    Check('渡した数だけ並ぶ', Trend.Count = 5, Format('(%d)', [Trend.Count]));
+
+    { 左端と右端で、線のある高さを探します。**上がった記録なら、右のほうが
+      上（Y が小さい）にあります。**
+      The height of the line is found at each end: **records that climbed put the
+      right-hand end higher up the picture, which is a smaller Y.** }
+    LeftY := -1;
+    RightY := -1;
+    { **画布の端は数えません。**`PaintTo` は最上端の行と左右の端を白く残す
+      ことがあり、それは中身ではなく写し方の差です（教訓 10.20）。
+      **The edges are not counted**: the top row and the side columns can be
+      left white, which is how it was copied and not what it holds
+      (lesson 10.20). }
+    for Y := 2 to Shot.Height - 3 do
+    begin
+      if (LeftY < 0) and
+         (Shot.Canvas.Pixels[Trend.Width div 8, Y] = ItemColor(fiOverall)) then
+        LeftY := Y;
+      if (RightY < 0) and
+         (Shot.Canvas.Pixels[Trend.Width - Trend.Width div 8, Y] = ItemColor(fiOverall)) then
+        RightY := Y;
+    end;
+    Check('上がった記録は、右のほうが高く描かれる',
+      (LeftY > 0) and (RightY > 0) and (RightY < LeftY),
+      Format('(左 %d / 右 %d)', [LeftY, RightY]));
+
+    { 項目を増やせば、色の付いた画素が増えること。**1 本しか描いていないのに
+      「5 項目すべて」と出ていたら、選びようがありません。**
+      More items means more coloured pixels: **one line drawn while the screen
+      says all five would leave nothing to choose.** }
+    Ink := 0;
+    for Y := 0 to Shot.Height - 1 do
+      for Step_ := 0 to Shot.Width - 1 do
+        if Shot.Canvas.Pixels[Step_, Y] = ItemColor(fiSeparation) then
+          Inc(Ink);
+    Trend.SetShown(FIST_ALL_ITEMS - [fiOverall]);
+    Trend.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+    Coloured := 0;
+    for Y := 0 to Shot.Height - 1 do
+      for Step_ := 0 to Shot.Width - 1 do
+        if Shot.Canvas.Pixels[Step_, Y] = ItemColor(fiSeparation) then
+          Inc(Coloured);
+    Check('総合だけのときは、区切りの色は出ない', Ink = 0, Format('(%d 点)', [Ink]));
+    Check('5 項目すべてなら、区切りの線が出る', Coloured > 0,
+      Format('(%d 点)', [Coloured]));
+
+    { 測っていない「写しやすさ」を 0 点として描かないこと。**測っていないものを
+      0 点で描くのは、下手だと言うのと同じです。**
+      Copyability that was never measured is not drawn as nought: **drawing it
+      there would be saying the sending was bad.** }
+    Trend.SetShown([fiCopyability]);
+    Trend.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+    Coloured := 0;
+    { 凡例は数えません。**凡例の色見本は、線が無くても描かれます。**
+      The legend is not counted: **its swatch is drawn whether or not a line
+      is.** }
+    for Y := 2 to (Shot.Height * 2) div 3 do
+      for Step_ := 0 to Shot.Width - 1 do
+        if Shot.Canvas.Pixels[Step_, Y] = ItemColor(fiCopyability) then
+          Inc(Coloured);
+    Check('測っていない項目は、0 点として描かない', Coloured = 0,
+      Format('(%d 点)', [Coloured]));
+
+    { 1 件しかなくても描けること。**線は引けませんが、点は打てます。**
+      One record still paints: **no line to draw, but a point to mark.** }
+    SetLength(Sessions, 1);
+    Trend.SetItems(Sessions);
+    Trend.SetShown([fiOverall]);
+    Trend.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+    Check('1 件でも描画できる', Trend.Count = 1);
+
+    { 何度描いても速いこと。**推移は記録が増えるほど点が増えます。**
+      It stays quick however often it is drawn: **the trend gains a point with
+      every session.** }
+    SetLength(Sessions, 500);
+    for Step_ := 0 to High(Sessions) do
+    begin
+      Sessions[Step_] := Default(TFistRecord);
+      Sessions[Step_].When_ := EncodeDate(2026, 1, 1) + Step_;
+      Sessions[Step_].Score.Overall := 50 + (Step_ mod 40);
+      Sessions[Step_].Measurement.Ok := True;
+    end;
+    Trend.SetItems(Sessions);
+    Trend.SetShown(FIST_ALL_ITEMS);
+    Started := Now;
+    for Repeats := 1 to 20 do
+      Trend.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+    PaintMs := MilliSecondsBetween(Now, Started) / 20;
+    WriteLn(Format('  500 回ぶんの推移の描画: %.1f ms', [PaintMs]));
+    Check('500 回ぶんでも 1 枚 33 ms 未満', PaintMs < 33,
+      Format('(%.1f ms)', [PaintMs]));
+
+    Png := TPortableNetworkGraphic.Create;
+    try
+      SetLength(Sessions, 12);
+      for Step_ := 0 to High(Sessions) do
+      begin
+        Sessions[Step_] := Default(TFistRecord);
+        Sessions[Step_].When_ := EncodeDate(2026, 9, 1) + Step_;
+        Sessions[Step_].Score.Overall := 45 + Step_ * 4;
+        Sessions[Step_].Score.Speed := 40 + Step_ * 3;
+        Sessions[Step_].Score.Clarity := 70 + (Step_ mod 5) * 2;
+        Sessions[Step_].Score.Separation := 30 + Step_ * 5;
+        Sessions[Step_].Score.Spacing := 85 - (Step_ mod 4) * 3;
+        Sessions[Step_].Score.Copyability := 100;
+        Sessions[Step_].Measurement.Ok := True;
+      end;
+      Trend.SetItems(Sessions);
+      Trend.SetShown(FIST_ALL_ITEMS);
+      Trend.DrawTo(Shot.Canvas, Shot.Width, Shot.Height);
+      Png.Assign(Shot);
+      Png.SaveToFile(IncludeTrailingPathDelimiter(OutDir) + 'fist_trend.png');
+      WriteLn('  書き出し: ', IncludeTrailingPathDelimiter(OutDir) + 'fist_trend.png');
+    finally
+      Png.Free;
+    end;
+  finally
+    Shot.Free;
+  end;
+  Trend.Visible := False;
+  View.Visible := True;
+  Application.ProcessMessages;
 
   Watcher.Free;
   Form.Free;

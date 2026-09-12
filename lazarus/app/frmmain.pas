@@ -36,7 +36,7 @@ uses
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
   DeepCW.FistLog, DeepCW.Diagnostics,
-  TranscriptView, WaterfallView, BandMapView;
+  TranscriptView, WaterfallView, BandMapView, TrendView;
 
 type
   { 受信のしかた（要件 FR-I.6）。
@@ -454,6 +454,19 @@ type
       あとから届くので、その間これを持っておきます。**
       The audio being scored and its measurement. **The character error rate
       arrives later from another thread, so these wait here meanwhile.** }
+    { 推移（要件 FR-H.10）。**1 回の点数はその日の調子で、上達は並べて
+      はじめて分かります。**
+      The trend (requirement FR-H.10): **one session's score is how that day
+      went; improvement appears only once they are lined up.** }
+    FFtTrend: TFistTrendView;
+    FFtTrendItem: TComboBox;
+    FFtTrendKey: TComboBox;
+    FFtStreak: TLabel;
+    { 前回選んでいた鍵。一覧は記録から作り直すので、**選び直せるように名前で
+      持っておきます。**
+      The key chosen last time. The list is rebuilt from the records, so **the
+      name is kept in order to choose it again.** }
+    FFtTrendKeyWanted: string;
     FFtSamples: TSingleArray;
     FFtMeasured: TFistMeasurement;
     FFtLost: Boolean;
@@ -496,6 +509,8 @@ type
       Seconds: Double);
     procedure FtFinish(Cer: Double);
     procedure FtShowHistory;
+    procedure FtTrendChanged(Sender: TObject);
+    procedure FtShowTrend(const Items: TFistRecords);
 
     function ConfigFileName: string;
     procedure LoadSettings;
@@ -1877,6 +1892,8 @@ var
   Buttons: TPanel;
   Kind: TExerciseKind;
   Standard_: TFistStandard;
+  Item: TFistItem;
+  Bottom: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
   Sheet.Caption := '送信訓練';
@@ -1951,7 +1968,11 @@ begin
   AddTopLabel(Sheet, '課題文（この文を自分の鍵で送ってください。書き換えられます）');
   FFtText := TMemo.Create(Sheet);
   FFtText.Parent := Sheet;
-  FFtText.Height := 66;
+  { **推移（要件 FR-H.10）に高さを残すため、上の欄は詰めます。**窓の既定の
+    高さでは、足し合わせるとグラフの場所が無くなります。
+    **The sections above are kept tight so that the trend has room**: at the
+    window's default height they would otherwise add up to leave none. }
+  FFtText.Height := 52;
   { **書き換えられるようにします。**自分で決めた文を送りたいことがあり、
     録音から採点するときは、その録音で送った文をここへ入れます。
     **It can be edited**: an operator may want to send a text of their own, and
@@ -1962,22 +1983,92 @@ begin
   Stretch(FFtText, alTop);
 
   AddTopLabel(Sheet, '採点');
+  { 採点の欄は、余った高さを受け取ります。**下端の推移と、上の課題文は
+    読める高さを先に取り、伸び縮みはここが引き受けます。**中身は巻き取れます。
+    The score takes what height is left: **the trend at the foot and the text
+    above it claim a readable height first**, and the give and take happens
+    here, where the content scrolls. }
   FFtResult := TMemo.Create(Sheet);
   FFtResult.Parent := Sheet;
-  FFtResult.Height := 128;
   FFtResult.ReadOnly := True;
   FFtResult.ScrollBars := ssAutoVertical;
-  Stretch(FFtResult, alTop);
+  Stretch(FFtResult, alClient);
 
   FFtAdvice := AddTopLabel(Sheet, '');
 
-  AddTopLabel(Sheet, 'これまでの記録');
-  FFtHistory := TMemo.Create(Sheet);
-  FFtHistory.Parent := Sheet;
+  { 推移（要件 FR-H.10）。**鍵の種類ごとに分けて出せます。**鍵が違えば送り方が
+    違うので、混ぜて並べた線は上達ではなく持ち替えを映します。
+
+    場所は下端に固定します。**窓の高さに応じて分け合うと、既定の高さでは
+    グラフが 90 画素ほどになり、目盛りの間隔より線の太さが勝ちます。**
+    読み切れる高さを先に取り、余りを一覧へ渡します（一覧は巻き取れます）。
+
+    The trend (requirement FR-H.10), **which can be drawn for one kind of key at
+    a time**: a different key is a different way of sending, and a line through
+    both would show the change of key rather than progress.
+
+    It is pinned to the foot of the tab. **Sharing the height out instead left
+    the graph about ninety pixels at the window's default size, where the lines
+    are thicker than the gaps between the gridlines.** The height that can be
+    read is taken first, and what is left goes to the list, which scrolls. }
+  Bottom := TPanel.Create(Sheet);
+  Bottom.Parent := Sheet;
+  Bottom.Align := alBottom;
+  Bottom.Height := 304;
+  Bottom.BevelOuter := bvNone;
+
+  { 記録の一覧も推移と同じ塊に入れます。**どちらも「これまで」を見るもの**
+    なので、窓を縮めたときに片方だけが消えないようにします。
+    The list of records sits in the same block as the trend: **both are for
+    looking back**, so a shrinking window does not take one and leave the
+    other. }
+  AddTopLabel(Bottom, 'これまでの記録');
+  FFtHistory := TMemo.Create(Bottom);
+  FFtHistory.Parent := Bottom;
   FFtHistory.ReadOnly := True;
   FFtHistory.ScrollBars := ssAutoVertical;
-  FFtHistory.Align := alClient;
-  FFtHistory.Parent := Sheet;
+  FFtHistory.Height := 72;
+  Stretch(FFtHistory, alTop);
+
+  { 上から順に積むには、この画面の決まりどおり `StackBelow` を通します。
+    **通さないと、あとから作った行が先頭へ回ります**（記録の一覧より上に
+    推移の操作が出てしまいました）。
+    Stacked in order through `StackBelow`, as the rest of this window does:
+    **without it a row made later comes out first** -- the trend's controls
+    appeared above the list of records. }
+  Buttons := TPanel.Create(Bottom);
+  Buttons.Parent := Bottom;
+  Buttons.Height := 40;
+  StackBelow(Buttons);
+  Buttons.Align := alTop;
+  Buttons.BevelOuter := bvNone;
+  AddLabel(Buttons, '推移に出す項目', 12, 12);
+  FFtTrendItem := TComboBox.Create(Buttons);
+  FFtTrendItem.Parent := Buttons;
+  FFtTrendItem.SetBounds(120, 6, 160, 28);
+  FFtTrendItem.Style := csDropDownList;
+  FFtTrendItem.Items.Add('総合');
+  FFtTrendItem.Items.Add('5 項目すべて');
+  for Item := Succ(Low(TFistItem)) to High(TFistItem) do
+    FFtTrendItem.Items.Add(FIST_ITEM_NAMES[Item]);
+  FFtTrendItem.ItemIndex := 0;
+  FFtTrendItem.OnChange := @FtTrendChanged;
+
+  AddLabel(Buttons, '鍵の種類', 300, 12);
+  FFtTrendKey := TComboBox.Create(Buttons);
+  FFtTrendKey.Parent := Buttons;
+  FFtTrendKey.SetBounds(370, 6, 150, 28);
+  FFtTrendKey.Style := csDropDownList;
+  FFtTrendKey.Items.Add('すべて');
+  FFtTrendKey.ItemIndex := 0;
+  FFtTrendKey.OnChange := @FtTrendChanged;
+
+  FFtStreak := AddLabel(Buttons, '', 540, 12);
+
+  FFtTrend := TFistTrendView.Create(Bottom);
+  FFtTrend.Parent := Bottom;
+  FFtTrend.Align := alClient;
+
   FtShowHistory;
 end;
 
@@ -2316,6 +2407,82 @@ begin
   finally
     Lines.Free;
   end;
+  FtShowTrend(Records_);
+end;
+
+{ 推移を描き直します（要件 FR-H.10・FR-H.11）。
+
+  **絞り込みと項目の選択は、描く側ではなくここで決めます。**部品は受け取った
+  ものをそのまま描くだけです。
+  Redraws the trend (FR-H.10, FR-H.11). **What to narrow to and which item to
+  show are settled here**, not in the drawing: the control draws what it is
+  handed. }
+procedure TMainForm.FtShowTrend(const Items: TFistRecords);
+var
+  Keys: TStringArray;
+  Shown: TFistItems;
+  Key, Kept: string;
+  I, Days: Integer;
+  Narrowed: TFistRecords;
+begin
+  if (FFtTrend = nil) or (FFtTrendKey = nil) then
+    Exit;
+  { 選べる鍵は記録から作ります。**決め打ちにすると、記録にある鍵を選べない
+    ことが起こります。**選んでいたものは、あれば選び直します。
+    The keys on offer come from the records: **written in advance, a key that is
+    in the records could end up not being offered.** Whatever was chosen is
+    chosen again when it is still there. }
+  Kept := FFtTrendKeyWanted;
+  if FFtTrendKey.ItemIndex > 0 then
+    Kept := FFtTrendKey.Items[FFtTrendKey.ItemIndex];
+  FFtTrendKeyWanted := '';
+  Keys := KeysUsed(Items);
+  FFtTrendKey.Items.BeginUpdate;
+  try
+    FFtTrendKey.Items.Clear;
+    FFtTrendKey.Items.Add('すべて');
+    for I := 0 to High(Keys) do
+      FFtTrendKey.Items.Add(Keys[I]);
+  finally
+    FFtTrendKey.Items.EndUpdate;
+  end;
+  FFtTrendKey.ItemIndex := Max(0, FFtTrendKey.Items.IndexOf(Kept));
+
+  Key := '';
+  if FFtTrendKey.ItemIndex > 0 then
+    Key := FFtTrendKey.Items[FFtTrendKey.ItemIndex];
+  Narrowed := FilterByKey(Items, Key);
+
+  Shown := [fiOverall];
+  if FFtTrendItem <> nil then
+    case FFtTrendItem.ItemIndex of
+      0: Shown := [fiOverall];
+      1: Shown := FIST_ALL_ITEMS - [fiOverall];
+    else
+      { 3 番目以降は、項目を 1 つずつ並べた順に対応します。
+        From the third entry on, one item each, in order. }
+      Shown := [TFistItem(FFtTrendItem.ItemIndex - 1)];
+    end;
+  FFtTrend.SetShown(Shown);
+  FFtTrend.SetItems(Narrowed);
+
+  { 続いた日数（要件 FR-H.11）。**続けていることが見えるのは、続ける理由に
+    なります。**0 日なら何も言いません。数えられないものを 0 と書くのとは
+    違うためです。
+    The days in a row (requirement FR-H.11): **seeing that it is being kept up
+    is a reason to keep it up.** Nothing is said at zero, which is not the same
+    as writing nought for something not counted. }
+  Days := ConsecutiveDays(Items, Now);
+  if Days > 0 then
+    FFtStreak.Caption := Format('%d 日続いています', [Days])
+  else
+    FFtStreak.Caption := '';
+end;
+
+procedure TMainForm.FtTrendChanged(Sender: TObject);
+begin
+  MarkSettingsDirty;
+  FtShowTrend(LoadFistRecords(FistLogFileName));
 end;
 
 function TMainForm.BuildSettingsTab: TTabSheet;
@@ -2549,6 +2716,14 @@ begin
     FFtBasis.ItemIndex := ClampInt(Ini.ReadInteger('fist', 'standard', 0),
       0, FFtBasis.Items.Count - 1);
     FFtFree.Checked := Ini.ReadBool('fist', 'free', False);
+    FFtTrendItem.ItemIndex := ClampInt(Ini.ReadInteger('fist', 'trend_item', 0),
+      0, FFtTrendItem.Items.Count - 1);
+    { 鍵は**名前で**覚えます。番号で覚えると、記録が増えて並びが変わった日に
+      別の鍵の推移が出ます（装置の記憶と同じ考え方）。
+      The key is remembered **by name**: by number, the day the records gain a
+      new key would show the trend of a different one -- the same reasoning as
+      remembering the input device. }
+    FFtTrendKeyWanted := Ini.ReadString('fist', 'trend_key', '');
     FtOptionsChanged(nil);
     FRxMode.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'mode', 0), 0, 2);
     FRxBand.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'band', 0),
@@ -2630,6 +2805,12 @@ begin
       Ini.WriteInteger('fist', 'key', FFtKey.ItemIndex);
       Ini.WriteInteger('fist', 'standard', FFtBasis.ItemIndex);
       Ini.WriteBool('fist', 'free', FFtFree.Checked);
+      Ini.WriteInteger('fist', 'trend_item', FFtTrendItem.ItemIndex);
+      if FFtTrendKey.ItemIndex > 0 then
+        Ini.WriteString('fist', 'trend_key',
+          FFtTrendKey.Items[FFtTrendKey.ItemIndex])
+      else
+        Ini.WriteString('fist', 'trend_key', '');
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('receive', 'watch', FRxWatch.Text);
       Ini.WriteInteger('receive', 'band', FRxBand.ItemIndex);

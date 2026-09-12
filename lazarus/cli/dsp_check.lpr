@@ -773,6 +773,7 @@ end;
 { 遅延表示の検査は下に置いてありますが、練習の検査から呼びます。
   The delayed-reveal checks live below and are called from the practice ones. }
 procedure TestReveal; forward;
+procedure TestFistTrend; forward;
 
 procedure TestPractice;
 var
@@ -1496,6 +1497,8 @@ begin
 
     Check('無いファイルからは何も返さない',
       Length(LoadFistRecords(Path + '.none')) = 0, '');
+
+    TestFistTrend;
   finally
     if FileExists(Path) then
       DeleteFile(Path);
@@ -1646,6 +1649,99 @@ begin
     Abs(DetectToneHz(Prepared, Meta.SampleRate) - WANTED_HZ) <= 8,
     Format('(%.0f Hz / 受信機のまま %.0f Hz)',
       [DetectToneHz(Prepared, Meta.SampleRate), Double(WANTED_HZ)]));
+end;
+
+
+{ 推移の材料（要件 FR-H.10・FR-H.11）。
+
+  **折れ線の絵より先に、何を並べるのかを決めます。**鍵の種類で絞ること、
+  項目ごとに点数を取り出すこと、続いた日数を数えること——いずれも絵の外で
+  決まる話であり、絵にしてしまうと画面を見なければ確かめられません。
+
+  The material behind the trend (FR-H.10, FR-H.11).
+
+  **What gets plotted is settled before any line is drawn.** Narrowing by the
+  kind of key, taking one item's score, counting the days in a row: none of
+  these belong in the drawing, where they could only be checked by looking at a
+  screen. }
+procedure TestFistTrend;
+var
+  Items: TFistRecords;
+  Keys: TStringArray;
+  Today: TDateTime;
+
+  function Made(const Key: string; Overall, Separation: Double;
+    Day: Integer): TFistRecord;
+  begin
+    Result := Default(TFistRecord);
+    Result.When_ := EncodeDate(2026, 9, 1) + Day;
+    Result.Key := Key;
+    Result.Score.Overall := Overall;
+    Result.Score.Separation := Separation;
+    Result.Score.Speed := 50;
+    Result.Measurement.Ok := True;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('送信訓練の推移（要件 FR-H.10・FR-H.11）');
+  SetLength(Items, 4);
+  Items[0] := Made('縦振り', 60, 40, 0);
+  Items[1] := Made('パドル', 70, 50, 1);
+  Items[2] := Made('縦振り', 80, 60, 2);
+  Items[3] := Made('パドル', 90, 70, 4);
+
+  { 項目ごとに取り出せること。**総合だけでは、何が伸びたのかが分かりません。**
+    One item at a time: **the overall alone does not say what improved.** }
+  Check('項目ごとに点数を取り出せる',
+    (ItemScore(Items[0], fiOverall) = 60) and
+    (ItemScore(Items[0], fiSeparation) = 40) and
+    (ItemScore(Items[0], fiSpeed) = 50),
+    Format('(%.0f / %.0f)', [ItemScore(Items[0], fiOverall),
+      ItemScore(Items[0], fiSeparation)]));
+
+  { 鍵の種類で絞れること（要件 FR-H.10 の受入基準）。**混ぜた線は、上達では
+    なく持ち替えを映します。**
+    Narrowed by the kind of key: **a line through both shows the change of key,
+    not progress.** }
+  Check('鍵の種類で絞れる', Length(FilterByKey(Items, '縦振り')) = 2,
+    Format('(%d 件)', [Length(FilterByKey(Items, '縦振り'))]));
+  Check('絞った並びは、その鍵のものだけ',
+    (FilterByKey(Items, 'パドル')[0].Score.Overall = 70) and
+    (FilterByKey(Items, 'パドル')[1].Score.Overall = 90), '');
+  Check('空なら、すべて返す', Length(FilterByKey(Items, '')) = 4,
+    Format('(%d 件)', [Length(FilterByKey(Items, ''))]));
+  Check('知らない鍵なら、何も返さない',
+    Length(FilterByKey(Items, 'バグ')) = 0, '');
+
+  { 選べる一覧は、記録から作ること。**決め打ちにすると、記録にある鍵を
+    選べないことが起こります。**
+    The choices come from the records: **written in advance, a key that is in
+    the records could end up not being offered.** }
+  Keys := KeysUsed(Items);
+  Check('記録に出てくる鍵を、出てきた順に返す',
+    (Length(Keys) = 2) and (Keys[0] = '縦振り') and (Keys[1] = 'パドル'),
+    Format('(%d 種)', [Length(Keys)]));
+
+  { 続いた日数（要件 FR-H.11）。 }
+  Today := EncodeDate(2026, 9, 5);  { 記録は 1・2・3・5 日 }
+  Check('今日まで続いていれば、その日数を数える',
+    ConsecutiveDays(Items, Today) = 1,
+    Format('(%d 日)', [ConsecutiveDays(Items, Today)]));
+  Today := EncodeDate(2026, 9, 3);
+  Check('3 日続けば 3 日', ConsecutiveDays(Items, Today) = 3,
+    Format('(%d 日)', [ConsecutiveDays(Items, Today)]));
+  { **今日まだ練習していなくても、昨日までの連続は途切れていません。**
+    **A day not yet practised has not broken the run.** }
+  Today := EncodeDate(2026, 9, 4);
+  Check('今日の記録がまだ無くても、昨日までを数える',
+    ConsecutiveDays(Items, Today) = 3,
+    Format('(%d 日)', [ConsecutiveDays(Items, Today)]));
+  Today := EncodeDate(2026, 9, 8);
+  Check('間が空いていれば 0', ConsecutiveDays(Items, Today) = 0,
+    Format('(%d 日)', [ConsecutiveDays(Items, Today)]));
+  SetLength(Items, 0);
+  Check('記録が無ければ 0 日', ConsecutiveDays(Items, Today) = 0, '');
 end;
 
 procedure TestRecorder;
