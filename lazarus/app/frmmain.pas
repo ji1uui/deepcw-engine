@@ -35,7 +35,7 @@ uses
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
-  DeepCW.FistLog, DeepCW.Diagnostics,
+  DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference,
   TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView;
 
 type
@@ -226,6 +226,10 @@ type
       What the status panel currently shows, so the same text is not written
       into it five times a second. }
     FRecordShown: string;
+    { 既に知らせた参照番号（要件 FR-E.6）。同じものを繰り返さないために持ちます。
+      The reference already announced (requirement FR-E.6), kept so the same one
+      is not repeated. }
+    FReferenceShown: string;
     { 交信数を数え直した時刻。数え直しは記録の全件を読むため、毎秒は行いません。
       When the contact count was last recounted: counting reads every record, so
       it is not done every second. }
@@ -569,6 +573,7 @@ type
     function BandMode: Boolean;
     function CallsignToLog: string;
     procedure ReadTranscript;
+    procedure AnnounceReference;
     procedure ShowStationLabels;
     function SelectedBand: string;
     function WithoutWorked(const Entries: TBandEntries): TBandEntries;
@@ -3204,6 +3209,17 @@ begin
     end;
   end;
 
+  { 参照番号の知らせは**状態の欄を書いたあと**に出します。先に出すと、その直後の
+    「デコード完了」に上書きされて一度も読めません。**画面に出したつもりで
+    出ていない**という、いちばん質の悪い失敗です。実際そうなっていたのを、
+    走らせた画面を撮って見つけました（付録 AN）。
+    The reference is announced **after the status line is written**: announced
+    before, it is overwritten by the "decode complete" that follows and is never
+    read. That is the worst kind of failure -- **believing something is on screen
+    when it is not** -- and it is what a screenshot of the running program
+    actually showed (appendix AN). }
+  AnnounceReference;
+
   { 受信を止めたあとに解析が終わったなら、ここで残りを確定させます。
     If reception was stopped while this analysis ran, the tail is committed
     now. }
@@ -3734,11 +3750,68 @@ procedure TMainForm.ReadTranscript;
 begin
   FExchange := ReadExchange(FLiveChars);
   FRxTranscript.SetCallsigns(FExchange.Callsigns, FExchange.Chosen);
+  { 参照番号も同じ文字の並びの上に印を付けます（要件 FR-E.6）。**読み取りは
+    1 度で済んでいます。**`ReadExchange` が符号と一緒に返しているためです。
+    The references are marked over the same characters (requirement FR-E.6).
+    **The reading was done once:** `ReadExchange` returns them with the call
+    signs. }
+  FRxTranscript.SetReferences(FExchange.References);
   { 同じ文字をウォーターフォールへも渡します（要件 FR-D.6）。読んだ文字が音の
     どこから出たのかが、目で辿れるようになります。
     The same characters go to the waterfall (requirement FR-D.6), so that where
     in the sound each one came from can be followed by eye. }
   FRxWaterfall.SetCharacters(FLiveChars);
+end;
+
+{ 読めた参照番号を、状態の欄へ一度だけ知らせます（要件 FR-E.6）。
+
+  受信テキストには `JP6T0123` と出ます。**電波に乗っているのはその文字だから**
+  です（付録 AN）。けれど利用者が記録に書くのは `JP-0123` で、ハイフンの位置は
+  こちらが補ったものです。**補ったものを黙って見せないため**、直した形のほうを
+  言葉で一度出します。
+
+  置き場所は状態の欄です。記録の欄の隣には、既定の窓幅（940）で空きがありません
+  （`FRxLogInfo` は 504 から 250、その右 760 が「もう一度聴く」）。**入らない所へ
+  文字を足すと、足したものが見えないだけでなく、元からあった文言まで切れます。**
+
+  同じものは繰り返しません。文字が伸びるたびに出し直すと、状態の欄が参照番号で
+  埋まり、ほかの知らせが読めなくなります。
+
+  Announces a reference that has been read, once, in the status area
+  (requirement FR-E.6).
+
+  The transcript shows `JP6T0123`, **that being what is actually on the air**
+  (appendix AN) -- but what the operator writes down is `JP-0123`, and the hyphen
+  is ours. **So that nothing we filled in passes unseen**, the corrected form is
+  said once, in words.
+
+  The status area is where it goes: there is no room beside the log controls at
+  the default window width of 940 (`FRxLogInfo` is 250 wide at 504, with "play
+  again" at 760). **Text added where it does not fit is not merely invisible: it
+  cuts off what was already there.**
+
+  The same one is not repeated. Announcing it again on every character would
+  fill the status area with references and bury every other message. }
+procedure TMainForm.AnnounceReference;
+var
+  Latest: string;
+begin
+  { 受信文が空になったら、覚えているものも捨てます。**捨てないと、消してから
+    もう一度同じ局を受けたときに、何も言わなくなります。**
+    An emptied transcript drops what is remembered: **without that, the same
+    station received again after a clear would be announced no more.** }
+  if Length(FExchange.References) = 0 then
+  begin
+    if Length(FLiveChars) = 0 then
+      FReferenceShown := '';
+    Exit;
+  end;
+  Latest := ReferenceCaption(
+    FExchange.References[High(FExchange.References)]);
+  if Latest = FReferenceShown then
+    Exit;
+  FReferenceShown := Latest;
+  SetStatus('', '', Latest + ' を読みました。');
 end;
 
 { 呼出符号と信号報告だけをクリップボードへ送ります（要件 FR-E.2）。

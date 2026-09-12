@@ -1274,6 +1274,82 @@ begin
   Check('符号が無ければどこを当てても符号でない',
     (Transcript.CallsignAt(0) < 0) and (Transcript.CallsignAt(5) < 0));
 
+  { ── 参照番号の強調（要件 FR-E.6）──
+    呼出符号と同じ考え方です。**位置が 1 文字でもずれれば、印は隣の文字に
+    付きます。**部品が受け取った位置のとおりに印を持てているかを見ます。
+
+    位置は `ReadExchange` が復号文字の番号で返すものです。**渡す途中で 1 つ
+    ずらしてみると、ここが落ちます。**
+
+    Highlighting references (requirement FR-E.6), on the same reasoning as the
+    call signs: **one character out and the mark lands on the neighbour.** What
+    is checked is that the control holds the spans it was handed.
+
+    Those spans come from `ReadExchange` in decoded-character indices:
+    **shifting them by one on the way in does make this fail.** }
+  WriteLn;
+  WriteLn('参照番号の強調の検証 / reference highlight checks');
+  Chars := CharsFrom('QTH IS JP6T0123 PSE QSL');
+  Ex := ReadExchange(Chars);
+  Transcript.SetChars(Chars);
+  Transcript.SetReferences(Ex.References);
+  Application.ProcessMessages;
+
+  Check('参照番号の数だけ印が付く', Transcript.ReferenceCount = 1,
+    Format('(%d)', [Transcript.ReferenceCount]));
+  { `QTH IS JP6T0123 PSE QSL` の 7〜14 が `JP6T0123` です。
+    In `QTH IS JP6T0123 PSE QSL`, 7 to 14 is `JP6T0123`. }
+  Check('参照番号の先頭の文字に印が付く', Transcript.ReferenceAt(7) = 0,
+    Format('(%d)', [Transcript.ReferenceAt(7)]));
+  Check('参照番号の末尾の文字に印が付く', Transcript.ReferenceAt(14) = 0,
+    Format('(%d)', [Transcript.ReferenceAt(14)]));
+  Check('参照番号の 1 つ前の文字には印が付かない',
+    Transcript.ReferenceAt(6) < 0, Format('(%d)', [Transcript.ReferenceAt(6)]));
+  Check('参照番号の 1 つ後の文字には印が付かない',
+    Transcript.ReferenceAt(15) < 0, Format('(%d)', [Transcript.ReferenceAt(15)]));
+
+  Underlined := 0;
+  for X := 0 to High(Chars) do
+    if Transcript.ReferenceAt(X) >= 0 then
+      Inc(Underlined);
+  Check('印の付いた文字数が参照番号の長さと合う', Underlined = 8,
+    Format('(%d)', [Underlined]));
+
+  { 呼出符号の印と混ざらないこと。**上下の線は別の意味なので、同じ配列を
+    見ていたら区別が付きません。**
+    The two marks must not blur into one: **above and below mean different
+    things, and one array behind both would lose the difference.** }
+  Check('参照番号は呼出符号として扱われない', Transcript.CallsignAt(7) < 0,
+    Format('(%d)', [Transcript.CallsignAt(7)]));
+
+  { 文字を差し替えたら古い位置が捨てられること。呼出符号と同じ落とし穴です。
+    Replacing the characters drops the old spans -- the same pitfall as the call
+    signs. }
+  Transcript.SetChars(CharsFrom('CQ CQ K'));
+  Check('文字を差し替えたら参照番号の印が消える',
+    Transcript.ReferenceCount = 0, Format('(%d)', [Transcript.ReferenceCount]));
+  Chars := CharsFrom('SOTA JA/NN6T015 ES TNX');
+  Ex := ReadExchange(Chars);
+  Transcript.SetChars(Chars);
+  Transcript.SetReferences(Ex.References);
+  Check('消す前は参照番号の印がある', Transcript.ReferenceCount = 1,
+    Format('(%d)', [Transcript.ReferenceCount]));
+  Transcript.Clear;
+  Check('消せば参照番号の印も消える', Transcript.ReferenceCount = 0,
+    Format('(%d)', [Transcript.ReferenceCount]));
+
+  { 参照番号の無い受信文でも落ちないこと。**当てにいく先が空の配列です。**
+    A transcript with none must not fall over: **the search hits an empty
+    array.** }
+  Chars := CharsFrom('CQ CQ DE JA1ABC K');
+  Ex := ReadExchange(Chars);
+  Transcript.SetChars(Chars);
+  Transcript.SetReferences(Ex.References);
+  Check('参照番号が無ければ印も無い', Transcript.ReferenceCount = 0,
+    Format('(%d)', [Transcript.ReferenceCount]));
+  Check('参照番号が無ければどこを当てても参照番号でない',
+    (Transcript.ReferenceAt(0) < 0) and (Transcript.ReferenceAt(5) < 0));
+
   WriteLn;
   WriteLn('聴き直しの検証 / replay checks');
   Chars := BuildChars(400);

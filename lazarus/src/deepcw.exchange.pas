@@ -33,7 +33,8 @@ unit DeepCW.Exchange;
 interface
 
 uses
-  SysUtils, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Callsign;
+  SysUtils, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Callsign,
+  DeepCW.Reference;
 
 type
   { 受信文を語に切ったときの 1 語。
@@ -84,6 +85,11 @@ type
       The RST that was sent (requirement FR-E.2); a negative First means it was
       not heard. }
     Rst: TExchangeSpan;
+    { 見つかった参照番号（要件 FR-E.6）。位置は `Callsigns` と同じ数え方
+      （復号文字の番号）です。
+      The references found (requirement FR-E.6); the positions are counted as
+      `Callsigns` counts, in decoded-character indices. }
+    References: TReferences;
   end;
 
 { 受信文を語に切ります。空白が区切りです。
@@ -282,6 +288,7 @@ end;
 function ReadExchange(const Chars: TDecodedChars): TExchange;
 var
   Words: TWords;
+  Named: TReferenceWords;
   I, Count, Taken, AfterUr, LastRst: Integer;
   Parsed: TCallsign;
 begin
@@ -293,10 +300,24 @@ begin
   Result.Rst.First := -1;
   Result.Rst.Last := -1;
   Result.Rst.Text := '';
+  Result.References := nil;
 
   Words := SplitWords(Chars);
   if Length(Words) = 0 then
     Exit;
+
+  { 参照番号は、語をもう一度切り直さずに渡します。**切り直すと位置の数え方が
+    変わり、画面の印がずれます。**
+    The references are handed the words as already split: **splitting again
+    would change what the positions count, and move the marks on screen.** }
+  SetLength(Named, Length(Words));
+  for I := 0 to High(Words) do
+  begin
+    Named[I].Text_ := Words[I].Text;
+    Named[I].First := Words[I].First;
+    Named[I].Last := Words[I].Last;
+  end;
+  Result.References := ExtractReferences(Named);
 
   ChooseCallsign(Words, Result.Callsign, Result.Sightings, Result.Confidence);
 

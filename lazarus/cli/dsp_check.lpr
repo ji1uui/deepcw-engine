@@ -25,7 +25,8 @@ uses
   DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder, DeepCW.Stream,
   DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.Callsign,
-  DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics, FistCases;
+  DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
+  DeepCW.Reference, FistCases;
 
 var
   Meta: TDeepCWMetadata;
@@ -3154,6 +3155,205 @@ end;
   Reads the file left behind and reports how many samples it holds, reporting
   failure through the exit code. **A WAV cannot be checked by looking for a word
   in it, so it is checked by being read.** }
+{ 参照番号の取り出し（要件 FR-E.6）。
+
+  受入基準は「誤検出率が実用範囲」なので、**当たることと、当たらないことの
+  両方**を見ます。当たるほうだけを並べた試験は、全部を拾う規則でも通ります。
+
+  Pulling out the references (requirement FR-E.6).
+
+  The acceptance criterion is a practical false-positive rate, so this checks
+  **both what is found and what is not**: a test that only lists the hits would
+  pass a rule that takes everything. }
+procedure TestReferences;
+var
+  Found: TReferences;
+
+  function OneOf(const Text: string): TReference;
+  begin
+    Found := ExtractReferences(Text);
+    if Length(Found) = 1 then
+      Result := Found[0]
+    else
+      Result := Default(TReference);
+  end;
+
+  procedure Nothing(const What, Text: string);
+  begin
+    Found := ExtractReferences(Text);
+    Check(What, Length(Found) = 0,
+      Format('(%d 件)', [Length(Found)]));
+  end;
+
+  { 受信文を復号文字に見立てて `ReadExchange` に通し、位置まで確かめます。
+    Runs the text through `ReadExchange` as decoded characters, positions and
+    all. }
+  procedure ReferencesOfExchange(const Text, Wanted: string;
+    First, Last: Integer);
+  var
+    Chars: TDecodedChars;
+    Ex: TExchange;
+    I: Integer;
+  begin
+    SetLength(Chars, Length(Text));
+    for I := 1 to Length(Text) do
+    begin
+      Chars[I - 1].Text := Text[I];
+      Chars[I - 1].Confidence := 0.9;
+      Chars[I - 1].Seconds := (I - 1) * 0.1;
+      Chars[I - 1].EndSeconds := Chars[I - 1].Seconds + 0.08;
+    end;
+    Ex := ReadExchange(Chars);
+    Check(Format('%s を受信文の読み取りから得る', [Wanted]),
+      (Length(Ex.References) = 1) and (Ex.References[0].Text_ = Wanted),
+      Format('(%d 件)', [Length(Ex.References)]));
+    { 条件のほうへ入れます。`if` の外に出すと、見つからなくなった日にこの検証は
+      黙って消えます（教訓 10.32）。
+      Inside the condition: outside an `if`, this check would quietly vanish the
+      day nothing is found (lesson 10.32). }
+    Check(Format('%s の位置が復号文字の番号と合う', [Wanted]),
+      (Length(Ex.References) = 1) and (Ex.References[0].First = First)
+        and (Ex.References[0].Last = Last),
+      Format('(%d 件)', [Length(Ex.References)]));
+  end;
+
+var
+  Ref: TReference;
+begin
+  WriteLn;
+  WriteLn('参照番号の取り出し（要件 FR-E.6）');
+
+  { [1] 電波に乗った形。**ハイフンは `6T` と読まれます**（付録 AN の実測）。
+        規則が `JP-0123` を探していたら、1 つも当たりません。
+        [1] The form that comes off the air: **a hyphen reads as `6T`** (measured,
+        appendix AN). A rule looking for `JP-0123` would never match. }
+  Ref := OneOf('QTH IS JP6T0123 PSE QSL');
+  Check('ハイフンが `6T` と読まれた公園符号を見つける',
+    (Length(Found) = 1) and (Ref.Kind = rkPota) and (Ref.Text_ = 'JP-0123'),
+    Format('(%d 件 %s)', [Length(Found), Ref.Text_]));
+  Check('受信文のままの形も残す', Ref.Raw = 'JP6T0123', Ref.Raw);
+  Check('区切りが送られていたので確かとする', Ref.Trust = rtMarked);
+  Check('位置が受信文の中の位置と合う',
+    Copy('QTH IS JP6T0123 PSE QSL', Ref.First + 1, Ref.Last - Ref.First + 1)
+      = 'JP6T0123',
+    Copy('QTH IS JP6T0123 PSE QSL', Ref.First + 1, Ref.Last - Ref.First + 1));
+
+  Ref := OneOf('SOTA JA/NN6T015 ES TNX');
+  Check('山岳符号を見つける',
+    (Length(Found) = 1) and (Ref.Kind = rkSota) and (Ref.Text_ = 'JA/NN-015'),
+    Format('(%d 件 %s)', [Length(Found), Ref.Text_]));
+
+  { [2] ハイフンがそのまま来た場合。録音の読み直しや手で直した文では在り得ます。
+        [2] A hyphen that did arrive -- possible in an edited or imported text. }
+  Ref := OneOf('QTH JP-0123');
+  Check('ハイフンそのものでも見つける',
+    (Length(Found) = 1) and (Ref.Text_ = 'JP-0123') and (Ref.Trust = rtMarked),
+    Format('(%d 件 %s)', [Length(Found), Ref.Text_]));
+
+  { [3] 区切りが送られなかった場合。**見つけはしますが、ハイフンの位置は
+        こちらの推測**なので、確かさは低いほうにします。
+        [3] No separator sent: found, but **where the hyphen goes is our guess**,
+        so it takes the weaker trust. }
+  Ref := OneOf('JP0123 TNX');
+  Check('区切りの無い形も見つける',
+    (Length(Found) = 1) and (Ref.Text_ = 'JP-0123'),
+    Format('(%d 件 %s)', [Length(Found), Ref.Text_]));
+  Check('区切りが無ければ確かでないとする', Ref.Trust = rtLoose);
+  Check('確かでないものは、そうと分かる形で出す',
+    Pos('?', ReferenceCaption(Ref)) > 0, ReferenceCaption(Ref));
+  Check('確かなものに `?` は付けない',
+    Pos('?', ReferenceCaption(OneOf('QTH JP-0123'))) = 0,
+    ReferenceCaption(Ref));
+
+  { [4] 添え言葉。空白だけの区切りでも、POTA・SOTA が前に在れば受け取ります。
+        [4] An introducing word: with POTA or SOTA in front, even a space is
+        enough. }
+  Found := ExtractReferences('POTA JP 0123 ES SOTA JA/NN 015');
+  Check('添え言葉があれば、空白区切りでも両方見つける',
+    (Length(Found) = 2) and (Found[0].Text_ = 'JP-0123')
+      and (Found[1].Text_ = 'JA/NN-015'),
+    Format('(%d 件)', [Length(Found)]));
+  { `if Length = 2 then Check(...)` と書くと、**見つからなくなった日に
+    この検証は黙って消えます。**条件のほうへ入れて、落ちるようにします
+    （教訓 10.32）。
+    Written as `if Length = 2 then Check(...)` **this check would quietly
+    vanish** the day nothing is found; it goes inside the condition instead, so
+    it fails (lesson 10.32). }
+  Check('添え言葉があるものは確かとする',
+    (Length(Found) = 2) and (Found[0].Trust = rtMarked)
+      and (Found[1].Trust = rtMarked));
+
+  { [5] **ここからが受入基準のほう**です。実際の交信文に当てて、何も出ない
+        ことを見ます。
+
+        とくに `NR 0123` は、書いたあとに測って見つかった誤検出です（付録 AN）。
+        形だけでは `JP 0123` と区別が付きません。
+
+        [5] **Now the acceptance criterion.** Real exchanges, and nothing should
+        come out.
+
+        `NR 0123` in particular is a false positive found by measuring after the
+        rule was written (appendix AN): by shape it cannot be told from
+        `JP 0123`. }
+  Nothing('呼び出しを参照番号と取り違えない', 'CQ CQ DE JA1ABC JA1ABC K');
+  Nothing('信号報告を参照番号と取り違えない',
+    'JA1ABC DE JH2XYZ UR 599 599 QTH NAGOYA');
+  Nothing('別れの挨拶を参照番号と取り違えない',
+    'TNX FER QSO 73 ES GL DE JH2XYZ SK');
+  Nothing('コンテストの通し番号を参照番号と取り違えない',
+    'UR RST 579 579 NR 0123 NR 0123 K');
+  Nothing('報告に続く通し番号を参照番号と取り違えない',
+    'CQ TEST DE JA1ABC 599 0012');
+  Nothing('設備や天候の数値を参照番号と取り違えない',
+    'WX SUNNY TEMP 25 C PWR 100 W ANT DIPOLE');
+  { 雑音の中では、離れていた 2 語が 1 語につながって読めることがあります。
+    **つながった通し番号は、形だけなら公園符号と同じ並びです。**数字だけの語を
+    前置符字と見ないので、取りません。
+    Under noise two words can arrive run together, and **a run-together serial
+    has the very shape of a park code.** An all-digit word is not a prefix, so it
+    is not taken. }
+  Nothing('つながって読まれた数字の並びを参照番号と取り違えない',
+    'UR 5990123 K');
+  { 山岳符号の地域は 2 文字です。**1 文字が数字に化けて読めたものは、
+    山岳符号の形をしていません。**
+    A summit region is two letters: **one of them misread as a digit is not the
+    shape of a summit.** }
+  Nothing('地域が 2 文字でないものを山岳符号と取り違えない',
+    'SOTA JA/N16T015 ES TNX');
+  { 添え言葉の無い空白区切りは取りません。**取れば `NR 0123` も取ることに
+    なります。**
+    A space-separated pair with nothing introducing it is not taken: **taking it
+    would take `NR 0123` too.** }
+  Nothing('添え言葉の無い空白区切りは取らない', 'JP 0123 ES JA/NN 015');
+
+  { [6] 受信文の読み取り（`ReadExchange`）へつないだとき、位置が**復号文字の
+        番号**で返ること。画面はこの番号で印を付けるので、**1 つずれれば印は
+        隣の文字に乗ります。**位置を 1 つずらしてみると、実際にここが落ちます。
+        [6] Through `ReadExchange`, the positions come back **in decoded-character
+        indices**. The display marks by that index, so **one out and the mark
+        lands on the neighbour**: shifting the positions by one does indeed make
+        this fail. }
+  ReferencesOfExchange('QTH IS JP6T0123 PSE QSL', 'JP-0123', 7, 14);
+  ReferencesOfExchange('SOTA JA/NN6T015 ES TNX', 'JA/NN-015', 5, 14);
+  { 語をまたぐものも、始まりと終わりが両端の語の位置になること。
+    One spanning two words starts and ends at those two words. }
+  ReferencesOfExchange('POTA JP 0123 K', 'JP-0123', 5, 11);
+
+  { [7] 空の受信文。**まだ何も読めていない間も呼ばれます。**
+
+        この 2 つが捕まえるのは規則の誤りではなく、**語が 1 つも無いときに
+        走査が行き過ぎること**です。実際、語の走査を `High` から `Length` へ
+        1 つ広げると、ここで落ちます。
+        [6] An empty transcript: **this is called while nothing has been read
+        yet.**
+
+        What these two catch is not a wrong rule but **a scan running past the
+        end when there is no word at all**: widening the loop from `High` to
+        `Length` does indeed die right here. }
+  Nothing('空の受信文で何も出ない', '');
+  Nothing('空白だけの受信文で何も出ない', '   ');
+end;
+
 procedure CheckWavFile(const FileName: string);
 var
   Samples: TSingleArray;
@@ -3270,6 +3470,7 @@ begin
     TestMonitorAudio;
     TestPacing;
     TestHistogram;
+    TestReferences;
   finally
     Meta.Free;
   end;

@@ -22,7 +22,8 @@ interface
 
 uses
   SysUtils, Classes, Math, Controls, Graphics, Forms, StdCtrls, LCLType,
-  DeepCW.Types, DeepCW.Decoder, DeepCW.Exchange, ViewColors;
+  DeepCW.Types, DeepCW.Decoder, DeepCW.Exchange, DeepCW.Reference,
+  ViewColors;
 
 type
   { 文字がひとつ選ばれたことを知らせます。番号は文字配列上の位置です。
@@ -75,6 +76,10 @@ type
       being made by splitting at spaces. }
     FCallsigns: TExchangeSpans;
     FChosenCallsign: Integer;
+    { 参照番号の位置（要件 FR-E.6）。呼出符号と同じく昇順で重なりません。
+      Where the references are (requirement FR-E.6); ascending and
+      non-overlapping, as the call signs are. }
+    FReferences: TReferences;
     procedure SetSelected(Value: Integer);
     procedure Rescan;
     procedure GoToMatch(Which: Integer);
@@ -184,6 +189,16 @@ type
       Which call sign the character falls inside, or -1. The caller uses it to
       tell whether a press landed on one. }
     function CallsignAt(Index: Integer): Integer;
+
+    { 見つかった参照番号を渡します（要件 FR-E.6）。**探すのは呼ぶ側、描くのは
+      こちら**という分け方は、呼出符号と同じです。
+      Hands over the references found (requirement FR-E.6). As with the call
+      signs, **the caller finds them and this draws them.** }
+    procedure SetReferences(const Refs: TReferences);
+    { その文字がどの参照番号の中にあるか。無ければ -1。
+      Which reference the character falls inside, or -1. }
+    function ReferenceAt(Index: Integer): Integer;
+    function ReferenceCount: Integer;
     function CallsignCount: Integer;
     function CallsignSpan(Which: Integer): TExchangeSpan;
     { 相手と見た符号の番号。無ければ -1。/ The chosen call sign, or -1. }
@@ -410,6 +425,7 @@ begin
     over fresh ones immediately, but if it ever did not, drawing nothing is more
     honest than **underlining the old positions.** }
   FCallsigns := nil;
+  FReferences := nil;
   FChosenCallsign := -1;
   Relayout;
   Invalidate;
@@ -426,6 +442,7 @@ begin
   FMatchLength := 0;
   FCurrentMatch := -1;
   FCallsigns := nil;
+  FReferences := nil;
   FChosenCallsign := -1;
   Relayout;
   Invalidate;
@@ -623,6 +640,42 @@ begin
     Result := High_;
 end;
 
+procedure TTranscriptView.SetReferences(const Refs: TReferences);
+begin
+  FReferences := Refs;
+  Invalidate;
+end;
+
+function TTranscriptView.ReferenceCount: Integer;
+begin
+  Result := Length(FReferences);
+end;
+
+{ 呼出符号と同じ二分探索です。1 文字ごとに呼ばれるため、線形では画面いっぱいの
+  文字数 × 参照番号の数になります。
+  The same binary search as for call signs: called once per character, a linear
+  scan would cost a screenful of characters times the number of references. }
+function TTranscriptView.ReferenceAt(Index: Integer): Integer;
+var
+  Low_, High_, Middle: Integer;
+begin
+  Result := -1;
+  if Length(FReferences) = 0 then
+    Exit;
+  Low_ := 0;
+  High_ := High(FReferences);
+  while Low_ <= High_ do
+  begin
+    Middle := (Low_ + High_) div 2;
+    if FReferences[Middle].First > Index then
+      High_ := Middle - 1
+    else
+      Low_ := Middle + 1;
+  end;
+  if (High_ >= 0) and (Index <= FReferences[High_].Last) then
+    Result := High_;
+end;
+
 function TTranscriptView.MatchAt(Index: Integer): Integer;
 var
   Low_, High_, Middle: Integer;
@@ -752,7 +805,7 @@ end;
 
 procedure TTranscriptView.Paint;
 var
-  LineIndex, Index, Row, X, Y, Hit, Call, Rule: Integer;
+  LineIndex, Index, Row, X, Y, Hit, Call, Rule, Mark: Integer;
   Ink: TColor;
 begin
   Canvas.Brush.Color := Color;
@@ -853,6 +906,33 @@ begin
         Canvas.Line(X, Y + FLineHeight - Rule, X + FCharWidth,
           Y + FLineHeight - Rule);
         Canvas.Pen.Width := 1;
+      end;
+      { 参照番号には**上に**線を引きます（要件 FR-E.6）。下は呼出符号が使って
+        いるので、空いているのは上です。ここでも色は足しません。下線と上線は
+        **位置の違い**なので、色覚特性があっても見分けられます（NFR-5.4）。
+
+        区切りが送られていなかったものは**点線**にします。ハイフンをこちらが
+        補った、つまり `JP0123` を `JP-0123` と読み替えた、という断りです。
+        自動の補正が利用者に見えないまま通ってはいけません。
+
+        A reference is ruled **above** (requirement FR-E.6): the underside is
+        taken by the call signs, so the top is what is free. No hue is added
+        here either -- above and below is **a difference in place**, which
+        survives colour blindness (NFR-5.4).
+
+        One with no separator sent is ruled **dotted**, saying that the hyphen
+        is ours: that `JP0123` was read as `JP-0123`. A correction the machine
+        made must not pass unseen. }
+      Mark := ReferenceAt(Index);
+      if Mark >= 0 then
+      begin
+        Canvas.Pen.Color := Ink;
+        if FReferences[Mark].Trust = rtLoose then
+          Canvas.Pen.Style := psDot
+        else
+          Canvas.Pen.Style := psSolid;
+        Canvas.Line(X, Y, X + FCharWidth, Y);
+        Canvas.Pen.Style := psSolid;
       end;
     end;
     Inc(Row);

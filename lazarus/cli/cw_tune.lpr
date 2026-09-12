@@ -29,7 +29,7 @@ uses
   DeepCW.Decoder, DeepCW.Dsp, DeepCW.Morse, DeepCW.Tuner, DeepCW.Stream,
   DeepCW.Callsign, DeepCW.Review, DeepCW.Stations, DeepCW.Multi,
   DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch, DeepCW.Platform,
-  DeepCW.Fist, DeepCW.Practice, FistCases;
+  DeepCW.Fist, DeepCW.Practice, DeepCW.Reference, FistCases;
 
 const
   { 試験に使う本文。実際の交信に出てくる形をなぞっています。
@@ -1631,6 +1631,170 @@ begin
       Format('(%.3f 秒)', [Stream.PaceSeconds]));
   finally
     Stream.Free;
+  end;
+
+  Summary(Failures);
+end;
+
+
+{ 参照番号（POTA・SOTA）が、実際に電波に乗ったときどう読めるかを測ります
+  （要件 FR-E.6）。
+
+  **モデルの文字集合にハイフンはありません**（`, . / 0-9 ? A-Z` と空白だけ）。
+  ところが POTA の公園符号は `JP-0123`、SOTA の山岳符号は `JA/NN-015` と、
+  どちらもハイフンを含みます。**つまり、送られたとおりには読めません。**
+
+  では何と読めるのか。**推測せずに測ります。**検出の規則は、この測定の結果に
+  合わせて作らなければ、実際の受信文には当たりません。
+
+  How the references (POTA, SOTA) actually read once they have been on the air
+  (requirement FR-E.6).
+
+  **The model's alphabet holds no hyphen** -- only `, . / 0-9 ? A-Z` and space --
+  while a POTA park is `JP-0123` and a SOTA summit `JA/NN-015`, both of which
+  carry one. **They cannot read as they were sent.**
+
+  So what do they read as? **Measured, not guessed**: a detector built on
+  anything else would not match what actually arrives. }
+procedure RunReference;
+const
+  RATE = 8000;
+  TONE_HZ = 700;
+  HYPHEN = '-....-';
+var
+  Sent: array[0..3] of string;
+  Codes: array[0..3] of string;
+  { 取り出せているべき参照番号。`POTA JP-0123` からは `JP-0123` が出ます。
+    The reference that should come out; `POTA JP-0123` yields `JP-0123`. }
+  Wanted: array[0..3] of string;
+  Reads: array[0..3] of string;
+  I, Failures: Integer;
+  Audio: TSingleArray;
+  Found: TReferences;
+
+  procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
+  begin
+    if Passed then
+      WriteLn('  ok   ', What, '  ', Detail)
+    else
+    begin
+      WriteLn('  NG   ', What, '  ', Detail);
+      Inc(Failures);
+    end;
+  end;
+
+  { 符号そのものから音を作ります。**文字集合に無い符号を送るには、
+    文字からではなく符号から組み立てるほかありません。**
+    Builds audio from the code itself: **to send what the alphabet does not
+    hold, there is no way but to build from the code rather than the text.** }
+  function FromCode(const Code: string): TSingleArray;
+  var
+    Segments: TCWSegments;
+    Options: TCWToneOptions;
+    Timing: TCWTiming;
+    Count, K: Integer;
+    Dit: Double;
+
+    procedure Add(Tone: Boolean; Units_: Double);
+    begin
+      if Units_ <= 0 then
+        Exit;
+      if Count = Length(Segments) then
+        SetLength(Segments, Max(64, Count * 2));
+      Segments[Count].Tone := Tone;
+      Segments[Count].Duration := Units_ * Dit;
+      Segments[Count].TextIndex := 0;
+      Inc(Count);
+    end;
+
+  begin
+    Timing := DefaultTiming;
+    Timing.CharWpm := Wpm;
+    Timing.TextWpm := Wpm;
+    Dit := DitSeconds(Wpm);
+    Segments := nil;
+    Count := 0;
+    for K := 1 to Length(Code) do
+      case Code[K] of
+        '.': begin Add(True, 1); Add(False, 1); end;
+        '-': begin Add(True, 3); Add(False, 1); end;
+        ' ': Add(False, 2);   { 文字間（直前の 1 と合わせて 3）/ character gap }
+        '|': Add(False, 6);   { 語間（同じく合わせて 7）/ word gap }
+      end;
+    SetLength(Segments, Count);
+    Options := DefaultToneOptions;
+    Options.SampleRate := RATE;
+    Options.ToneHz := TONE_HZ;
+    Options.NoiseAmplitude := Noise;
+    RandSeed := 4242;
+    Result := SegmentsToPCM(Segments, Options);
+  end;
+
+begin
+  WriteLn;
+  WriteLn('reference: 参照番号は電波に乗るとどう読めるか / how references read off the air');
+  Failures := 0;
+
+  Sent[0] := 'JP-0123';
+  Codes[0] := '.--- .--. ' + HYPHEN + ' ----- .---- ..--- ...--';
+  Sent[1] := 'POTA JP-0123';
+  Codes[1] := '.--. --- - .-|.--- .--. ' + HYPHEN + ' ----- .---- ..--- ...--';
+  Sent[2] := 'JA/NN-015';
+  Codes[2] := '.--- .- -..-. -. -. ' + HYPHEN + ' ----- .---- .....';
+  Sent[3] := 'JP 0123';
+  Codes[3] := '.--- .--.|----- .---- ..--- ...--';
+  Wanted[0] := 'JP-0123';
+  Wanted[1] := 'JP-0123';
+  Wanted[2] := 'JA/NN-015';
+  Wanted[3] := '';
+
+  WriteLn('  送った符号                読めた文字');
+  for I := 0 to High(Sent) do
+  begin
+    Audio := FromCode(Codes[I]);
+    Reads[I] := Trim(Decoder.DecodeLongSamples(
+      ToModelRate(Audio, RATE, BandwidthHalfWidth(tbAuto)),
+      Decoder.Metadata.SampleRate));
+    WriteLn(Format('  %-24s  %s', [Sent[I], Reads[I]]));
+  end;
+  WriteLn;
+
+  { [1] 表を出すだけでは試験になりません。**表は、壊れても表のままです**
+        （付録 AE）。読めた文字が何であるかを言い切ります。
+
+        [1] A table alone is not a test: **a table stays a table when it
+        breaks** (appendix AE). What was read has to be stated. }
+  Verdict('ハイフンは 2 文字 `6T` として読まれる',
+    Pos(REFERENCE_HYPHEN_AS_READ, Reads[0]) > 0, Reads[0]);
+  Verdict('ハイフンそのものは読めない（文字集合に無い）',
+    Pos('-', Reads[0]) = 0, Reads[0]);
+  Verdict('ハイフンを送らなければ `6T` は出てこない',
+    Pos(REFERENCE_HYPHEN_AS_READ, Reads[3]) = 0, Reads[3]);
+
+  { [2] そのうえで、読めた文字から元の符号へ戻せること。**ここが要件
+        FR-E.6 の受入そのもの**です。単位の試験（dsp_check）は作った文字列に
+        対して行うので、電波を通した文字に対しては、ここでしか分かりません。
+
+        [2] And then: from what was read, back to the reference. **This is the
+        acceptance for FR-E.6 itself.** The unit tests work on strings we wrote,
+        so only here is it known against text that went through the air. }
+  for I := 0 to High(Sent) do
+  begin
+    Found := ExtractReferences(Reads[I]);
+    if I = 3 then
+      { 空白だけで区切られ、添え言葉も無いものは取りません。**取れば、
+        コンテストの通し番号も取ることになります。**
+        A space-separated pair with nothing introducing it is not taken:
+        **taking it would take contest serials too.** }
+      Verdict('空白区切りで添え言葉の無いものは取らない',
+        Length(Found) = 0, Format('%d 件 / %s', [Length(Found), Reads[I]]))
+    else
+      Verdict(Format('%s を電波越しに取り出せる', [Sent[I]]),
+        (Length(Found) = 1) and (Found[0].Text_ = Wanted[I]),
+        Format('%d 件 / 読めた %s', [Length(Found), Reads[I]]));
+    if (I <> 3) and (Length(Found) = 1) then
+      Verdict(Format('%s は確かなものとして出る', [Sent[I]]),
+        Found[0].Trust = rtMarked, Reads[I]);
   end;
 
   Summary(Failures);
@@ -3791,6 +3955,8 @@ begin
       RunFist;
     if Pos('pace', Tests) > 0 then
       RunPace;
+    if Pos('reference', Tests) > 0 then
+      RunReference;
     if Pos('soak', Tests) > 0 then
       RunSoak;
     if Pos('track', Tests) > 0 then
