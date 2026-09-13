@@ -3907,6 +3907,68 @@ begin
   Check('片付けたら、また空になる', LicenceDirectory = '', LicenceDirectory);
 end;
 
+{ 装置を待っているあいだの表示（要件 NFR-4.4）。
+
+  **待っていることと、止まっていることを見分けられる**のが要点です。数が増えて
+  いれば、機械はまだ試しています。
+
+  はじめは経過秒を出していました。**実測で使いものになりませんでした**——壊れた
+  装置は「開けるが読めない」ことがあり、3 秒ごとに一瞬つながるので、18 秒経っても
+  「1 秒」と出続けました（付録 AU）。
+
+  What is shown while waiting for the device (requirement NFR-4.4).
+
+  The point is that **waiting can be told from having given up**: while the
+  number climbs, the machine is still trying.
+
+  Elapsed seconds were shown at first and **measured useless**: a broken device
+  can open without reading, coming up for an instant every three seconds, so it
+  still said "1 second" eighteen seconds in (appendix AU). }
+procedure TestWaitingForDevice;
+begin
+  WriteLn;
+  WriteLn('装置を待っているあいだの表示（要件 NFR-4.4）');
+
+  { まだ 1 度も試していないうちは、数を出しません。**「0 回目」は、試したのか
+    これからなのかが分かりません。**
+    Before the first attempt no number is shown: **"attempt 0" does not say
+    whether one has been made.** }
+  Check('試す前は数を出さない', WaitingForDeviceCaption(0) = '装置待ち',
+    WaitingForDeviceCaption(0));
+  Check('負の数でも数を出さない', WaitingForDeviceCaption(-1) = '装置待ち',
+    WaitingForDeviceCaption(-1));
+
+  { 数が増えることが見えること。**同じ文言のままだと、止まっているのと同じに
+    見えます。**
+    The number has to be seen to climb: **unchanging words look the same as
+    having stopped.** }
+  Check('1 回目が出る', WaitingForDeviceCaption(1) = '装置待ち 1 回目',
+    WaitingForDeviceCaption(1));
+  Check('回数が増えれば表示も変わる',
+    WaitingForDeviceCaption(1) <> WaitingForDeviceCaption(2),
+    WaitingForDeviceCaption(2));
+  Check('大きい回数もそのまま出る',
+    WaitingForDeviceCaption(1200) = '装置待ち 1200 回目',
+    WaitingForDeviceCaption(1200));
+
+  { 状態の欄は幅 140 で、長い文は入りません。**入らなければ、肝心の数が
+    見えません**（実測で起きました）。
+    The status panel is 140 wide and a sentence does not fit: **what does not fit
+    takes the number with it**, as measurement showed. }
+  Check('短く収まる（12 文字以内）',
+    Length(UTF8Decode(WaitingForDeviceCaption(999))) <= 12,
+    Format('(%d 文字) %s', [Length(UTF8Decode(WaitingForDeviceCaption(999))),
+      WaitingForDeviceCaption(999)]));
+
+  { 試すまでの間隔。**短すぎると挿している最中の失敗を何度も数え、長すぎると
+    挿し直したのに戻らないように見えます。**
+    The interval between attempts: **too short counts the plugging-in itself as
+    failures, too long looks as though plugging it back in had not helped.** }
+  Check('試す間隔は 1〜10 秒のあいだ',
+    (AUDIO_RETRY_SECONDS >= 1.0) and (AUDIO_RETRY_SECONDS <= 10.0),
+    Format('(%.1f 秒)', [AUDIO_RETRY_SECONDS]));
+end;
+
 procedure CheckWavFile(const FileName: string);
 var
   Samples: TSingleArray;
@@ -4029,6 +4091,7 @@ begin
     TestRoster;
     TestPrefixTable;
     TestLicences;
+    TestWaitingForDevice;
   finally
     Meta.Free;
   end;

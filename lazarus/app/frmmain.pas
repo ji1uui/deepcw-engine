@@ -513,6 +513,26 @@ type
     { 高コントラスト表示（要件 NFR-5.5）。
       High contrast (requirement NFR-5.5). }
     FSetHighContrast: TCheckBox;
+    { 利用者が「受信」を望んでいるか（要件 NFR-4.4）。**装置が外れて止まったのか、
+      利用者が止めたのか**を分けます。前者なら待って、つながり次第また始めます。
+      Whether the operator wants to be receiving (requirement NFR-4.4). It tells
+      **a stop caused by the device from a stop the operator asked for**: the
+      first waits and starts again as soon as the device is there. }
+    FWantCapture: Boolean;
+    { 待っているか、何回試したか、最後に試した時刻、最後に知らせた時刻。
+
+      回数は**利用者が押してからの累計**で、一瞬つながっても戻しません。
+      戻すと、点滅する装置で数が振り出しに戻り続けます（実測）。
+
+      Whether waiting, how many attempts, when the last one was, and when the
+      operator was last told.
+
+      The count runs **from the operator's press** and does not fall back when
+      the device flickers: it would otherwise keep starting over (measured). }
+    FWaiting: Boolean;
+    FRetryCount: Integer;
+    FLastRetryAt: TDateTime;
+    FSaidDeviceAt: TDateTime;
     FSetApply: TButton;
     FSetInfo: TMemo;
 
@@ -608,6 +628,8 @@ type
     procedure UpdatePrefixesInfo;
     procedure HighContrastChanged(Sender: TObject);
     procedure ApplyHighContrast;
+    procedure BeginCapture;
+    procedure RetryCapture;
     procedure ShowStationLabels;
     function SelectedBand: string;
     function WithoutWorked(const Entries: TBandEntries): TBandEntries;
@@ -3799,7 +3821,28 @@ begin
     FDecoder.Metadata.SampleRate);
 end;
 
+{ 「受信開始」を押したとき。**利用者が望んだ**ことを立ててから始めます
+  （要件 NFR-4.4）。装置が外れて止まったときに、また始めてよいかどうかは、
+  これで決まります。
+  The operator pressed start: **what they want** is recorded before the attempt
+  (requirement NFR-4.4), and that is what decides whether a stop caused by the
+  device may be followed by another attempt. }
 procedure TMainForm.RxStartClick(Sender: TObject);
+begin
+  if FCapture <> nil then
+    Exit;
+  FWantCapture := True;
+  FWaiting := False;
+  FRetryCount := 0;
+  FSaidDeviceAt := 0;
+  BeginCapture;
+end;
+
+{ 実際に取り込みを始めます。**押されたときと、待ってから試し直すときの両方**が
+  ここを通ります。利用者の意思（`FWantCapture`）はここでは触りません。
+  Actually starts capturing. **Both the press and a retry after waiting** come
+  through here; what the operator wants (`FWantCapture`) is not touched. }
+procedure TMainForm.BeginCapture;
 begin
   if FCapture <> nil then
     Exit;
@@ -3866,13 +3909,92 @@ begin
     on E: Exception do
     begin
       FreeAndNil(FCapture);
-      ReportError('受信の開始', E);
+      LogDiagnostic('受信の開始', E.Message);
+      { **知らせは 30 秒に 1 度まで。**3 秒ごとに同じ文言を出し直すと、ほかの
+        知らせが読めません（要件 FR-A.4）。
+        **Told at most once every thirty seconds**: the same words every three
+        would bury every other message (requirement FR-A.4). }
+      if SecondsBetween(Now, FSaidDeviceAt) >= 30 then
+      begin
+        FSaidDeviceAt := Now;
+        ReportError('受信の開始', E);
+      end;
+      FWaiting := True;
+      FLastRetryAt := Now;
     end;
   end;
 end;
 
+{ 装置がつながるのを待ち、つながったら自分で受信を再開します（要件 NFR-4.4）。
+
+  **待つのは、利用者が受信を望んでいるあいだだけ**です。「受信停止」を押されて
+  いれば待ちません。止めた機械が勝手に動き出すのは、**故障と区別が付かない**
+  からです。
+
+  上限は置きません。装置が戻るのが 1 分後か 1 時間後かは、こちらには分かりま
+  せん。**待っていることは画面に出す**ので、止めたければ止められます。
+
+  Waits for the device and resumes receiving by itself (requirement NFR-4.4).
+
+  **Only while the operator wants to receive**: with stop pressed, there is no
+  waiting. A machine that was stopped starting up again on its own **cannot be
+  told from a fault.**
+
+  No limit: whether the device returns in a minute or an hour is not ours to
+  know. **The waiting is on screen**, so it can be ended. }
+procedure TMainForm.RetryCapture;
+begin
+  if (not FWantCapture) or (FCapture <> nil) or (not FWaiting) then
+    Exit;
+  { 送信訓練が同じ装置を握っているあいだは試しません。**奪い合っても、どちらも
+    使えません。**
+    No attempt while send practice holds the same device: **fighting over it
+    leaves neither working.** }
+  if FFtCapture <> nil then
+    Exit;
+  { 待ちは**状態の欄**に出します。入力レベルの脇の欄（`FRxSignal`）は
+    「音が届いています／無音です」のための短い欄で、ここに長い文を入れると
+    はみ出します。
+    The wait goes in the **status panel**; the label beside the level meter
+    (`FRxSignal`) is the short one for "sound is arriving" and "silent", and a
+    sentence there runs off the end. }
+  FRxSignal.Caption := '装置を待っています';
+  SetStatus('', WaitingForDeviceCaption(FRetryCount), '');
+  if MilliSecondsBetween(Now, FLastRetryAt) < Round(AUDIO_RETRY_SECONDS * 1000) then
+    Exit;
+  FLastRetryAt := Now;
+  Inc(FRetryCount);
+  { 開けたら黙って戻ります。**戻ったと言うのは、実際に読めたとき**です
+    （`UpdateLiveReceive`）。開けただけで言うと、読めずにまた止まったときに
+    「戻りました」と「開けませんでした」を繰り返します。
+    A successful open returns in silence: **the return is announced when reading
+    actually works** (in `UpdateLiveReceive`). Announcing it at the open would
+    repeat "it is back" and "it could not be opened" in turn whenever the device
+    opens but does not read. }
+  BeginCapture;
+end;
+
+{ 「受信停止」を押したとき。**待っている最中でも押せます**（要件 NFR-4.4）。
+
+  待ちに入ると取り込みそのものは無いので、`FCapture` は nil です。そこで早々に
+  戻る作りだと、**押しても待ちが終わらず、止められない機械になります。**
+  先に「受信を望んでいる」を下ろします。
+
+  The operator pressed stop. **It works while waiting too** (requirement
+  NFR-4.4): waiting holds no capture, so `FCapture` is nil, and returning early
+  on that would leave **a machine that goes on waiting however often stop is
+  pressed.** What the operator wants is cleared first. }
 procedure TMainForm.RxStopClick(Sender: TObject);
 begin
+  FWantCapture := False;
+  FRetryCount := 0;
+  FSaidDeviceAt := 0;
+  if FWaiting then
+  begin
+    FWaiting := False;
+    FRxSignal.Caption := '';
+    SetStatus('', '待機中', '入力装置を待つのをやめました。');
+  end;
   if FCapture = nil then
     Exit;
   FCapture.Stop;
@@ -5979,6 +6101,7 @@ procedure TMainForm.UpdateLiveReceive;
 var
   Fresh: TSingleArray;
   Failure: string;
+  Kept: Integer;
   Peak: Single;
   StartAt: Double;
 begin
@@ -6003,9 +6126,45 @@ begin
 
       Stop first, then explain: RxStopClick posts "reception stopped", so the
       other order would overwrite the one message that says why it stopped. }
+    { **利用者の意思は残します。**装置が外れて止まったのであって、止めろと
+      言われたのではありません。`RxStopClick` を呼ぶとその意思まで下りるので、
+      呼んだあとに立て直し、待ちを始めます（要件 NFR-4.4）。
+      **What the operator wants survives**: the device stopped it, nobody asked
+      for it. `RxStopClick` would clear that too, so it is set again afterwards
+      and the waiting begins (requirement NFR-4.4). }
+    { **試した回数は持ち越します。**`RxStopClick` は利用者が止めたときのために
+      数を戻しますが、ここは装置の都合で止まった場合です。
+      **The attempt count is carried over**: `RxStopClick` clears it for the
+      operator's own stop, and this is the device's doing. }
+    Kept := FRetryCount;
     RxStopClick(nil);
-    SetStatus('', '', StatusLine(Failure));
+    FRetryCount := Kept;
+    if SecondsBetween(Now, FSaidDeviceAt) >= 30 then
+    begin
+      FSaidDeviceAt := Now;
+      SetStatus('', '', StatusLine(Failure));
+    end;
+    FWantCapture := True;
+    FWaiting := True;
+    FLastRetryAt := Now;
     Exit;
+  end;
+
+  { ここまで来たということは、取り込みが生きているということです。**待ちが
+    終わるのはここ**であって、装置が開けた瞬間ではありません。開けても読めない
+    ことがあるので、開けた時点で「戻りました」と言うと、言ったそばからまた
+    止まります（要件 NFR-4.4）。
+    Reaching this point means the capture is alive. **This is where the wait
+    ends**, not the moment the device opened: opening can be followed by a
+    failure to read, and announcing the return then would be followed at once by
+    another stop (requirement NFR-4.4). }
+  if FWaiting then
+  begin
+    FWaiting := False;
+    FRetryCount := 0;
+    FSaidDeviceAt := 0;
+    SetStatus('', Format('受信中 %d Hz', [FCaptureRate]),
+      '入力装置が戻りました。受信を再開しました。');
   end;
 
   Peak := FRing.PeakLevel(FCaptureRate, 0.2);
@@ -6131,6 +6290,11 @@ begin
 
   UpdateTransmitProgress;
   UpdateLiveReceive;
+  { 装置がつながるのを待っているなら、ここで試し直します（要件 NFR-4.4）。
+    取り込みが動いているあいだは何もしません。
+    If waiting for the device, this is where the next attempt happens
+    (requirement NFR-4.4); it does nothing while capturing runs. }
+  RetryCapture;
   UpdateRecording;
   { 出題が鳴り終われば「止める」は用済みです。押せるまま残すと、何も鳴って
     いないのに止められるように見えます（要件 FR-F.3）。
@@ -6173,7 +6337,14 @@ begin
   FTxSave.Enabled := Length(FTxSamples) > 0;
   FTxVerify.Enabled := (Length(FTxSamples) > 0) and not DecoderBusy;
   FRxStart.Enabled := FCapture = nil;
-  FRxStop.Enabled := FCapture <> nil;
+  { 待っている最中も押せなければなりません（要件 NFR-4.4）。待ちは取り込みを
+    持たないので `FCapture` は nil であり、それだけで無効にすると、**止めたくても
+    止められない機械**になります。実機で押してみて気づきました。
+    It has to work while waiting too (requirement NFR-4.4): waiting holds no
+    capture, so `FCapture` is nil, and disabling on that alone leaves **a machine
+    that cannot be stopped however much the operator wants to.** Pressing it on
+    the running program is what showed this. }
+  FRxStop.Enabled := (FCapture <> nil) or FWaiting;
   FRxDecodeFile.Enabled := not DecoderBusy;
   { 聴き直しの操作は、保管の中身と再生の状態で決まります。どちらもここでしか
     変わらないので、毎回まとめて映します。

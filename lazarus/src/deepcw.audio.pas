@@ -97,6 +97,31 @@ type
     property Capacity: Integer read FCapacity;
   end;
 
+const
+  { 装置が開けなかったとき、次に試すまでの秒数（要件 NFR-4.4）。
+
+    3 秒にしたのは、**USB の装置を挿し直してから使えるようになるまでに数秒
+    かかる**からです。1 秒ごとに試すと、挿している最中の失敗を何度も数えます。
+    10 秒にすると、挿し直したのに戻らないように見えます。
+
+    試す回数に上限は置きません。常設のシャックは何時間も動かしたままになり、
+    **装置が戻るのが 1 分後か 1 時間後かは、こちらには分かりません。**利用者が
+    「受信停止」を押せば止まります。
+
+    Seconds before the next attempt when the device could not be opened
+    (requirement NFR-4.4).
+
+    Three, because **a USB device takes a few seconds to become usable after
+    being plugged back in**: trying every second would count failures that are
+    merely the plugging-in, while ten would look as though plugging it back in
+    had not helped.
+
+    There is no limit on the attempts. A shack is left running for hours, and
+    **whether the device returns in a minute or an hour is not ours to know.**
+    The operator's "stop" ends it. }
+  AUDIO_RETRY_SECONDS = 3.0;
+
+type
   TAudioCapture = class;
   TAudioPlayback = class;
 
@@ -162,6 +187,29 @@ type
     property OnFinished: TNotifyEvent read FOnFinished write FOnFinished;
   end;
 
+{ 装置を待っているあいだに出す言葉（要件 NFR-4.4）。
+
+  添えるのは**試した回数**で、経過した秒数ではありません。はじめは秒数にして
+  いましたが、実測で使いものになりませんでした。**壊れた装置は「開けるが読め
+  ない」ことがあり**、3 秒ごとに一瞬だけ開きます。そのたびに「切れていた起点」が
+  新しくなるので、18 秒経っても「1 秒」と出続けました。
+
+  回数なら、利用者が「受信開始」を押してからの累計です。**一瞬つながっても
+  戻らないので、増え続けます。**知りたいのは「機械はまだ試しているか」で
+  あって、何秒前から切れているかではありません。
+
+  The words shown while waiting for the device (requirement NFR-4.4).
+
+  What is added is **how many attempts**, not how long it has been. Seconds were
+  tried first and measured useless: **a broken device can open without
+  reading**, coming up for an instant every three seconds, and each time the
+  start of the outage moved -- it still said "1 second" eighteen seconds in.
+
+  A count runs from the operator's press and **does not fall back when the
+  device flickers**, so it only climbs. The question being answered is whether
+  the machine is still trying, not how long ago it stopped. }
+function WaitingForDeviceCaption(Attempts: Integer): string;
+
 { libportaudio を読み込みます。パスを空にすると DEEPCW_PORTAUDIO、実行ファイル
   のディレクトリ、システムの検索パスの順に探索します。
 
@@ -204,6 +252,21 @@ function DefaultInputDeviceIndex: Integer;
 function CheckStructureLayout(out Report: string): Boolean;
 
 implementation
+
+function WaitingForDeviceCaption(Attempts: Integer): string;
+begin
+  { **短くします。**出す先は状態の欄（幅 140）で、長い文は入りません。長いまま
+    入れたら、実測で**肝心の数だけが欄からはみ出して見えませんでした。**
+    説明そのものは別に出します。
+    **Kept short**: it goes in a status panel 140 wide, where a sentence does not
+    fit. Left long, measurement showed **the number -- the one part that
+    matters -- falling off the end.** The explanation is given separately. }
+  if Attempts <= 0 then
+    Result := '装置待ち'
+  else
+    Result := Format('装置待ち %d 回目', [Attempts]);
+end;
+
 
 const
   PA_FLOAT32 = $00000001;
