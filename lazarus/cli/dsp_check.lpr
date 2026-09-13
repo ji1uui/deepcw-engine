@@ -26,7 +26,7 @@ uses
   DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.Callsign,
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
-  DeepCW.Reference, DeepCW.Roster, FistCases;
+  DeepCW.Reference, DeepCW.Roster, DeepCW.Platform, FistCases;
 
 var
   Meta: TDeepCWMetadata;
@@ -3816,6 +3816,97 @@ begin
   SetAllocatedPrefixes([]);
 end;
 
+{ 同梱した許諾条項の一覧（要件 NFR-8.4）。
+
+  AGPL の本体に MIT 系のライブラリを同梱して配るので、**利用者が何を受け取った
+  のかを知る手立て**が要ります。ここで確かめるのは、置き場所を見つけること、
+  一覧にすること、そして**無いときに在るふりをしないこと**です。
+
+  The bundled licence texts, listed (requirement NFR-8.4).
+
+  An AGPL application shipping MIT-style libraries inside it needs to let the
+  operator **see what they received.** What is checked here is finding the
+  directory, listing it, and **not pretending when there is none.** }
+procedure TestLicences;
+var
+  Listed: TStringList;
+  Folder, Beside: string;
+
+  procedure Put(const Name_, Text_: string);
+  var
+    List: TStringList;
+  begin
+    List := TStringList.Create;
+    try
+      List.Add(Text_);
+      List.SaveToFile(Folder + Name_);
+    finally
+      List.Free;
+    end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('同梱した許諾条項の一覧（要件 NFR-8.4）');
+
+  { **試験の実行ファイルの隣**に置きます。`LicenceDirectory` が探すのはそこ
+    だからです。試験が済んだら片付けます。
+    Put **beside the test executable**, that being where `LicenceDirectory`
+    looks; cleared away afterwards. }
+  Beside := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
+  Folder := Beside + 'licences' + PathDelim;
+
+  { [1] 置き場所が無いときは、無いと言うこと。**在るふりをすると、配っても
+        いない条項を配ったことになります。**
+        [1] With no directory it says so: **pretending would claim terms that
+        were never shipped.** }
+  if DirectoryExists(Folder) then
+    RemoveDir(Folder);
+  Check('置き場所が無ければ、場所も空', LicenceDirectory = '',
+    LicenceDirectory);
+  Listed := BundledLicences;
+  try
+    Check('置き場所が無ければ、一覧も空', Listed.Count = 0,
+      Format('(%d 件)', [Listed.Count]));
+  finally
+    Listed.Free;
+  end;
+
+  { [2] 置いたものが並ぶこと。
+        [2] What is there is listed. }
+  ForceDirectories(Folder);
+  Put('ONNX-Runtime-LICENSE.txt', 'MIT');
+  Put('PortAudio-LICENSE.txt', 'MIT-style');
+  Check('置き場所が見つかる', LicenceDirectory <> '', LicenceDirectory);
+  Listed := BundledLicences;
+  try
+    Check('同梱した条項の数が合う', Listed.Count = 2,
+      Format('(%d 件)', [Listed.Count]));
+    { 名前が出ること。**何の条項かが分からなければ、一覧の意味がありません。**
+      The names appear: **a list that does not say whose terms these are is no
+      list.** }
+    Check('どのライブラリの条項かが分かる',
+      (Pos('ONNX', Listed.Text) > 0) and (Pos('PortAudio', Listed.Text) > 0),
+      Listed.Text);
+    { 並びが決まっていること。**環境によってファイルの並ぶ順は変わるので、
+      決めておかないと診断情報が実行のたびに違って見えます。**
+      The order is fixed: **files come back in a system-dependent order, and
+      without fixing it the diagnostics would differ run to run.** }
+    Check('並びが決まっている', Listed[0] < Listed[1],
+      Listed[0] + ' / ' + Listed[1]);
+  finally
+    Listed.Free;
+  end;
+
+  { [3] 片付け。**試験が残したものを、次の実行が「同梱物」として読みます。**
+        [3] Cleared away: **what a test leaves behind, the next run reads as
+        something that was shipped.** }
+  DeleteFile(Folder + 'ONNX-Runtime-LICENSE.txt');
+  DeleteFile(Folder + 'PortAudio-LICENSE.txt');
+  RemoveDir(Folder);
+  Check('片付けたら、また空になる', LicenceDirectory = '', LicenceDirectory);
+end;
+
 procedure CheckWavFile(const FileName: string);
 var
   Samples: TSingleArray;
@@ -3937,6 +4028,7 @@ begin
     TestReferences;
     TestRoster;
     TestPrefixTable;
+    TestLicences;
   finally
     Meta.Free;
   end;

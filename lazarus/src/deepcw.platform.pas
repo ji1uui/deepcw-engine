@@ -7,8 +7,8 @@ unit DeepCW.Platform;
   ことに気づけません（教訓 10.11）。実際、実メモリの読み取りは `cw_tune` と
   `gui_probe` に同じものが 2 つありました。
 
-  いまのところ、ここに集めるのは**実メモリの読み取り**だけです。増えたら、
-  ここに足してください。
+  いまのところ、ここに集めるのは**実メモリの読み取り**と**同梱した許諾条項の
+  一覧**です。増えたら、ここに足してください。
 
   The places that differ by operating system, gathered here.
 
@@ -17,8 +17,8 @@ unit DeepCW.Platform;
   one and not the other without anyone noticing (lesson 10.11) -- and reading
   the resident memory was indeed written twice, in `cw_tune` and `gui_probe`.
 
-  For now this holds only the memory reading. Anything else that differs by
-  system belongs here too. }
+  For now this holds the memory reading and the list of bundled licence texts.
+  Anything else that differs by system belongs here too. }
 
 {$mode objfpc}{$H+}
 
@@ -72,6 +72,31 @@ function MemoryUse: TMemoryUse;
 { 表示用の短い言葉。「常駐 139616 kB」「ヒープ 3204 kB」「測れません」。
   A short phrase for display. }
 function MemoryUseCaption(const Use: TMemoryUse): string;
+
+{ 同梱した許諾条項の一覧を返します（要件 NFR-8.4）。
+
+  配布物では、実行ファイルの隣に `licences/` があり、同梱した各ライブラリの
+  条項が入っています（`tools/make_bundle.sh` が置きます）。**開発の木から
+  走らせているときは在りません。**そのときは空を返します——**無いものを
+  「在る」と出すより、無いと分かるほうがよい。**
+
+  返すのはファイル名と大きさだけで、中身は読みません。一覧に要るのは
+  「何の条項が、どこに、同梱されているか」であって、全文ではありません。
+
+  The bundled licence texts (requirement NFR-8.4).
+
+  A distribution carries a `licences/` directory beside the executable, holding
+  each bundled library's terms (put there by `tools/make_bundle.sh`). **Run from
+  a build tree there is none**, and then this returns nothing: **better to show
+  that there is none than to claim one that is not there.**
+
+  Only the names and sizes come back, not the contents: a list needs to say what
+  terms are bundled and where, not to quote them. }
+function BundledLicences: TStringList;
+
+{ 許諾条項の置き場所。無ければ空を返します。
+  Where the licence texts are, or empty when there are none. }
+function LicenceDirectory: string;
 
 implementation
 
@@ -145,6 +170,55 @@ begin
     Result.Kind := mkNone;
     Result.Kilobytes := 0;
   end;
+end;
+
+function LicenceDirectory: string;
+var
+  Base: string;
+  Candidates: array[0..2] of string;
+  I: Integer;
+begin
+  Base := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
+  { 配布物では実行ファイルの隣。開発の木では 1 つ上（`lazarus/app/` から
+    `lazarus/`）も見ます。`LocateDataFile` と同じ考え方です。
+    Beside the executable in a distribution; in a build tree one level up is
+    looked at too (from `lazarus/app/` to `lazarus/`), the same way
+    `LocateDataFile` works. }
+  Candidates[0] := Base + 'licences';
+  Candidates[1] := Base + '..' + PathDelim + 'licences';
+  Candidates[2] := Base + '..' + PathDelim + '..' + PathDelim + 'licences';
+  for I := Low(Candidates) to High(Candidates) do
+    if DirectoryExists(Candidates[I]) then
+      Exit(ExpandFileName(Candidates[I]));
+  Result := '';
+end;
+
+function BundledLicences: TStringList;
+var
+  Folder: string;
+  Search: TSearchRec;
+begin
+  Result := TStringList.Create;
+  Folder := LicenceDirectory;
+  if Folder = '' then
+    Exit;
+  Folder := IncludeTrailingPathDelimiter(Folder);
+  if FindFirst(Folder + '*', faAnyFile, Search) <> 0 then
+    Exit;
+  try
+    repeat
+      if (Search.Attr and faDirectory) <> 0 then
+        Continue;
+      Result.Add(Format('%s（%d バイト）', [Search.Name, Search.Size]));
+    until FindNext(Search) <> 0;
+  finally
+    FindClose(Search);
+  end;
+  { 並びを決めておきます。**ファイルの並ぶ順は環境で変わるので、決めないと
+    診断情報が実行のたびに違って見えます。**
+    The order is fixed: **the order files come back in varies by system, and
+    without fixing it the diagnostics would look different run to run.** }
+  Result.Sort;
 end;
 
 function MemoryUseCaption(const Use: TMemoryUse): string;

@@ -77,6 +77,12 @@ else
   skip "gui_probe（画面部品）" "xvfb-run がありません"
 fi
 step "強制終了しても記録が残る" ./tools/kill_safety_test.sh
+# 配布物に許諾条項が入ること、入らないときは止まること（要件 NFR-8.2）。
+# **配ってしまってからでは直せないものは、回帰試験に入れる。**
+# A distribution carries the licence texts, and stops when it cannot
+# (requirement NFR-8.2). **What cannot be fixed after shipping belongs in the
+# regression.**
+step "配布物に許諾条項が入る" ./tools/bundle_licence_test.sh
 echo
 
 # ---- エンジンを使う検証 ----

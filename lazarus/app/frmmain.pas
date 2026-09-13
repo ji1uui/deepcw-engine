@@ -36,6 +36,7 @@ uses
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
   DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster,
+  DeepCW.Platform,
   TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView,
   ViewColors;
 
@@ -2605,6 +2606,7 @@ end;
 function TMainForm.BuildSettingsTab: TTabSheet;
 var
   Sheet: TTabSheet;
+  Scroller: TScrollBox;
   Operating, Advanced: TGroupBox;
   Row, Apply: TPanel;
   Choice: TTunerBandwidth;
@@ -2625,10 +2627,36 @@ begin
   Sheet.Caption := '設定';
   Result := Sheet;
 
+  { 設定は**巻き取れる欄**に載せます（要件 FR-G.3・教訓 10.36）。
+
+    運用設定の枠は、設定を足すたびに背が伸びます。版 2.42 から 2.44 のあいだに
+    210 から 300 へ伸び、**その分だけ診断情報の欄が押し出されて、既定の窓では
+    読めなくなっていました。**画面を撮って気づきました。
+
+    窓を高くしても、次に設定を足せば同じことが起きます。**足し算で決まる高さに
+    固定の窓で付き合わない。**巻き取れるようにして、どちらの枠も本来の高さを
+    保てるようにします。
+
+    The settings ride in **a scrolling area** (requirement FR-G.3, lesson 10.36).
+
+    The operating group grows taller with every setting added: between versions
+    2.42 and 2.44 it went from 210 to 300, and **the diagnostics panel was
+    pushed out by exactly that much until it could not be read at the default
+    window size.** A screenshot is what showed it.
+
+    A taller window would only postpone it -- the next setting would do the same.
+    **A height that grows by addition is not something a fixed window can keep
+    up with.** Scrolling lets both groups keep the height they need. }
+  Scroller := TScrollBox.Create(Sheet);
+  Scroller.Parent := Sheet;
+  Scroller.Align := alClient;
+  Scroller.BorderStyle := bsNone;
+  Scroller.HorzScrollBar.Visible := False;
+
   { ── 運用設定：普段さわるもの。技術用語を置かない ──
     Operating settings: what an operator actually changes. No jargon here. }
-  Operating := TGroupBox.Create(Sheet);
-  Operating.Parent := Sheet;
+  Operating := TGroupBox.Create(Scroller);
+  Operating.Parent := Scroller;
   { 高さは、中に置いた行の合計です。**足りなければ、最後に置いた行が枠の外へ
     出ます。**呼出符号の一覧（要件 FR-K.9）を足したとき、実際にそうなりました
     ——画面を撮って分かりました（教訓 10.42・10.36）。最後の行は上端 178 から
@@ -2759,10 +2787,17 @@ begin
 
   { ── 詳細・診断：困ったときだけ見るもの ──
     Advanced and diagnostics: only looked at when something is wrong. }
-  Advanced := TGroupBox.Create(Sheet);
-  Advanced.Parent := Sheet;
+  Advanced := TGroupBox.Create(Scroller);
+  Advanced.Parent := Scroller;
   Advanced.Caption := '詳細・診断';
-  Stretch(Advanced, alClient);
+  { 巻き取れる欄の中では、`alClient` は「残り全部」ではなく「見えている分だけ」に
+    なります。**それでは診断情報が見えなくなった元の状態に戻ります。**必要な
+    高さを持たせて積みます。
+    Inside a scrolling area `alClient` means what is visible rather than what is
+    left, **which is the state that hid the diagnostics in the first place**: the
+    group is given the height it needs and stacked. }
+  Advanced.AutoSize := True;
+  Stretch(Advanced, alTop);
 
   Row := AddTopPanel(Advanced, 40);
   FSetApply := AddButton(Row, '設定を適用してエンジンを読み込み直す', 8, 4, 300, @ApplySettings);
@@ -2815,7 +2850,14 @@ begin
   FSetInfo.ScrollBars := ssAutoBoth;
   FSetInfo.WordWrap := False;
   FSetInfo.Font.Name := 'Monospace';
-  Stretch(FSetInfo, alClient);
+  { 巻き取れる欄の中なので、**読める高さを自分で持ちます。**`alClient` は
+    「見えている分だけ」になり、上に積んだものが増えるほど痩せます
+    （教訓 10.36）。
+    Inside a scrolling area it **carries a readable height of its own**:
+    `alClient` would mean only what is visible, growing thinner as things stack
+    above it (lesson 10.36). }
+  FSetInfo.Height := 200;
+  Stretch(FSetInfo, alTop);
 end;
 
 { ---- settings ---- }
@@ -3045,7 +3087,7 @@ end;
 
 procedure TMainForm.RefreshInfo;
 var
-  Lines: TStringList;
+  Lines, Licences: TStringList;
   I, Device: Integer;
   Alphabet: string;
 begin
@@ -3116,6 +3158,34 @@ begin
       if FJournal.LastError <> '' then
         Lines.Add('  ' + FJournal.LastError);
     end;
+    { 同梱している許諾条項を一覧で出します（要件 NFR-8.4）。
+
+      **AGPL の本体と、MIT 系の同梱物が混ざっている**ので、利用者が何を受け
+      取ったのかを知る手立てが要ります。開発の木から走らせているときは
+      `licences/` が無いので、**在るふりをせず、無いと言います。**
+
+      The bundled licence texts, listed (requirement NFR-8.4).
+
+      **An AGPL application with MIT-style libraries inside it** needs to let
+      the operator see what they actually received. Run from a build tree there
+      is no `licences/`, and then it **says so rather than pretending.** }
+    Licences := BundledLicences;
+    try
+      Lines.Add('');
+      if Licences.Count = 0 then
+        Lines.Add('同梱の許諾条項: 見つかりません' +
+          '（配布物ではなく、ビルドした木から動かしています）')
+      else
+      begin
+        Lines.Add(Format('同梱の許諾条項: %d 件（%s）',
+          [Licences.Count, LicenceDirectory]));
+        for I := 0 to Licences.Count - 1 do
+          Lines.Add('  ' + Licences[I]);
+      end;
+    finally
+      Licences.Free;
+    end;
+
     if FLog <> nil then
     begin
       Lines.Add(Format('交信記録: %d 件（%s）', [FLog.Count, FLog.FileName]));
