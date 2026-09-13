@@ -26,7 +26,7 @@ uses
   DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.Callsign,
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
-  DeepCW.Reference, FistCases;
+  DeepCW.Reference, DeepCW.Roster, FistCases;
 
 var
   Meta: TDeepCWMetadata;
@@ -2179,6 +2179,21 @@ begin
 end;
 
 type
+  { どの符号も一覧に在る、という引き当てです（要件 FR-K.9）。
+    A roster in which every call sign is present (requirement FR-K.9). }
+  TAlwaysInRoster = class
+    function Always(const Callsign: string): string;
+  end;
+
+function TAlwaysInRoster.Always(const Callsign: string): string;
+begin
+  if Callsign = '' then
+    Result := ''
+  else
+    Result := '手元の一覧';
+end;
+
+type
   { JH2XYZ を待っている、という引き当てです。/ A watch standing on JH2XYZ. }
   TWatchingFor = class
     List: TWatchedCalls;
@@ -2192,6 +2207,7 @@ end;
 
 var
   Answers: TAlwaysWorked;
+  Listed: TAlwaysInRoster;
   Waiting: TWatchingFor;
 
 procedure TestBandMap;
@@ -2287,6 +2303,47 @@ begin
     TrustCaption(Entries[0]));
   Check('記録が無ければ、確かめた資料も無い', Entries[0].TrustSource = '',
     Entries[0].TrustSource);
+  { 手元の一覧を、確からしさの材料に使う（要件 FR-K.9）。**通信もしません。**
+    A locally held roster as evidence (requirement FR-K.9), **with no traffic
+    either.** }
+  SetLength(Logs, 1);
+  Logs[0] := LogOf('CQ CQ DE JH2XYZ JH2XYZ K ', 1000, 0.99);
+  Entries := BuildBandEntries(Logs, 10, nil, nil, @Listed.Always);
+  Check('一覧にあれば、実在の材料になる', Entries[0].Trust = ctInRoster,
+    TrustCaption(Entries[0].Trust));
+  Check('一覧で確かめたと分かる', Entries[0].TrustSource = '手元の一覧',
+    Entries[0].TrustSource);
+  Check('表示にも、一覧で確かめたと出る',
+    TrustCaption(Entries[0]) = '手元の一覧あり', TrustCaption(Entries[0]));
+
+  { **交信記録のほうが強い根拠です。**両方に在るときは、強いほうを言います。
+    自分が交信した相手であることは、誰かが配った一覧に名前があることより
+    確かです。
+    **One's own log is the stronger evidence**: where both hold it, that is what
+    gets said. Having worked a station beats a name on a list somebody handed
+    out. }
+  Entries := BuildBandEntries(Logs, 10, @Answers.Always, nil, @Listed.Always);
+  Check('両方に在れば、交信記録のほうを言う',
+    Entries[0].TrustSource = '交信記録', Entries[0].TrustSource);
+
+  { 一覧が無ければ何も変わりません。**「一覧に無い」は「実在しない」では
+    ありません**（要件 FR-K.4 と同じ考え方）。
+    With no roster nothing changes: **absence from a roster is not absence from
+    the air** (the reasoning of requirement FR-K.4). }
+  Entries := BuildBandEntries(Logs, 10, nil, nil, nil);
+  Check('一覧が無ければ、確からしさは上げない', Entries[0].Trust = ctAgreed,
+    TrustCaption(Entries[0]));
+
+  { 確かでない符号には、一覧も当てません。**1 文字違いの実在局の名前で
+    「実在する」と言うことになるためです。**
+    The roster is not applied to an uncertain call sign either: **it would call
+    it real on the strength of the neighbouring station's entry.** }
+  SetLength(Logs, 1);
+  Logs[0] := LogOf('CQ DE JH2XYZ K ', 1000, 0.99);
+  Entries := BuildBandEntries(Logs, 10, nil, nil, @Listed.Always);
+  Check('確かでない符号は、一覧に当たっても上げない',
+    Entries[0].Trust = ctShape, TrustCaption(Entries[0]));
+
   { 確かでない符号は、記録に当たっても上げません。**1 文字違いの別人の記録に
     当たっているかもしれないためです。**
     An uncertain call sign is not raised even on a match: **the match may be
@@ -3354,6 +3411,152 @@ begin
   Nothing('空白だけの受信文で何も出ない', '   ');
 end;
 
+{ 手元の呼出符号一覧（要件 FR-K.9）。
+
+  **通信せずに照合できること**が要件です。ここで確かめるのは、読めること、
+  引けること、そして**読めないときに受信を止めないこと**（要件 FR-K.10）です。
+
+  配られている一覧の形はまちまちなので、**こちらが決めた 1 つの形しか読めない
+  のでは「一覧を読み込める」と言えません。**いくつかの形を並べて見ます。
+
+  The locally held call sign roster (requirement FR-K.9).
+
+  The requirement is matching **without any traffic**. What is checked here is
+  that a file can be read, looked up in, and that **failing to read it does not
+  stop reception** (requirement FR-K.10).
+
+  The distributed rosters are not shaped alike, so **reading only one shape of
+  our own choosing would not be "can read the rosters"**: several are tried. }
+procedure TestRoster;
+var
+  Roster: TCallsignRoster;
+  Folder: string;
+
+  procedure Put(const Name_: string; const Lines: array of string);
+  var
+    List: TStringList;
+    I: Integer;
+  begin
+    List := TStringList.Create;
+    try
+      for I := Low(Lines) to High(Lines) do
+        List.Add(Lines[I]);
+      List.SaveToFile(Folder + Name_);
+    finally
+      List.Free;
+    end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('手元の呼出符号一覧（要件 FR-K.9）');
+  Folder := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw_roster' +
+    PathDelim;
+  ForceDirectories(Folder);
+  Roster := TCallsignRoster.Create;
+  try
+    { [1] 行から符号を取り出す規則。**最初の語だけ**を見ます。
+      [1] Pulling the call sign out of a line: **the first word only.** }
+    Check('1 行 1 符号', RosterToken('JA1ABC') = 'JA1ABC',
+      RosterToken('JA1ABC'));
+    Check('コンマ区切りは最初の列', RosterToken('JA1ABC,TARO,TOKYO') = 'JA1ABC',
+      RosterToken('JA1ABC,TARO,TOKYO'));
+    Check('タブ区切りも最初の列', RosterToken('JA1ABC' + #9 + 'TARO') = 'JA1ABC',
+      RosterToken('JA1ABC' + #9 + 'TARO'));
+    Check('前後の空白は落とす', RosterToken('  JA1ABC  ') = 'JA1ABC',
+      RosterToken('  JA1ABC  '));
+    Check('# の行は注記', RosterToken('# 2026 年版') = '',
+      RosterToken('# 2026 年版'));
+    { `;` の行からも何も出ませんが、**理由は注記だからではなく、`;` が区切り
+      だから**です。実際、注記の判定から `;` を外しても、この検証は通ります
+      ——壊して確かめて分かりました。名前のほうを理由に合わせます。
+      A `;` line yields nothing too, **not because it is a note but because `;`
+      is a separator**: dropping `;` from the note test leaves this check
+      passing, as trying to break it showed. The name is made to match the
+      reason. }
+    Check('; は区切りなので、その行からは何も出ない',
+      RosterToken('; note') = '', RosterToken('; note'));
+    Check('空の行からは何も出ない', RosterToken('') = '');
+
+    { [2] 読み込み。重複は 1 つに、形に合わない行は数えて飛ばします。
+      [2] Loading: duplicates become one, and lines that do not fit are counted
+      and skipped. }
+    Put('plain.txt', ['# 手元の一覧', 'JA1ABC', 'JH2XYZ', 'JG3DEF', 'JA1ABC',
+      'CALLSIGN']);
+    Roster.LoadFromFile(Folder + 'plain.txt');
+    Check('読めた件数が合う（重複を除く）', Roster.Count = 3,
+      Format('(%d)', [Roster.Count]));
+    Check('符号として読めなかった行を数える', Roster.Skipped = 1,
+      Format('(%d)', [Roster.Skipped]));
+    Check('読み込みに誤りは無い', Roster.LastError = '', Roster.LastError);
+    { **file 名だけ**を持ちます。path には利用者の名前が入ることがあります
+      （要件 FR-K.7）。
+      **The file name alone** is kept: a path can carry the operator's own name
+      (requirement FR-K.7). }
+    Check('持つのはファイル名だけで、path は持たない',
+      (Roster.Name = 'plain.txt') and (Pos(PathDelim, Roster.Name) = 0),
+      Roster.Name);
+
+    { [3] 引けること。**附加符号は落として引きます。**`JA1ABC/P` は一覧の
+      `JA1ABC` に当たらなければなりません。
+      [3] Looking up, **with the appended designator removed**: `JA1ABC/P` has
+      to find the roster's `JA1ABC`. }
+    Check('一覧にある符号が引ける', Roster.Contains('JA1ABC'));
+    Check('小文字でも引ける', Roster.Contains('ja1abc'));
+    Check('附加符号つきでも引ける', Roster.Contains('JA1ABC/P'));
+    Check('一覧に無い符号は引けない', not Roster.Contains('JA9ZZZ'));
+    Check('空の符号では引けない', not Roster.Contains(''));
+
+    { [4] **符号のほかは何も残しません**（要件 FR-K.7）。名前や常置場所が
+      並んでいても、持つのは最初の列だけです。
+      [4] **Nothing but the call sign is kept** (requirement FR-K.7): with names
+      and addresses alongside, only the first column is held. }
+    Put('withnames.txt', ['JA1ABC,TARO,TOKYO', 'JH2XYZ,HANAKO,NAGOYA']);
+    Roster.LoadFromFile(Folder + 'withnames.txt');
+    Check('名前つきの一覧でも符号は読める',
+      Roster.Contains('JA1ABC') and Roster.Contains('JH2XYZ'),
+      Format('(%d 件)', [Roster.Count]));
+    Check('名前は持たない', (Roster.Count = 2) and not Roster.Contains('TARO'),
+      Format('(%d 件)', [Roster.Count]));
+
+    { [5] 読めなくても止まりません（要件 FR-K.10）。**「照合できない」は
+      「受信できない」ではありません。**
+      [5] Unreadable does not stop anything (requirement FR-K.10): **"cannot
+      match" is not "cannot receive".** }
+    Roster.LoadFromFile(Folder + 'no_such_file.txt');
+    Check('無いファイルでも例外にしない', Roster.LastError <> '',
+      Roster.LastError);
+    Check('無いファイルなら件数は 0', Roster.Count = 0,
+      Format('(%d)', [Roster.Count]));
+    Check('引いても落ちない（何も当たらない）',
+      not Roster.Contains('JA1ABC'));
+    { 読めなかったときは名前も出しません。**読めていない一覧の名前を出すと、
+      読めたように見えます。**
+      No name either when it could not be read: **naming a roster that was not
+      read makes it look as though it had been.** }
+    Check('読めなければ名前も出さない', Roster.Name = '', Roster.Name);
+
+    Put('empty.txt', []);
+    Roster.LoadFromFile(Folder + 'empty.txt');
+    Check('空のファイルでも落ちない', (Roster.Count = 0) and
+      (Roster.LastError = ''), Roster.LastError);
+
+    { [6] 上限で打ち切ったときは、そう言います。**黙って途中で止めると、
+      一覧に在る符号が「無い」と出ます。**
+      [6] A cap that cuts it short says so: **stopping quietly would report call
+      signs that are in the roster as absent.** }
+    Put('many.txt', ['JA1ABC', 'JH2XYZ', 'JG3DEF', 'JA1AAA', 'JA1AAB']);
+    Roster.LoadFromFile(Folder + 'many.txt', 1000000);
+    Check('上限に届かなければ打ち切らない', not Roster.Truncated);
+    Roster.LoadFromFile(Folder + 'many.txt', 10);
+    Check('上限で打ち切ったら、そう言う', Roster.Truncated);
+    Check('打ち切っても読めたぶんは引ける', Roster.Contains('JA1ABC'),
+      Format('(%d 件)', [Roster.Count]));
+  finally
+    Roster.Free;
+  end;
+end;
+
 procedure CheckWavFile(const FileName: string);
 var
   Samples: TSingleArray;
@@ -3451,12 +3654,14 @@ begin
     TestHistory;
     TestJournal;
     Answers := TAlwaysWorked.Create;
+    Listed := TAlwaysInRoster.Create;
     Waiting := TWatchingFor.Create;
     Waiting.List := ParseWatchList('JH2XYZ');
     try
       TestBandMap;
     finally
       Waiting.Free;
+      Listed.Free;
       Answers.Free;
     end;
     TestContactLog;
@@ -3471,6 +3676,7 @@ begin
     TestPacing;
     TestHistogram;
     TestReferences;
+    TestRoster;
   finally
     Meta.Free;
   end;

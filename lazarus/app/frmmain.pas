@@ -35,7 +35,7 @@ uses
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
-  DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference,
+  DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster,
   TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView;
 
 type
@@ -491,6 +491,14 @@ type
     FSetLogImport: TButton;
     FSetLogExport: TButton;
     FSetLogInfo: TLabel;
+    { 手元の呼出符号一覧（要件 FR-K.9）。利用者が選んだファイルだけを読みます。
+      The locally held call sign roster (requirement FR-K.9); only a file the
+      operator picked is read. }
+    FRoster: TCallsignRoster;
+    FSetRoster: TButton;
+    FSetRosterClear: TButton;
+    FSetRosterInfo: TLabel;
+    FRosterFile: string;
     FSetApply: TButton;
     FSetInfo: TMemo;
 
@@ -575,6 +583,11 @@ type
     procedure ReadTranscript;
     procedure AnnounceReference;
     procedure UpdateTranscriptMessage;
+    function InRoster(const Callsign: string): string;
+    procedure SetRosterClick(Sender: TObject);
+    procedure SetRosterClearClick(Sender: TObject);
+    procedure LoadRoster(const FileName: string);
+    procedure UpdateRosterInfo;
     procedure ShowStationLabels;
     function SelectedBand: string;
     function WithoutWorked(const Entries: TBandEntries): TBandEntries;
@@ -916,6 +929,7 @@ begin
     FJournal.Flush;
   FJournal.Free;
   FLog.Free;
+  FRoster.Free;
   FHistory.Free;
   FRing.Free;
   FDecoder.Free;
@@ -2583,7 +2597,16 @@ begin
     Operating settings: what an operator actually changes. No jargon here. }
   Operating := TGroupBox.Create(Sheet);
   Operating.Parent := Sheet;
-  Operating.Height := 210;
+  { 高さは、中に置いた行の合計です。**足りなければ、最後に置いた行が枠の外へ
+    出ます。**呼出符号の一覧（要件 FR-K.9）を足したとき、実際にそうなりました
+    ——画面を撮って分かりました（教訓 10.42・10.36）。最後の行は上端 178 から
+    22 画素なので、枠は 210 では足りません。
+    The height is the sum of the rows put inside: **too little and the last row
+    added falls outside the box.** That is what happened when the roster row
+    (requirement FR-K.9) went in, and a screenshot is what showed it (lessons
+    10.42, 10.36). The last row sits at 178 and is 22 tall, so 210 is not
+    enough. }
+  Operating.Height := 242;
   Operating.Caption := '運用設定';
   Stretch(Operating, alTop);
 
@@ -2660,6 +2683,21 @@ begin
   FSetLogExport := AddButton(Operating, 'ADIF を書き出す', 278, 146, 150,
     @SetLogExportClick);
   FSetLogInfo := AddLabel(Operating, '', 440, 150);
+
+  { 手元の呼出符号一覧（要件 FR-K.9）。**同梱はしません。**配られている一覧を
+    再配布してよいかが分からないためです（未解決 #15）。読むのは利用者が自分で
+    置いたファイルだけで、**通信は一切しません。**
+
+    A locally held call sign roster (requirement FR-K.9). **Nothing is
+    bundled**: whether the distributed rosters may be redistributed is not known
+    (open question #15). Only a file the operator put there is read, and
+    **nothing is ever sent.** }
+  AddLabel(Operating, '呼出符号の一覧', 14, 182);
+  FSetRoster := AddButton(Operating, 'ファイルを選ぶ', 120, 178, 150,
+    @SetRosterClick);
+  FSetRosterClear := AddButton(Operating, '使わない', 278, 178, 150,
+    @SetRosterClearClick);
+  FSetRosterInfo := AddLabel(Operating, '', 440, 182);
 
   { ── 詳細・診断：困ったときだけ見るもの ──
     Advanced and diagnostics: only looked at when something is wrong. }
@@ -2775,6 +2813,12 @@ begin
     FPrGroups.Value := ClampInt(Ini.ReadInteger('practice', 'groups', 10), 1, 50);
     FPrWpm.Value := ClampInt(Ini.ReadInteger('practice', 'wpm', 20), 5, 40);
     FPrNoise.Position := ClampInt(Ini.ReadInteger('practice', 'noise', 10), 0, 40);
+    { 前回の一覧を読み直します。**無くなっていても黙って続けます**――一覧が
+      無いのは「照合できない」であって「起動できない」ではありません
+      （要件 FR-K.10）。
+      The roster is read again; **gone, it passes in silence**: no roster means
+      "cannot match", not "cannot start" (requirement FR-K.10). }
+    LoadRoster(Ini.ReadString('roster', 'file', ''));
     FPrDelay.Checked := Ini.ReadBool('practice', 'delay', True);
     FPrDelaySeconds.Value := ClampInt(
       Ini.ReadInteger('practice', 'delay_seconds', REVEAL_DELAY_DEFAULT_SECONDS),
@@ -2872,6 +2916,13 @@ begin
       Ini.WriteInteger('practice', 'groups', FPrGroups.Value);
       Ini.WriteInteger('practice', 'wpm', FPrWpm.Value);
       Ini.WriteInteger('practice', 'noise', FPrNoise.Position);
+      { 一覧そのものではなく、**ファイルの場所だけ**を覚えます。写しを持てば、
+        利用者が更新しても古いままになります（要件 FR-K.9 の「利用者が用意した
+        ファイル」）。
+        The file's location is remembered, **not the roster itself**: a copy
+        would stay stale after the operator updated theirs (requirement FR-K.9
+        says the file is the operator's). }
+      Ini.WriteString('roster', 'file', FRosterFile);
       Ini.WriteBool('practice', 'delay', FPrDelay.Checked);
       Ini.WriteInteger('practice', 'delay_seconds', FPrDelaySeconds.Value);
       Ini.WriteInteger('fist', 'kind', FFtKind.ItemIndex);
@@ -3883,6 +3934,108 @@ begin
     FRxTranscript.Message_ := '受信を開始すると、ここに読めた文字が出ます。';
 end;
 
+{ 手元の一覧に在るかを引きます（要件 FR-K.9）。在れば**何で確かめたのか**を
+  返し、無ければ空を返します。
+
+  返すのはファイル名ではなく「手元の一覧」という言葉です。一覧の行は狭く、
+  **そこへ file 名を出しても読み切れません。**どのファイルを読んでいるかは
+  設定タブに出ます。
+
+  Looks a call sign up in the roster (requirement FR-K.9), returning **what
+  confirmed it** or an empty string.
+
+  The words rather than the file name: a row of the list is narrow and **a file
+  name would not be read there.** Which file is loaded is shown on the settings
+  tab. }
+function TMainForm.InRoster(const Callsign: string): string;
+begin
+  Result := '';
+  { 一覧が無いときは、何も言いません。**「一覧に無い」と「一覧が無い」を同じ
+    顔で出してはいけません**（要件 FR-K.4 と同じ考え方）。
+    With no roster nothing is said: **"not in the roster" and "there is no
+    roster" must not wear the same face** (the reasoning of requirement
+    FR-K.4). }
+  if (FRoster = nil) or (FRoster.Count = 0) then
+    Exit;
+  if FRoster.Contains(Callsign) then
+    Result := '手元の一覧';
+end;
+
+{ 一覧を読み込みます。**読めなくても受信は止めません**（要件 FR-K.10）。
+  Loads the roster. **A file that cannot be read does not stop reception**
+  (requirement FR-K.10). }
+procedure TMainForm.LoadRoster(const FileName: string);
+begin
+  if FRoster = nil then
+    FRoster := TCallsignRoster.Create;
+  FRosterFile := FileName;
+  FRoster.LoadFromFile(FileName);
+  if FRoster.LastError <> '' then
+    { 原文は診断へ、利用者には対処のある言葉を出します（要件 FR-A.4）。
+      The original text goes to the diagnostics and the operator gets words with
+      a next step in them (requirement FR-A.4). }
+    LogDiagnostic('呼出符号の一覧', FRoster.LastError);
+  UpdateRosterInfo;
+  { 読み込んだら一覧を作り直します。**作り直さないと、次に局が動くまで
+    反映されません。**
+    The list is rebuilt: **without that, nothing would change until the next
+    time a station moves.** }
+  FBandMapAt := 0;
+  RefreshBandMap;
+end;
+
+procedure TMainForm.UpdateRosterInfo;
+begin
+  if FSetRosterInfo = nil then
+    Exit;
+  if (FRoster = nil) or (FRosterFile = '') then
+  begin
+    FSetRosterInfo.Caption := '使っていません';
+    Exit;
+  end;
+  if FRoster.LastError <> '' then
+  begin
+    FSetRosterInfo.Caption := '読めませんでした。ファイルを確かめてください';
+    Exit;
+  end;
+  { **読めなかった行の数も出します。**件数だけを出すと、半分しか読めていない
+    ファイルが「読めた」ように見えます。
+    **The lines that could not be read are said too**: a count alone would let a
+    file half of which was skipped look as though it had been read. }
+  FSetRosterInfo.Caption := Format('%d 件 / %s', [FRoster.Count, FRoster.Name]);
+  if FRoster.Skipped > 0 then
+    FSetRosterInfo.Caption := FSetRosterInfo.Caption +
+      Format('（符号として読めなかった行 %d）', [FRoster.Skipped]);
+  if FRoster.Truncated then
+    FSetRosterInfo.Caption := FSetRosterInfo.Caption + '（大きすぎるため途中まで）';
+end;
+
+procedure TMainForm.SetRosterClick(Sender: TObject);
+var
+  Dialog: TOpenDialog;
+begin
+  Dialog := TOpenDialog.Create(Self);
+  try
+    Dialog.Title := '呼出符号の一覧を開く';
+    Dialog.Filter := 'テキスト (*.txt;*.csv)|*.txt;*.csv|すべて (*.*)|*.*';
+    if not Dialog.Execute then
+      Exit;
+    LoadRoster(Dialog.FileName);
+  finally
+    Dialog.Free;
+  end;
+end;
+
+procedure TMainForm.SetRosterClearClick(Sender: TObject);
+begin
+  FRosterFile := '';
+  if FRoster <> nil then
+    FRoster.Clear;
+  UpdateRosterInfo;
+  FBandMapAt := 0;
+  RefreshBandMap;
+end;
+
 { 呼出符号と信号報告だけをクリップボードへ送ります（要件 FR-E.2）。
 
   RST が聞こえていなければ符号だけを送ります。**聞こえていないものを 599 と
@@ -4489,7 +4642,7 @@ begin
     The list just built is kept: having the log side rebuild the same thing
     would run a 10.6 ms job five times a second (measured in dsp_check). }
   FBandEntries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
-    @WorkedBefore, @WatchedCall);
+    @WorkedBefore, @WatchedCall, @InRoster);
   { コンテストモードでは、交信済みの局を一覧から外せます。**世界のコンテスト
     ソフトが例外なく持つ機能で、混み合った帯域では、呼ぶ相手だけが残ることに
     値打ちがあります。**外した局も記録には残っており、印を外せば戻ります。

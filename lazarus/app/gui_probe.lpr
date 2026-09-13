@@ -60,6 +60,18 @@ type
     function Lookup(const Callsign: string): string;
   end;
 
+  { どの符号も一覧に在る、という引き当て（要件 FR-K.9）。
+    A roster in which every call sign is present (requirement FR-K.9). }
+  TAlwaysInRoster = class
+    function Always(const Callsign: string): string;
+  end;
+
+  { どの符号も交信済み、という引き当て（要件 FR-K.11）。
+    A log in which every call sign has been worked (requirement FR-K.11). }
+  TAlwaysWorked = class
+    function Always(const Callsign: string): Boolean;
+  end;
+
   { 選ばれた局を控えます。/ Records the station that was chosen. }
   TStationWatcher = class
     Id: Int64;
@@ -127,6 +139,19 @@ end;
 procedure TProbeBandMap.Tap(Y: Integer);
 begin
   MouseDown(mbLeft, [], 10, Y);
+end;
+
+function TAlwaysInRoster.Always(const Callsign: string): string;
+begin
+  if Callsign = '' then
+    Result := ''
+  else
+    Result := '手元の一覧';
+end;
+
+function TAlwaysWorked.Always(const Callsign: string): Boolean;
+begin
+  Result := Callsign <> '';
 end;
 
 function TWatchingFor.Lookup(const Callsign: string): string;
@@ -371,6 +396,8 @@ var
   Choice: TChoiceWatcher;
   Chooser: TStationWatcher;
   BandMap: TProbeBandMap;
+  Listed: TAlwaysInRoster;
+  Worked: TAlwaysWorked;
   Logs: TStationLogs;
   Entries: TBandEntries;
   History: TAudioHistory;
@@ -1472,6 +1499,9 @@ begin
   View.Visible := False;
   Application.ProcessMessages;
 
+  Listed := TAlwaysInRoster.Create;
+  Worked := TAlwaysWorked.Create;
+
   SetLength(Logs, 24);
   for X := 0 to 23 do
   begin
@@ -1511,6 +1541,32 @@ begin
     The station waited for is marked and the others are not (requirement FR-I.4).
     **An announcement goes by once, so the row carries it too**: an operator who
     was away can still see which row it was. }
+  { 何で確かめたのかが行に出ること（要件 FR-K.9・FR-K.11）。**出ていなければ、
+    一覧に当たっても画面は何も変わりません。**一致どまりの局と、確かめた局が
+    同じ顔になります。
+    That the row says what confirmed the call sign (requirements FR-K.9,
+    FR-K.11). **Unless it does, a roster match changes nothing on screen** and a
+    station no further than agreed wears the same face as a confirmed one. }
+  Check('確かめていない局は「一致」とだけ出る', BandMap.TrustColumn(0) = '一致',
+    Format('("%s")', [BandMap.TrustColumn(0)]));
+  Check('1 度きりの局は「確認中」と出る', BandMap.TrustColumn(1) = '確認中',
+    Format('("%s")', [BandMap.TrustColumn(1)]));
+  Entries := BuildBandEntries(Logs, 320, nil, nil, @Listed.Always);
+  BandMap.SetEntries(Entries, 320);
+  Check('一覧で確かめた局は、そう出る',
+    BandMap.TrustColumn(0) = '手元の一覧あり',
+    Format('("%s")', [BandMap.TrustColumn(0)]));
+  Check('確かでない局は、一覧に当たっても「確認中」のまま',
+    BandMap.TrustColumn(1) = '確認中',
+    Format('("%s")', [BandMap.TrustColumn(1)]));
+  Entries := BuildBandEntries(Logs, 320, @Worked.Always, nil, @Listed.Always);
+  BandMap.SetEntries(Entries, 320);
+  Check('交信記録で確かめた局は、一覧より記録のほうを出す',
+    BandMap.TrustColumn(0) = '交信記録あり',
+    Format('("%s")', [BandMap.TrustColumn(0)]));
+  Entries := BuildBandEntries(Logs, 320);
+  BandMap.SetEntries(Entries, 320);
+
   Check('待っていなければ印は付かない',
     Pos('★', BandMap.NameCaption(0)) = 0,
     Format('("%s")', [BandMap.NameCaption(0)]));

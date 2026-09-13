@@ -77,6 +77,28 @@ function IsJapanesePrefix(const Prefix: string): Boolean;
   Pulls every callsign-shaped word out of a piece of text. }
 function ExtractCallsigns(const Text: string): TCallsigns;
 
+{ 呼出符号を、引き当ての鍵に使う形へ直します。附加符号（`/P`・`/1`）を落とし、
+  大文字にします。形として成立しないものは、そのまま大文字にして返します。
+  **その符号は運用者のものであり、こちらの規則に合わないという理由で捨ててよい
+  ものではありません。**
+
+  規則をここに置くのは、**引き当てる側が複数あるため**です。交信記録
+  （`DeepCW.Log` の `LogKeyOf`）と、手元の一覧（`DeepCW.Roster`、要件 FR-K.9）が
+  同じ鍵で引けなければ、**片方だけが当たる符号ができます。**形の規則はこの単位に
+  あるので、そこから作る鍵もここに置きます。
+
+  Puts a call sign into the form used as a lookup key: the appended designator
+  (`/P`, `/1`) removed and upper case. Anything that does not fit the shape rule
+  is returned upper-cased as it stands -- **that call sign belongs to the
+  operator and is not ours to discard for failing our rule.**
+
+  The rule lives here because **more than one thing looks call signs up**: the
+  contact log (`LogKeyOf` in `DeepCW.Log`) and a locally held roster
+  (`DeepCW.Roster`, requirement FR-K.9). Keyed differently, **a call sign would
+  be found by one and missed by the other.** The shape rule is in this unit, so
+  the key built from it belongs here too. }
+function CallsignKey(const Token: string): string;
+
 implementation
 
 function IsLetter(Ch: Char): Boolean;
@@ -290,6 +312,16 @@ begin
   finally
     Words.Free;
   end;
+end;
+
+
+function CallsignKey(const Token: string): string;
+var
+  Parsed: TCallsign;
+begin
+  Result := UpperCase(Trim(Token));
+  if ParseCallsign(Result, Parsed) then
+    Result := Parsed.Base;
 end;
 
 end.

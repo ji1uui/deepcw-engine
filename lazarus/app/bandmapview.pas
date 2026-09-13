@@ -91,6 +91,12 @@ type
       looking at the screen (requirements FR-J.1, FR-J.6 and FR-J.7). }
     function NameCaption(Index: Integer): string;
     function AgeCaption(Index: Integer): string;
+    { 何で確かめたのかの桁（要件 FR-K.9・FR-K.11）。ここも**出ていること自体が
+      要件**なので、画面を見ずに確かめられるようにします。
+      The column naming what confirmed the call sign (requirements FR-K.9,
+      FR-K.11). Here too **being shown is the requirement**, so it can be checked
+      without looking at the screen. }
+    function TrustColumn(Index: Integer): string;
     { 選ばれている局の番号。0 なら選ばれていません。
       The chosen station's number, or zero for none. }
     function SelectedId: Int64;
@@ -126,6 +132,11 @@ const
   COLUMN_NAME = 6.2;
   COLUMN_STATE = 3.4;
   COLUMN_AGE = 3.4;
+  { 何で確かめたのかを出す桁（要件 FR-K.9・FR-K.11）。「交信記録あり」が
+    いちばん長く、6 文字です。
+    The column for what confirmed the call sign (requirements FR-K.9, FR-K.11);
+    the longest of them is six characters. }
+  COLUMN_TRUST = 5.6;
 
 constructor TBandMapView.Create(AOwner: TComponent);
 begin
@@ -282,6 +293,15 @@ begin
   Result := EntryCaption(FEntries[Index]);
 end;
 
+function TBandMapView.TrustColumn(Index: Integer): string;
+begin
+  { 言葉を決めるのは DeepCW.BandMap です。**ここで作り直すと、試験が見る言葉と
+    画面に出る言葉が別物になります。**
+    The words are decided by DeepCW.BandMap: **built again here, what the test
+    reads and what the screen shows would be two different things.** }
+  Result := TrustCaption(FEntries[Index]);
+end;
+
 procedure TBandMapView.DrawRow(Index, AtY: Integer);
 var
   X, Width_: Integer;
@@ -339,6 +359,31 @@ begin
 
   Canvas.TextOut(X, AtY + 3, AgeCaption(Index));
   Inc(X, Round(COLUMN_AGE * FUnit));
+
+  { 何で確かめたのかを出します（要件 FR-K.9・FR-K.11）。
+
+    **出さなければ、一覧に当たっても画面は何も変わりません。**呼出符号の脇に
+    付く `?` は「1 度きり」のときだけで、一致どまりの局と、手元の一覧で確かめた
+    局は同じ顔になります。確かめる手立てを足しても、**確かめたことが見えなければ
+    足したことになりません。**
+
+    根拠の強さは言葉で分けます。「交信記録あり」は自分が交信した相手、
+    「手元の一覧あり」は誰かが配った一覧に載っていただけです。**同じ言葉で
+    出してはいけません。**
+
+    What confirmed the call sign (requirements FR-K.9, FR-K.11).
+
+    **Without it the screen does not change at all on a roster match**: the `?`
+    beside a call sign marks only the seen-once case, so a station no further
+    than agreed and one confirmed against a roster wear the same face. Adding a
+    way to confirm **is not adding anything if the confirmation cannot be
+    seen.**
+
+    The strength of the evidence is kept apart in words: one is a station the
+    operator has worked, the other a name on a list somebody handed out.
+    **Those must not read alike.** }
+  Canvas.TextOut(X, AtY + 3, TrustColumn(Index));
+  Inc(X, Round(COLUMN_TRUST * FUnit));
 
   Width_ := ClientWidth - X - 8 - FScrollBar.Width;
   if Width_ > FUnit then

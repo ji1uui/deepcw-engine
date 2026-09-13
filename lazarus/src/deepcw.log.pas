@@ -294,12 +294,13 @@ begin
 end;
 
 function LogKeyOf(const Callsign: string): string;
-var
-  Parsed: TCallsign;
 begin
-  Result := UpperCase(Trim(Callsign));
-  if ParseCallsign(Result, Parsed) then
-    Result := Parsed.Base;
+  { 規則そのものは `DeepCW.Callsign` にあります。手元の一覧（要件 FR-K.9）も
+    同じ鍵で引くので、**写しを 2 つ置くと、片方だけが当たる符号ができます。**
+    The rule itself is in `DeepCW.Callsign`: a locally held roster (requirement
+    FR-K.9) keys the same way, and **two copies would leave call signs that only
+    one of them finds.** }
+  Result := CallsignKey(Callsign);
 end;
 
 function AdifValue(const Item: TAdifRecord; const Name: string): string;

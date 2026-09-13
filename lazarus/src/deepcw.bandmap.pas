@@ -192,13 +192,33 @@ type
     list holds no watch list itself, for the same reason it holds no log. }
   TWatchLookup = function(const Callsign: string): string of object;
 
+  { 手元の一覧に在るかを引く手続き（要件 FR-K.9）。在れば**その一覧の名前**を、
+    無ければ空を返します。
+
+    真偽ではなく名前を返すのは、**何で確かめたのかを一覧に出すため**です
+    （`TrustSource`）。「一覧にあり」とだけ出すと、自分の交信記録で確かめたのか、
+    配られた一覧にあったのかが分かりません。
+
+    一覧そのものをここで持たないのは、交信記録を持たないのと同じ理由です。
+
+    The lookup for whether a call sign is in a locally held roster (requirement
+    FR-K.9): **the roster's name** when it is, empty when it is not.
+
+    A name rather than a yes, **so that the list can say what confirmed it**
+    (`TrustSource`): shown only as "in a list", there would be no telling one's
+    own log from a roster someone distributed.
+
+    The roster itself is not held here, for the same reason the log is not. }
+  TRosterLookup = function(const Callsign: string): string of object;
+
 { 局ごとの読み取り結果を、一覧の行へ翻訳します。渡された引き当て以外に状態を
   持たず、同じ入力からは必ず同じ行が出ます。
 
   Translates the per-station results into rows. Beyond the lookup it is handed it
   holds no state, and the same input always gives the same rows. }
 function BuildBandEntries(const Logs: TStationLogs; NowSeconds: Double;
-  Worked: TWorkedLookup = nil; Watch: TWatchLookup = nil): TBandEntries;
+  Worked: TWorkedLookup = nil; Watch: TWatchLookup = nil;
+  Roster: TRosterLookup = nil): TBandEntries;
 
 { 確からしさを、運用者に見せる短い言葉にします。
   Puts the trust into the few words shown to the operator. }
@@ -244,7 +264,7 @@ begin
 end;
 
 function BuildBandEntries(const Logs: TStationLogs; NowSeconds: Double;
-  Worked: TWorkedLookup; Watch: TWatchLookup): TBandEntries;
+  Worked: TWorkedLookup; Watch: TWatchLookup; Roster: TRosterLookup): TBandEntries;
 var
   I: Integer;
   Words: TWords;
@@ -299,6 +319,27 @@ begin
     begin
       Result[I].Trust := ctInRoster;
       Result[I].TrustSource := '交信記録';
+    end
+    { **交信記録が先です。**自分が交信した相手であることは、配られた一覧に
+      名前があることより確かな根拠です。両方に在るときは、強いほうを言います
+      （要件 FR-K.9・FR-K.11）。
+
+      一覧のほうも、確かでない符号には当てません。**1 文字違いの符号を一覧に
+      当てれば、隣の実在局の名前で「実在する」と言うことになります**（付録 T.2
+      と同じ理由）。
+
+      **One's own log comes first**: having worked a station is better evidence
+      than a name in a distributed roster, and where both hold it, the stronger
+      one is what gets said (requirements FR-K.9, FR-K.11).
+
+      The roster is not applied to an uncertain call sign either: **matching one
+      that is a letter off would call it real on the strength of the
+      neighbouring station's entry** (the reasoning of appendix T.2). }
+    else if Assigned(Roster) and (Result[I].Trust >= ctAgreed) then
+    begin
+      Result[I].TrustSource := Roster(Result[I].Callsign);
+      if Result[I].TrustSource <> '' then
+        Result[I].Trust := ctInRoster;
     end;
 
     { 待っている符号との照合も、同じ確かさの条件で行います。条件を 2 つに分けると、
