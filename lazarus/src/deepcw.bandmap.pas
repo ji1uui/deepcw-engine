@@ -46,7 +46,7 @@ const
     transcript appears when the row is chosen. }
   BANDMAP_RECENT_CHARS = 28;
 
-  { 同じ符号がこの回数出たら「複数回の一致」と見なします（要件 FR-J.7）。
+  { 同じ符号がこの回数出たら「複数回の一致」と見なします（要件 FR-K.2・FR-J.7）。
     実運用では呼出符号を 2 回続けて送るのが普通で、付録 H では 40 回中、誤った
     まま一致した例は 0 件でした。
     How many sightings count as agreement (requirement FR-J.7). Sending a call

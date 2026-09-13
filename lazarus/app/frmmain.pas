@@ -1583,6 +1583,36 @@ begin
   FRxBandMap.OnStationChosen := @RxStationChosen;
   FRxBandMap.Visible := False;
   Stretch(FRxBandMap, alClient);
+
+  { タブ順序を**見た目の順序**に合わせます（要件 NFR-5.6）。
+
+    LCL はタブ順序を**作った順**で決めます。ウォーターフォールの枠は画面では
+    いちばん下ですが、`alBottom` で場所を先に取る必要があるため、受信テキストの
+    枠より**先に**作ってあります。そのままだと、Tab を押していくと
+
+      … → 同調の操作 → ウォーターフォール → **上へ戻って** 受信テキストの行 → …
+
+    と飛びます。実際に Tab を 18 回押して画面を撮り、焦点が y≈834 から y≈425 へ
+    戻ることを測って見つけました。
+
+    **並べ替えるのは順序だけで、場所は動かしません。**`TabOrder` を入れ替えると、
+    LCL がほかの兄弟の番号を詰め直します。
+
+    The tab order is made to match **the order on screen** (requirement NFR-5.6).
+
+    LCL decides tab order by **the order things are created**. The waterfall's
+    panel is at the very bottom of the screen, but being `alBottom` it has to
+    claim its space first, so it is created **before** the transcript's panel.
+    Left alone, tabbing runs
+
+      ... -> tuning controls -> waterfall -> **back up** to the transcript row ...
+
+    which was found by pressing Tab eighteen times and photographing the screen:
+    the focus goes from y 834 back to y 425.
+
+    **Only the order is changed, never the placement**: assigning `TabOrder` has
+    LCL renumber the siblings around it. }
+  WaterfallPanel.TabOrder := TextPanel.TabOrder;
 end;
 
 { 受信練習のタブ（要件 FR-F.3）。
