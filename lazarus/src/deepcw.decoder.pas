@@ -127,7 +127,7 @@ type
     property Session: TOnnxSession read FSession;
   end;
 
-{ 確信度を、表示に使う「疑わしさ」0..1 に写します。
+{ 確信度を、表示に使う「疑わしさ」0..1 に写します（要件 FR-C.2）。
 
   確信度は 1 のごく近くに密集するため、そのまま濃淡へ写しても差が見えません。
   対数軸で 0.9999 以上を 0、0.9 以下を 1 とすると、合成信号での実測では誤った
@@ -242,6 +242,15 @@ begin
     begin
       { 同じ文字が続く区間のうち、最も自信のないフレームを採る。
         Take the least confident frame across the run that emits this character. }
+      { 文字ごとの確信度は、**出力フレーム群の事後確率**です（要件 FR-C.1）。
+        対数確率の指数をとったもので、同じ文字が続くあいだは**いちばん低い
+        ところ**を採ります。1 フレームでも怪しければ、その文字は怪しい。
+        算出の定義は付録 B にあります。
+        A character's confidence is **the posterior probability over the output
+        frames** (requirement FR-C.1): the exponent of the log probability, and
+        while one character runs on, **the lowest of them** is taken -- one
+        doubtful frame makes the character doubtful. The definition is written
+        out in appendix B. }
       Probability := Exp(BestValue);
       if BestIndex <> Previous then
       begin

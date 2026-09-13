@@ -69,6 +69,36 @@ type
   this implementation does not accept them (appendix H.10). }
 function ParseCallsign(const Token: string; out Call: TCallsign): Boolean;
 
+{ **形だけ**を見ます。国別前置符字表（要件 FR-K.12）を通しません。
+
+  受信文から符号を拾うときは `ParseCallsign` を使ってください。こちらは、
+  **こちらが組み立てたものを確かめる**ときのものです。
+
+  分けた理由は実測です。練習の出題は、組み立てた符号を規則に通したものだけを
+  採ります（教訓 10.30）。ところが表を入れると `ParseCallsign` が締まるため、
+  **出題の既定値 `JA1ABC` までが「規則に通らない符号」になりました。**
+  利用者が狭い表を選んだだけで、練習に実在しない形が出ることになります。
+
+  **表は「受信文に出てきた符号を信じてよいか」の道具であって、「こちらが作る
+  符号が正しい形か」の道具ではありません。**用途が違うので、入口を分けます。
+
+  Checks **the form alone**, without the country prefix table (requirement
+  FR-K.12).
+
+  Use `ParseCallsign` for call signs pulled out of received text; this one is
+  for **checking what we built ourselves.**
+
+  The split came from a measurement. Practice exercises take only what the rule
+  accepts (lesson 10.30) -- but with a table loaded, `ParseCallsign` tightens
+  and **even the fallback exercise `JA1ABC` became a call sign the rule
+  rejects.** A narrow table chosen by the operator would put unreal forms into
+  the practice.
+
+  **The table answers "may a call sign seen on the air be believed", not "is a
+  call sign we are building well formed."** Different questions, separate
+  doors. }
+function ParseCallsignShape(const Token: string; out Call: TCallsign): Boolean;
+
 { 日本に割り当てられた前置符字か。JA〜JS、7J〜7N、8J・8N を扱います。
   Whether the prefix is one allocated to Japan: JA-JS, 7J-7N, 8J and 8N. }
 function IsJapanesePrefix(const Prefix: string): Boolean;
@@ -76,6 +106,52 @@ function IsJapanesePrefix(const Prefix: string): Boolean;
 { テキストからコールサインらしい語をすべて取り出します。
   Pulls every callsign-shaped word out of a piece of text. }
 function ExtractCallsigns(const Text: string): TCallsigns;
+
+{ 国別前置符字表を入れ替えます（要件 FR-K.12）。
+
+  この単位が持っている前置符字の規則は、ITU 第 19 条の**形**だけを見ています。
+  形は満たすがどの国にも割り当てられていない前置符字（`QZ`・`XQ9` など）は、
+  表が無いかぎり通ります。とくに 3 字の枝は「どれが半系列かは国別の表がなければ
+  分からない」という理由で**規定より緩く**してあります。
+
+  **表は締めるだけで、緩めません。**形の規則が拒むものは、表に載っていても
+  通りません。**一覧が壊れていても、読めない符号が読めるようにはならない**
+  という保証です。
+
+  **表が空のあいだは、何も変わりません。**「表に無い」と「表が無い」を同じ顔で
+  扱ってはいけません（要件 FR-K.4 と同じ考え方）。
+
+  UI スレッドから、利用者がファイルを選んだときに呼んでください。読み取りの
+  途中で入れ替えないでください。排他は持ちません。
+
+  Replaces the country prefix table (requirement FR-K.12).
+
+  The prefix rule in this unit checks only **the form** of Article 19. A prefix
+  that fits the form but is allocated to no country (`QZ`, `XQ9`) passes unless
+  a table says otherwise; the three-character branch in particular is
+  **deliberately looser than the provision**, since which prefixes are half
+  series cannot be known without a country table.
+
+  **The table only tightens, never loosens**: what the form rule rejects stays
+  rejected however the table reads. That is the guarantee that **a damaged list
+  can never make an unreadable call sign readable.**
+
+  **An empty table changes nothing.** "Not in the table" and "there is no table"
+  must not wear the same face (the reasoning of requirement FR-K.4).
+
+  Call it from the interface thread when the operator picks a file, not while
+  reading is under way; it holds no lock. }
+procedure SetAllocatedPrefixes(const Items: array of string);
+
+{ 表に入っている前置符字の数。0 なら表は使われていません。
+  How many prefixes the table holds; zero means it is not in use. }
+function AllocatedPrefixCount: Integer;
+
+{ その前置符字が、どこかの国に割り当てられているか。**表が無ければ、いつでも
+  真を返します**——知らないことを「割り当てられていない」の証拠にしません。
+  Whether the prefix is allocated to some country. **With no table it is always
+  true**: not knowing is not evidence of not being allocated. }
+function PrefixAllocated(const Prefix: string): Boolean;
 
 { 呼出符号を、引き当ての鍵に使う形へ直します。附加符号（`/P`・`/1`）を落とし、
   大文字にします。形として成立しないものは、そのまま大文字にして返します。
@@ -157,6 +233,86 @@ begin
             (IsDigit(Prefix[1]) and IsLetter(Prefix[2]));
 end;
 
+var
+  { 割り当てのある前置符字。並べ替えて重複を除いてあります。
+    The allocated prefixes, sorted and deduplicated. }
+  AllocatedPrefixes: array of string;
+
+procedure SetAllocatedPrefixes(const Items: array of string);
+var
+  I, J, Kept: Integer;
+  Swap, Value: string;
+begin
+  AllocatedPrefixes := nil;
+  Kept := 0;
+  SetLength(AllocatedPrefixes, Length(Items));
+  for I := Low(Items) to High(Items) do
+  begin
+    Value := UpperCase(Trim(Items[I]));
+    if Value <> '' then
+    begin
+      AllocatedPrefixes[Kept] := Value;
+      Inc(Kept);
+    end;
+  end;
+  SetLength(AllocatedPrefixes, Kept);
+  { 表は数百件なので、挿入法で足ります。呼出符号の一覧（数十万件）とは桁が
+    違います（要件 FR-K.12 の「一覧より小さく、更新も稀」）。
+    The table runs to hundreds, so an insertion sort is enough -- an order apart
+    from the call sign roster's hundreds of thousands (requirement FR-K.12 says
+    it is smaller and rarely updated). }
+  for I := 1 to Kept - 1 do
+  begin
+    Swap := AllocatedPrefixes[I];
+    J := I - 1;
+    while (J >= 0) and (AllocatedPrefixes[J] > Swap) do
+    begin
+      AllocatedPrefixes[J + 1] := AllocatedPrefixes[J];
+      Dec(J);
+    end;
+    AllocatedPrefixes[J + 1] := Swap;
+  end;
+  J := 0;
+  for I := 0 to Kept - 1 do
+    if (J = 0) or (AllocatedPrefixes[I] <> AllocatedPrefixes[J - 1]) then
+    begin
+      AllocatedPrefixes[J] := AllocatedPrefixes[I];
+      Inc(J);
+    end;
+  SetLength(AllocatedPrefixes, J);
+end;
+
+function AllocatedPrefixCount: Integer;
+begin
+  Result := Length(AllocatedPrefixes);
+end;
+
+function PrefixAllocated(const Prefix: string): Boolean;
+var
+  Low_, High_, Middle: Integer;
+  Key: string;
+begin
+  { **表が無ければ、いつでも真。**知らないことを根拠にしません。
+    **No table, always true**: not knowing is not grounds for anything. }
+  Result := True;
+  if Length(AllocatedPrefixes) = 0 then
+    Exit;
+  Key := UpperCase(Trim(Prefix));
+  Low_ := 0;
+  High_ := High(AllocatedPrefixes);
+  while Low_ <= High_ do
+  begin
+    Middle := (Low_ + High_) div 2;
+    if AllocatedPrefixes[Middle] = Key then
+      Exit(True)
+    else if AllocatedPrefixes[Middle] < Key then
+      Low_ := Middle + 1
+    else
+      High_ := Middle - 1;
+  end;
+  Result := False;
+end;
+
 function ValidPrefix(const Prefix: string): Boolean;
 begin
   Result := False;
@@ -187,7 +343,7 @@ begin
   end;
 end;
 
-function ParseCallsign(const Token: string; out Call: TCallsign): Boolean;
+function ParseCallsignShape(const Token: string; out Call: TCallsign): Boolean;
 var
   Base, Appended, Prefix, Suffix: string;
   Slash, I, PrefixLength, MaxSuffix: Integer;
@@ -314,6 +470,23 @@ begin
   end;
 end;
 
+
+{ 形を見たうえで、**どの国にも割り当てられていない前置符字を弾きます**
+  （要件 FR-K.12）。
+
+  **表は締めるだけです。**`and` で足しているので、形が拒んだものが表で通ることは
+  ありません。表が空なら `PrefixAllocated` は真を返すので、何も変わりません。
+
+  Checks the form, then **rejects a prefix allocated to no country**
+  (requirement FR-K.12).
+
+  **The table only tightens**: added with `and`, it can never pass what the form
+  rejected, and with an empty table `PrefixAllocated` is true, so nothing
+  changes. }
+function ParseCallsign(const Token: string; out Call: TCallsign): Boolean;
+begin
+  Result := ParseCallsignShape(Token, Call) and PrefixAllocated(Call.Prefix);
+end;
 
 function CallsignKey(const Token: string): string;
 var

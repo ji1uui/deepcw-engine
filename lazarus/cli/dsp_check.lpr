@@ -3557,6 +3557,265 @@ begin
   end;
 end;
 
+{ 国別前置符字表（要件 FR-K.12）。
+
+  この単位の形の規則は ITU 第 19 条の**形**だけを見ます。形は満たすがどの国にも
+  割り当てられていない前置符字は、表が無ければ通ります。表はそこを締めます。
+
+  **いちばん大事なのは、表が締めるだけで緩めないこと**です。壊れた表を渡しても、
+  形の規則が拒む符号が通るようになってはいけません。
+
+  The country prefix table (requirement FR-K.12).
+
+  The form rule in this unit checks only **the form** of Article 19, so a prefix
+  that fits it but is allocated to no country passes unless a table says
+  otherwise. The table tightens that.
+
+  **What matters most is that the table only tightens**: however damaged a table
+  is handed over, a call sign the form rule rejects must never start passing. }
+procedure TestPrefixTable;
+var
+  Parsed: TCallsign;
+  Table_: TPrefixTable;
+  Folder, Seen, Token_: string;
+  I, Passed, Kinds: Integer;
+
+  function Fits(const Token: string): Boolean;
+  begin
+    Result := ParseCallsign(Token, Parsed);
+  end;
+
+  procedure Put(const Name_: string; const Lines: array of string);
+  var
+    List: TStringList;
+    K: Integer;
+  begin
+    List := TStringList.Create;
+    try
+      for K := Low(Lines) to High(Lines) do
+        List.Add(Lines[K]);
+      List.SaveToFile(Folder + Name_);
+    finally
+      List.Free;
+    end;
+  end;
+
+const
+  { 形は満たすが、どの国にも割り当てられていない前置符字。**表が無いあいだは
+    通ってしまうもの**です。
+    Prefixes that fit the form but are allocated to no country -- **what passes
+    while there is no table.** }
+  UNALLOCATED: array[0..2] of string = ('QZ1ABC', 'XQ9ABC', 'YZ2ABC');
+  { 実在する前置符字の符号。**表を入れても通り続けなければなりません。**
+    Call signs on real prefixes: **these must go on passing with a table in. **}
+  REAL_CALLS: array[0..3] of string = ('JA1ABC', 'JH2XYZ', 'W1AW', 'VE3ABC');
+begin
+  WriteLn;
+  WriteLn('国別前置符字表（要件 FR-K.12）');
+  Folder := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw_roster' +
+    PathDelim;
+  ForceDirectories(Folder);
+
+  { [1] 表が無いあいだは、何も変わりません。**「表に無い」と「表が無い」を
+        同じ顔で扱ってはいけません。**
+        [1] With no table nothing changes: **"not in the table" and "there is no
+        table" must not wear the same face.** }
+  SetAllocatedPrefixes([]);
+  Check('表が無ければ件数は 0', AllocatedPrefixCount = 0,
+    Format('(%d)', [AllocatedPrefixCount]));
+  Check('表が無ければ、どの前置符字も割り当てありとみなす',
+    PrefixAllocated('QZ') and PrefixAllocated('JA'));
+  Passed := 0;
+  for I := Low(UNALLOCATED) to High(UNALLOCATED) do
+    if Fits(UNALLOCATED[I]) then
+      Inc(Passed);
+  Check('表が無いあいだは、割り当ての無い前置符字も形だけで通る',
+    Passed = Length(UNALLOCATED), Format('(%d / %d)',
+      [Passed, Length(UNALLOCATED)]));
+
+  { [2] 表を入れると締まります。**これが要件そのものです。**
+        [2] A table tightens it. **That is the requirement itself.** }
+  SetAllocatedPrefixes(['JA', 'JH', 'W', 'K', 'VE']);
+  Check('表の件数が合う', AllocatedPrefixCount = 5,
+    Format('(%d)', [AllocatedPrefixCount]));
+  { 引く側は公開の関数なので、**小文字で来ても当てます。**呼ぶ側が必ず大文字で
+    渡すとはかぎりません。
+    The lookup is a public function, so **it answers for lower case too**: not
+    every caller is bound to hand it upper case. }
+  Check('小文字の前置符字でも引ける', PrefixAllocated('ja'));
+  Passed := 0;
+  for I := Low(UNALLOCATED) to High(UNALLOCATED) do
+    if Fits(UNALLOCATED[I]) then
+      Inc(Passed);
+  Check('表を入れると、割り当ての無い前置符字を弾く', Passed = 0,
+    Format('(%d / %d 通った)', [Passed, Length(UNALLOCATED)]));
+
+  { **実在の符号は通り続けなければなりません。**弾きすぎる表は、弾かない表より
+    害が大きい。読めた符号が一覧から消えるためです。
+    **Real call signs must go on passing**: a table that rejects too much does
+    more harm than one that rejects nothing, since call signs that were read
+    would vanish from the list. }
+  Passed := 0;
+  for I := Low(REAL_CALLS) to High(REAL_CALLS) do
+    if Fits(REAL_CALLS[I]) then
+      Inc(Passed);
+  Check('表を入れても、実在の前置符字は通り続ける',
+    Passed = Length(REAL_CALLS),
+    Format('(%d / %d)', [Passed, Length(REAL_CALLS)]));
+
+  { [3] **表は締めるだけで、緩めません。**形が拒むものを表に載せても通りません。
+        壊れた表を渡されても、読めない符号が読めるようにはならない保証です。
+        [3] **The table only tightens.** Listing what the form rejects does not
+        make it pass: the guarantee that a damaged table can never make an
+        unreadable call sign readable. }
+  { **表に載せても、形が拒むものは通りません。**
+
+    ここは「数字だけの語」では確かめられません。`12345` は前置符字の判定へ
+    たどり着く前に構造で落ちるので、**表をどう壊しても、この検証は通って
+    しまいます**（書いてから壊して分かりました）。
+
+    効くのは 1 字の前置符字です。第 19.68 条が認める 1 字は
+    **B・F・G・I・K・M・N・R・W だけ**なので、`A1ABC` は形で落ちます。その `A` を
+    表に載せても通ってはいけません。**表を `and` ではなく `or` で足すと、ここが
+    落ちます。**
+
+    **A table can never pass what the form rejects.**
+
+    An all-digit word cannot show this: `12345` fails on structure before the
+    prefix rule is reached, so **however the table is broken, that check would
+    pass** -- as trying to break it showed.
+
+    A single-character prefix does show it. Article 19.68 allows only
+    **B, F, G, I, K, M, N, R and W**, so `A1ABC` fails on form; listing that `A`
+    in the table must not let it through. **Adding the table with `or` instead
+    of `and` makes this fail.** }
+  SetAllocatedPrefixes(['A', '12', '']);
+  Check('形が拒む 1 字前置符字は、表に載せても通らない',
+    not Fits('A1ABC'), 'A1ABC');
+  Check('空の項目は表に入らない', AllocatedPrefixCount = 2,
+    Format('(%d)', [AllocatedPrefixCount]));
+
+  { 表に無い前置符字は、形が合っていても弾きます。**これが「締める」という
+    ことです。**
+    A prefix absent from the table is rejected however well it fits the form:
+    **that is what tightening means.** }
+  SetAllocatedPrefixes(['QZ']);
+  Check('表に無い前置符字は、形が合っていても弾く', not Fits('JA1ABC'),
+    'JA1ABC');
+  Check('表にある前置符字は通る', Fits('QZ1ABC'), 'QZ1ABC');
+
+  { [4] 表を外せば元へ戻ります。**外したはずの表が効いたままでは、利用者は
+        原因にたどり着けません。**
+        [4] Dropping the table puts it back: **one that went on tightening after
+        being dropped would leave the operator with no way to the cause.** }
+  SetAllocatedPrefixes([]);
+  Check('表を外せば、割り当ての無い前置符字がまた通る', Fits('QZ1ABC'));
+
+  { [5] ファイルから読む。呼出符号の一覧と**同じ読み方**です。
+        [5] Read from a file, **the same way** a call sign roster is. }
+  Table_ := TPrefixTable.Create;
+  try
+    Put('prefixes.txt', ['# 国別前置符字', 'JA', 'JH,日本', 'W', 'W',
+      '日本', '123']);
+    Table_.LoadFromFile(Folder + 'prefixes.txt');
+    Check('前置符字を読める', Table_.Count = 4,
+      Format('(%d)', [Table_.Count]));
+    Check('前置符字として読めなかった行を数える', Table_.Skipped = 2,
+      Format('(%d)', [Table_.Skipped]));
+    Check('持つのはファイル名だけ', Table_.Name = 'prefixes.txt', Table_.Name);
+    { 重複は、渡したあとに 1 つへまとまります。
+      Duplicates become one once handed over. }
+    SetAllocatedPrefixes(Table_.Items);
+    Check('重複は 1 つにまとまる', AllocatedPrefixCount = 3,
+      Format('(%d)', [AllocatedPrefixCount]));
+    Check('読んだ表で締まる', not Fits('QZ1ABC') and Fits('JA1ABC'));
+
+    { 読めなくても止まりません（要件 FR-K.10）。**表が読めないのは
+      「締められない」であって「受信できない」ではありません。**
+      Unreadable does not stop anything (requirement FR-K.10): **an unreadable
+      table means "cannot tighten", not "cannot receive".** }
+    Table_.LoadFromFile(Folder + 'no_such_prefixes.txt');
+    Check('無いファイルでも例外にしない', Table_.LastError <> '',
+      Table_.LastError);
+    Check('無いファイルなら件数は 0', Table_.Count = 0,
+      Format('(%d)', [Table_.Count]));
+    Check('読めなければ名前も出さない', Table_.Name = '', Table_.Name);
+    SetAllocatedPrefixes(Table_.Items);
+    Check('読めなければ、締めずに元のまま', Fits('QZ1ABC'));
+  finally
+    Table_.Free;
+  end;
+  { [6] **練習の出題が空にならないこと。**出題は組み立てた符号を
+        `ParseCallsign` に通したものだけを採ります（教訓 10.30）。表を入れると
+        その規則が締まるので、**出題に使う前置符字をどれも含まない表を入れたら
+        どうなるか**を測ります。
+
+        50 回試して駄目なら確実に通る形へ落ちる作りなので、止まりも空にも
+        なりません。**出題が偏るだけで、練習そのものは続きます。**利用者が
+        誤った表を選んでも、練習が壊れないことを確かめます。
+
+        [6] **An exercise is never empty.** Exercises take only what
+        `ParseCallsign` accepts (lesson 10.30), and a table tightens that rule,
+        so **what happens with a table holding none of the prefixes exercises
+        are built from** is measured here.
+
+        Fifty attempts then a fall back to a form known to pass: neither a hang
+        nor an empty string. **The exercises merely narrow; the practice goes
+        on.** A wrong table chosen by the operator does not break it. }
+  SetAllocatedPrefixes(['QZ']);
+  Check('狭すぎる表でも、練習の出題は空にならない',
+    Length(Trim(MakeExercise(ekCallsigns, 3, 77))) > 0,
+    MakeExercise(ekCallsigns, 3, 77));
+  { **形の規則には通り続けなければなりません。**通らない形を出せば、覚えるのは
+    実在しない符号の形です（教訓 10.30）。ここは `ParseCallsignShape` で見ます
+    ——出題が表に縛られないようにしたのが、まさにこの検証で見つけた欠陥への
+    答えだからです。
+    **It must go on passing the form rule**: an exercise the rule rejects
+    teaches a shape that does not exist (lesson 10.30). Checked with
+    `ParseCallsignShape`, since freeing the exercises from the table is the
+    answer to the very defect this check found. }
+  Check('狭すぎる表でも、出題は呼出符号の形をしている',
+    ParseCallsignShape(Trim(Copy(MakeExercise(ekCallsigns, 1, 77), 1,
+      Pos(' ', MakeExercise(ekCallsigns, 1, 77) + ' ') - 1)), Parsed),
+    MakeExercise(ekCallsigns, 1, 77));
+
+  { **出題が 1 つへ縮まないこと。**形を見るだけでは、ここは捕まりません
+    ——既定値 `JA1ABC` も形としては正しいからです。狭い表を通していると、
+    50 回の試行がすべて外れて**毎回この既定値になり、練習が 1 つの符号の
+    繰り返しになります。**
+
+    書いたときは形だけを見ていて、**直した箇所を戻しても検証が落ちません
+    でした。**見るものを「形」から「種類の数」へ変えて、ようやく効きました。
+
+    **The exercises must not collapse to one.** Checking the form does not
+    catch this, the fallback `JA1ABC` being well formed: going through a narrow
+    table, all fifty attempts miss and **every exercise becomes that fallback,
+    turning the practice into one call sign repeated.**
+
+    As first written this checked the form, and **putting the defect back left
+    it passing.** Only counting distinct call signs made it bite. }
+  Kinds := 0;
+  Seen := '';
+  for I := 1 to 12 do
+  begin
+    Token_ := Trim(Copy(MakeExercise(ekCallsigns, 1, 500 + I), 1,
+      Pos(' ', MakeExercise(ekCallsigns, 1, 500 + I) + ' ') - 1));
+    if Pos('|' + Token_ + '|', Seen) = 0 then
+    begin
+      Seen := Seen + '|' + Token_ + '|';
+      Inc(Kinds);
+    end;
+  end;
+  Check('狭すぎる表でも、出題は 1 つの符号に縮まない', Kinds > 1,
+    Format('(%d 種類)', [Kinds]));
+
+  { **あとの試験に持ち越しません。**単位の状態を触る試験は、片付けまでが試験
+    です。
+    **Nothing is carried into the tests that follow**: a test that touches a
+    unit's state is not done until it has put it back. }
+  SetAllocatedPrefixes([]);
+end;
+
 procedure CheckWavFile(const FileName: string);
 var
   Samples: TSingleArray;
@@ -3677,6 +3936,7 @@ begin
     TestHistogram;
     TestReferences;
     TestRoster;
+    TestPrefixTable;
   finally
     Meta.Free;
   end;

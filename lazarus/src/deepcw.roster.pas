@@ -41,6 +41,9 @@ interface
 uses
   Classes, SysUtils, DeepCW.Callsign;
 
+type
+  TStringArray = array of string;
+
 const
   { 読み込む上限。**上限を超えたら、超えたと言います。**黙って途中で止めると、
     一覧に在る符号が「無い」と出て、しかもなぜかが分かりません。
@@ -118,6 +121,53 @@ type
     property Truncated: Boolean read FTruncated;
   end;
 
+  { 国別前置符字表（要件 FR-K.12）。**読むだけの器**で、規則そのものは
+    `DeepCW.Callsign` が持ちます。
+
+    読み終えたら、呼ぶ側が `SetAllocatedPrefixes(Table.Items)` で入れ替えます。
+    **この単位が勝手に入れ替えません。**いつ効き始めるかは呼ぶ側が決めるべき
+    ことで、ファイルを読んだ副作用で形の規則が変わるのは分かりにくいためです。
+
+    呼出符号の一覧（`TCallsignRoster`）と同じ形のファイルを、同じ規則で読みます
+    ——行の最初の語だけ。**読み方を 2 つ持たないためです。**
+
+    The country prefix table (requirement FR-K.12). **A reader only**; the rule
+    itself belongs to `DeepCW.Callsign`.
+
+    Once read, the caller swaps it in with `SetAllocatedPrefixes(Table.Items)`.
+    **This unit never swaps it in by itself**: when it takes effect is the
+    caller's to decide, and having the form rule change as a side effect of
+    reading a file would be hard to follow.
+
+    The file is read exactly as a call sign roster is -- the first word of each
+    line -- **so that there are not two ways of reading one.** }
+  TPrefixTable = class
+  private
+    FItems: array of string;
+    FName: string;
+    FLastError: string;
+    FSkipped: Integer;
+  public
+    procedure LoadFromFile(const FileName: string);
+    procedure Clear;
+    { 読み込んだ前置符字。`SetAllocatedPrefixes` へ渡します。
+      The prefixes read, to be handed to `SetAllocatedPrefixes`. }
+    function Items: TStringArray;
+    function Count: Integer;
+    property Name: string read FName;
+    property LastError: string read FLastError;
+    { 前置符字として読めなかった行の数。**捨てた数は数えます。**
+      How many lines held nothing that reads as a prefix. **What is dropped is
+      counted.** }
+    property Skipped: Integer read FSkipped;
+  end;
+
+{ 前置符字らしいか。英数字 1〜4 字で、**英字を 1 つは含むこと**を求めます。
+  数字だけの語は、表の見出しや件数です。
+  Whether it looks like a prefix: one to four letters or digits with **at least
+  one letter**, an all-digit word being a heading or a count in the table. }
+function LooksLikePrefixToken(const Value: string): Boolean;
+
 { 1 行から呼出符号を取り出します。行の**最初の語だけ**を見ます。
 
   配られている一覧の形はまちまちです。1 行 1 符号のものもあれば、`,` や `\t` で
@@ -169,6 +219,95 @@ end;
   画面が、1 度目のファイルのことを言い続けます。
   **Nothing from the last load survives**: a count or an error left behind would
   have the display go on describing the first file after a second was read. }
+function LooksLikePrefixToken(const Value: string): Boolean;
+var
+  I, Letters: Integer;
+begin
+  Result := False;
+  if (Length(Value) < 1) or (Length(Value) > 4) then
+    Exit;
+  Letters := 0;
+  for I := 1 to Length(Value) do
+    if (Value[I] >= 'A') and (Value[I] <= 'Z') then
+      Inc(Letters)
+    else if not ((Value[I] >= '0') and (Value[I] <= '9')) then
+      Exit;
+  Result := Letters > 0;
+end;
+
+procedure TPrefixTable.Clear;
+begin
+  FItems := nil;
+  FName := '';
+  FLastError := '';
+  FSkipped := 0;
+end;
+
+function TPrefixTable.Items: TStringArray;
+begin
+  Result := FItems;
+end;
+
+function TPrefixTable.Count: Integer;
+begin
+  Result := Length(FItems);
+end;
+
+procedure TPrefixTable.LoadFromFile(const FileName: string);
+var
+  Lines: TStringList;
+  I, Kept: Integer;
+  Token: string;
+begin
+  Clear;
+  if Trim(FileName) = '' then
+    Exit;
+  { 名前は**ファイル名だけ**です（要件 FR-K.7 と同じ扱い）。
+    The file name alone (handled as requirement FR-K.7 asks). }
+  FName := ExtractFileName(FileName);
+  Lines := TStringList.Create;
+  try
+    try
+      Lines.LoadFromFile(FileName);
+    except
+      on E: Exception do
+      begin
+        { 読めないのは「締められない」であって「受信できない」ではありません
+          （要件 FR-K.10）。
+          Unreadable means "cannot tighten", not "cannot receive" (requirement
+          FR-K.10). }
+        FLastError := E.Message;
+        FName := '';
+        Exit;
+      end;
+    end;
+    SetLength(FItems, Lines.Count);
+    Kept := 0;
+    for I := 0 to Lines.Count - 1 do
+    begin
+      Token := UpperCase(RosterToken(Lines[I]));
+      if Token = '' then
+        Continue;
+      { 前置符字として読めない行は、数えて飛ばします。**表に見出しや国名が
+        混ざっていることがあり、それを前置符字として持つと、表は締まらずに
+        散らかります。**
+        A line that does not read as a prefix is counted and skipped: **a table
+        can carry a heading or a country name, and keeping one would clutter the
+        table instead of tightening it.** }
+      if not LooksLikePrefixToken(Token) then
+      begin
+        Inc(FSkipped);
+        Continue;
+      end;
+      FItems[Kept] := Token;
+      Inc(Kept);
+    end;
+    SetLength(FItems, Kept);
+  finally
+    Lines.Free;
+  end;
+end;
+
 procedure TCallsignRoster.Clear;
 begin
   FKeys := nil;

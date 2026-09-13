@@ -253,7 +253,17 @@ begin
     Length_ := 2 + Random(2);
     for I := 1 to Length_ do
       Candidate := Candidate + LETTERS[1 + Random(Length(LETTERS))];
-    if ParseCallsign(Candidate, Parsed) then
+    { **形だけ**を見ます（`ParseCallsignShape`）。国別前置符字表（要件 FR-K.12）は
+      「受信文の符号を信じてよいか」の道具で、**こちらが作る符号の形とは別の
+      問い**です。表を通していたときは、狭い表を選ぶだけで、この下の既定値
+      `JA1ABC` までが「規則に通らない符号」になりました（試験で見つけました）。
+      **The form alone** (`ParseCallsignShape`). The country prefix table
+      (requirement FR-K.12) answers whether a call sign heard on the air may be
+      believed -- **a different question from whether one we are building is
+      well formed.** Going through the table, a narrow table was enough to make
+      even the fallback `JA1ABC` below a call sign the rule rejects, as a test
+      found. }
+    if ParseCallsignShape(Candidate, Parsed) then
       Exit(Candidate);
   end;
   { ここへは来ない見込みですが、来たときに空を返すよりは、確実に通る形を

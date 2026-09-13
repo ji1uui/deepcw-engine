@@ -499,6 +499,15 @@ type
     FSetRosterClear: TButton;
     FSetRosterInfo: TLabel;
     FRosterFile: string;
+    { 国別前置符字表（要件 FR-K.12）。**形は満たすがどの国にも割り当てられて
+      いない前置符字**を弾くために使います。
+      The country prefix table (requirement FR-K.12), used to reject a prefix
+      that **fits the form but is allocated to no country.** }
+    FPrefixes: TPrefixTable;
+    FSetPrefixes: TButton;
+    FSetPrefixesClear: TButton;
+    FSetPrefixesInfo: TLabel;
+    FPrefixFile: string;
     FSetApply: TButton;
     FSetInfo: TMemo;
 
@@ -588,6 +597,10 @@ type
     procedure SetRosterClearClick(Sender: TObject);
     procedure LoadRoster(const FileName: string);
     procedure UpdateRosterInfo;
+    procedure SetPrefixesClick(Sender: TObject);
+    procedure SetPrefixesClearClick(Sender: TObject);
+    procedure LoadPrefixes(const FileName: string);
+    procedure UpdatePrefixesInfo;
     procedure ShowStationLabels;
     function SelectedBand: string;
     function WithoutWorked(const Entries: TBandEntries): TBandEntries;
@@ -930,6 +943,7 @@ begin
   FJournal.Free;
   FLog.Free;
   FRoster.Free;
+  FPrefixes.Free;
   FHistory.Free;
   FRing.Free;
   FDecoder.Free;
@@ -1361,6 +1375,12 @@ begin
   FRxShowDoubt := TCheckBox.Create(TextTools);
   FRxShowDoubt.Parent := TextTools;
   FRxShowDoubt.SetBounds(6, 7, 240, 22);
+  { **「正しさ」とは言いません**（要件 FR-C.5）。この値は「モデルがどれだけ
+    迷わなかったか」であって、当たっているかどうかではありません。断定する語を
+    使えば、利用者は確かめる手立て（読み直し・聴き直し）を使わなくなります。
+    **Never "correctness"** (requirement FR-C.5): the value is how little the
+    model wavered, not whether it was right. Words that assert would stop the
+    operator reaching for the ways of checking -- re-reading and replaying. }
   FRxShowDoubt.Caption := '確からしさを濃淡で示す';
   FRxShowDoubt.Checked := True;
   FRxShowDoubt.OnChange := @RxDisplayChanged;
@@ -2605,8 +2625,9 @@ begin
     added falls outside the box.** That is what happened when the roster row
     (requirement FR-K.9) went in, and a screenshot is what showed it (lessons
     10.42, 10.36). The last row sits at 178 and is 22 tall, so 210 is not
-    enough. }
-  Operating.Height := 242;
+    enough. 前置符字表（要件 FR-K.12）を足したので、さらに 32 画素。
+    The prefix table row (requirement FR-K.12) adds another 32. }
+  Operating.Height := 274;
   Operating.Caption := '運用設定';
   Stretch(Operating, alTop);
 
@@ -2698,6 +2719,18 @@ begin
   FSetRosterClear := AddButton(Operating, '使わない', 278, 178, 150,
     @SetRosterClearClick);
   FSetRosterInfo := AddLabel(Operating, '', 440, 182);
+
+  { 国別前置符字表（要件 FR-K.12）。**呼出符号の一覧より小さく、更新も稀**
+    なので、別のファイルとして持ちます。これも同梱しません。
+    The country prefix table (requirement FR-K.12). **Smaller than the call sign
+    roster and rarely updated**, so it is a file of its own; not bundled
+    either. }
+  AddLabel(Operating, '国別前置符字表', 14, 214);
+  FSetPrefixes := AddButton(Operating, 'ファイルを選ぶ', 120, 210, 150,
+    @SetPrefixesClick);
+  FSetPrefixesClear := AddButton(Operating, '使わない', 278, 210, 150,
+    @SetPrefixesClearClick);
+  FSetPrefixesInfo := AddLabel(Operating, '', 440, 214);
 
   { ── 詳細・診断：困ったときだけ見るもの ──
     Advanced and diagnostics: only looked at when something is wrong. }
@@ -2819,6 +2852,7 @@ begin
       The roster is read again; **gone, it passes in silence**: no roster means
       "cannot match", not "cannot start" (requirement FR-K.10). }
     LoadRoster(Ini.ReadString('roster', 'file', ''));
+    LoadPrefixes(Ini.ReadString('roster', 'prefixes', ''));
     FPrDelay.Checked := Ini.ReadBool('practice', 'delay', True);
     FPrDelaySeconds.Value := ClampInt(
       Ini.ReadInteger('practice', 'delay_seconds', REVEAL_DELAY_DEFAULT_SECONDS),
@@ -2905,6 +2939,9 @@ begin
       Ini.WriteBool('receive', 'anti_alias', FRxAntiAlias.Checked);
       Ini.WriteBool('receive', 'show_doubt', FRxShowDoubt.Checked);
       Ini.WriteBool('receive', 'align_characters', FRxAlign.Checked);
+      { 濃淡の強さと入切は覚えます（要件 FR-C.4）。
+        The shading's strength and whether it is on are remembered
+        (requirement FR-C.4). }
       Ini.WriteInteger('receive', 'doubt_strength', FRxDoubtStrength.Position);
       Ini.WriteInteger('receive', 'font_size', FRxFontSize.Value);
       Ini.WriteInteger('receive', 'tune_hz', Round(FRxWaterfall.TuneHz));
@@ -2923,6 +2960,7 @@ begin
         would stay stale after the operator updated theirs (requirement FR-K.9
         says the file is the operator's). }
       Ini.WriteString('roster', 'file', FRosterFile);
+      Ini.WriteString('roster', 'prefixes', FPrefixFile);
       Ini.WriteBool('practice', 'delay', FPrDelay.Checked);
       Ini.WriteInteger('practice', 'delay_seconds', FPrDelaySeconds.Value);
       Ini.WriteInteger('fist', 'kind', FFtKind.ItemIndex);
@@ -3932,6 +3970,96 @@ begin
     FRxTranscript.Message_ := '読み込んだ音を解析しています。'
   else
     FRxTranscript.Message_ := '受信を開始すると、ここに読めた文字が出ます。';
+end;
+
+{ 国別前置符字表を読み込み、形の規則へ渡します（要件 FR-K.12）。
+
+  **渡すのはここです。**読む側（`TPrefixTable`）は読むだけにしてあります。
+  ファイルを読んだ副作用で形の規則が変わるのは分かりにくいためです。
+
+  Loads the country prefix table and hands it to the form rule (requirement
+  FR-K.12).
+
+  **Handing it over happens here**: the reader only reads, since having the form
+  rule change as a side effect of reading a file would be hard to follow. }
+procedure TMainForm.LoadPrefixes(const FileName: string);
+begin
+  if FPrefixes = nil then
+    FPrefixes := TPrefixTable.Create;
+  FPrefixFile := FileName;
+  FPrefixes.LoadFromFile(FileName);
+  if FPrefixes.LastError <> '' then
+    LogDiagnostic('国別前置符字表', FPrefixes.LastError);
+  SetAllocatedPrefixes(FPrefixes.Items);
+  UpdatePrefixesInfo;
+  { 形の規則が変われば、一覧に出る符号も変わります。作り直します。
+    A change to the form rule changes which call signs the list shows, so it is
+    rebuilt. }
+  FBandMapAt := 0;
+  RefreshBandMap;
+  { 受信テキストの下線も同じ規則で引いています（要件 FR-E.1）。
+    The transcript underlines run on the same rule (requirement FR-E.1). }
+  ReadTranscript;
+end;
+
+procedure TMainForm.UpdatePrefixesInfo;
+begin
+  if FSetPrefixesInfo = nil then
+    Exit;
+  if (FPrefixes = nil) or (FPrefixFile = '') then
+  begin
+    FSetPrefixesInfo.Caption := '使っていません（形だけで判定します）';
+    Exit;
+  end;
+  if FPrefixes.LastError <> '' then
+  begin
+    FSetPrefixesInfo.Caption := '読めませんでした。ファイルを確かめてください';
+    Exit;
+  end;
+  FSetPrefixesInfo.Caption := Format('%d 件 / %s',
+    [AllocatedPrefixCount, FPrefixes.Name]);
+  if FPrefixes.Skipped > 0 then
+    FSetPrefixesInfo.Caption := FSetPrefixesInfo.Caption +
+      Format('（前置符字として読めなかった行 %d）', [FPrefixes.Skipped]);
+end;
+
+procedure TMainForm.SetPrefixesClick(Sender: TObject);
+var
+  Dialog: TOpenDialog;
+begin
+  Dialog := TOpenDialog.Create(Self);
+  try
+    Dialog.Title := '国別前置符字表を開く';
+    Dialog.Filter := 'テキスト (*.txt;*.csv)|*.txt;*.csv|すべて (*.*)|*.*';
+    if not Dialog.Execute then
+      Exit;
+    LoadPrefixes(Dialog.FileName);
+  finally
+    Dialog.Free;
+  end;
+end;
+
+procedure TMainForm.SetPrefixesClearClick(Sender: TObject);
+begin
+  FPrefixFile := '';
+  { 一度も選ばれていなければ器がありません。**先に作ってから空にします**
+    ——空の器から `Items` を取ろうとして落ちる道を残さないためです。
+    With nothing ever picked there is no table object. **It is made before being
+    emptied**, so that no path is left that reads `Items` from nothing. }
+  if FPrefixes = nil then
+    FPrefixes := TPrefixTable.Create;
+  FPrefixes.Clear;
+  { **空になった表を渡し直して、規則を元へ戻します。**渡さないと、外したはずの
+    表が効いたままになります。直前の `Clear` で空になっているので、渡すのは
+    空の並びです。
+    **The now-empty table is handed back so the rule returns to what it was**:
+    without it, a table the operator dropped would go on tightening. The `Clear`
+    just above emptied it, so what is handed over is an empty list. }
+  SetAllocatedPrefixes(FPrefixes.Items);
+  UpdatePrefixesInfo;
+  FBandMapAt := 0;
+  RefreshBandMap;
+  ReadTranscript;
 end;
 
 { 手元の一覧に在るかを引きます（要件 FR-K.9）。在れば**何で確かめたのか**を
