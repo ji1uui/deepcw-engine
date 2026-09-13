@@ -700,6 +700,7 @@ type
     procedure ApplyStreamSettings;
     function SelectedBandwidth: TTunerBandwidth;
     procedure RxTuneChanged(Sender: TObject);
+    procedure RxBandwidthDragged(Sender: TObject);
     procedure RxTuneClearClick(Sender: TObject);
     procedure RxMonitorClick(Sender: TObject);
     procedure RxTrackChanged(Sender: TObject);
@@ -1392,6 +1393,7 @@ begin
   FRxWaterfall := TWaterfallView.Create(WaterfallPanel);
   FRxWaterfall.Parent := WaterfallPanel;
   FRxWaterfall.OnTuneChanged := @RxTuneChanged;
+  FRxWaterfall.OnBandwidthChanged := @RxBandwidthDragged;
   Stretch(FRxWaterfall, alClient);
 
   TextPanel := TPanel.Create(Sheet);
@@ -5811,15 +5813,25 @@ end;
 procedure TMainForm.UpdateTuneInfo;
 var
   Half: Double;
+  Mode: string;
 begin
   if FRxWaterfall = nil then
     Exit;
   if FRxWaterfall.TuneHz > 0 then
   begin
     Half := BandwidthHalfWidth(SelectedBandwidth);
+    { 自動か手動かを添えます。自動は ±250 Hz で標準と同じ幅のため、数だけでは
+      どちらで動いているのか区別が付きません（要件 FR-D.3・FR-D.8）。
+      Says whether the width is automatic or chosen. Automatic is +/-250 Hz,
+      the same as "normal", so the number alone does not tell them apart
+      (requirements FR-D.3 and FR-D.8). }
+    if SelectedBandwidth = tbAuto then
+      Mode := '自動'
+    else
+      Mode := '手動';
     if Half > 0 then
-      FRxTuneInfo.Caption := Format('同調: %.0f Hz ／ 帯域 ±%.0f Hz',
-        [FRxWaterfall.TuneHz, Half])
+      FRxTuneInfo.Caption := Format('同調: %.0f Hz ／ 帯域 ±%.0f Hz（%s）',
+        [FRxWaterfall.TuneHz, Half, Mode])
     else
       FRxTuneInfo.Caption := Format('同調: %.0f Hz ／ 帯域制限なし',
         [FRxWaterfall.TuneHz]);
@@ -6059,9 +6071,56 @@ begin
     SetStatus('', '', Format('入力装置を %d 台見つけました。', [Length(FDevices)]));
 end;
 
+{ ウォーターフォール上で帯域の境界を引き終えたときの受け口（要件 FR-D.8）。
+
+  **幅を持つ場所は設定 1 か所のままにします。**部品が自分で幅を持つと、
+  設定タブの選択と画面の帯が別々の値を指し、どちらが効いているのか分からなく
+  なります。ここでは引かれた幅を設定へ写し、通常の経路で復号へ伝えます。
+
+  自動から手で引いたときは、幅の数値が変わらないことがあります（自動は
+  ±250 Hz で、標準と同じ幅です）。**数が動かないと、引けたのかどうかが画面から
+  分かりません。**そのため状態表示には選んだ名前を出します。
+
+  Receives the release of a band edge dragged on the waterfall
+  (requirement FR-D.8).
+
+  **The width is still held in one place, the settings.** Were the control to
+  hold a width of its own, the settings tab and the band on screen could point
+  at different values with no telling which one is in force. The dragged width
+  is copied into the setting and reaches the decoder by the usual path.
+
+  Dragging away from automatic may leave the number unchanged, automatic being
+  +/-250 Hz, the same width as "normal". **A number that does not move leaves
+  no way to tell the drag took**, so the status line names the choice. }
+procedure TMainForm.RxBandwidthDragged(Sender: TObject);
+var
+  Chosen: TTunerBandwidth;
+begin
+  if FSetBandwidth = nil then
+    Exit;
+  Chosen := NearestBandwidth(FRxWaterfall.RequestedHalfWidthHz);
+  FSetBandwidth.ItemIndex := Ord(Chosen);
+  { ItemIndex を書いても OnChange は呼ばれません。同じ後始末を明示的に
+    通します。
+    Writing ItemIndex raises no OnChange, so the same follow-up is run here. }
+  RxConfirmSpeedChanged(Sender);
+  SetStatus('', '', Format('帯域幅を %s にしました。',
+    [BandwidthCaption(Chosen)]));
+end;
+
 procedure TMainForm.RxConfirmSpeedChanged(Sender: TObject);
 begin
   ApplyStreamSettings;
+  { 受信していないあいだ `ApplyStreamSettings` は何もせずに戻るため、同調の
+    表示だけは別に更新します。**これが無いと、帯域幅を変えても上の行は前の幅を
+    出し続けます**（実機の画面で見つけました）。受信中は二度手間になりますが、
+    文字列を 1 本作るだけです。
+
+    While nothing is being received `ApplyStreamSettings` returns without doing
+    anything, so the tuning line is refreshed separately. **Without this the
+    line keeps showing the previous width after the bandwidth is changed**, as
+    the screen showed. During reception it runs twice, which costs one string. }
+  UpdateTuneInfo;
   if Sender <> nil then
     MarkSettingsDirty;
 end;

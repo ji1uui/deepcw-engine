@@ -3969,6 +3969,69 @@ begin
     Format('(%.1f 秒)', [AUDIO_RETRY_SECONDS]));
 end;
 
+procedure TestNearestBandwidth;
+var
+  Widths: Integer;
+begin
+  WriteLn;
+  WriteLn('画面で引いた帯域幅の寄せ先（要件 FR-D.8）');
+
+  { ちょうどの値は、その幅そのものになること。
+    An exact width answers with itself. }
+  Check('125 は狭い', NearestBandwidth(125) = tbNarrow);
+  Check('250 は標準', NearestBandwidth(250) = tbNormal);
+  Check('400 は広い', NearestBandwidth(400) = tbWide);
+
+  { 中間は近い方へ。**遠い方に付くと、引いた手応えと結果が逆になります。**
+    A width in between goes to the nearer one: **were it to go to the further,
+    the result would contradict the drag.** }
+  Check('160 は狭い側', NearestBandwidth(160) = tbNarrow);
+  Check('220 は標準側', NearestBandwidth(220) = tbNormal);
+  Check('300 は標準側', NearestBandwidth(300) = tbNormal);
+  Check('340 は広い側', NearestBandwidth(340) = tbWide);
+
+  { 等距離は狭い方に留まること（広げる側に倒さない）。125 と 250 の中点は
+    187.5、250 と 400 の中点は 325 です。
+    A tie stays narrow rather than erring wide. The midpoints are 187.5 and
+    325. }
+  Check('187.5 は狭い方に留まる', NearestBandwidth(187.5) = tbNarrow);
+  Check('325 は標準に留まる', NearestBandwidth(325) = tbNormal);
+
+  { 範囲の外は端に寄ること。**画面はいくらでも引けてしまいます。**
+    Outside the range it clamps to an end: **the screen lets any width be
+    drawn.** }
+  Check('0 でも狭いになる', NearestBandwidth(0) = tbNarrow);
+  Check('負でも狭いになる', NearestBandwidth(-500) = tbNarrow);
+  Check('3000 でも広いになる', NearestBandwidth(3000) = tbWide);
+
+  { 自動は返らないこと。**引いたのは手で選ぶという意思表示です。**返してしまうと
+    次に状況が変わったときに幅が勝手に戻ります。
+    Automatic is never the answer: **the drag is an act of choosing by hand**,
+    and answering automatic would let the width move again on its own. }
+  Widths := 0;
+  while Widths <= 3000 do
+  begin
+    Check(Format('%d Hz でも自動にはならない', [Widths]),
+      NearestBandwidth(Widths) <> tbAuto);
+    Inc(Widths, 250);
+  end;
+
+  { 寄せた先の幅は、実測で決めた 3 つのいずれかであること。**測っていない幅で
+    復号しないため**です（付録 E）。
+    The snapped width is always one of the three that were measured, so that
+    **nothing is decoded at a width never measured** (appendix E). }
+  Widths := 0;
+  while Widths <= 600 do
+  begin
+    Check(Format('%d Hz の寄せ先は実測の幅', [Widths]),
+      (BandwidthHalfWidth(NearestBandwidth(Widths)) = 125) or
+      (BandwidthHalfWidth(NearestBandwidth(Widths)) = 250) or
+      (BandwidthHalfWidth(NearestBandwidth(Widths)) = 400),
+      Format('%.0f', [BandwidthHalfWidth(NearestBandwidth(Widths))]));
+    Inc(Widths, 100);
+  end;
+end;
+
 procedure CheckWavFile(const FileName: string);
 var
   Samples: TSingleArray;
@@ -4092,6 +4155,7 @@ begin
     TestPrefixTable;
     TestLicences;
     TestWaitingForDevice;
+    TestNearestBandwidth;
   finally
     Meta.Free;
   end;

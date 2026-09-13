@@ -138,6 +138,26 @@ function BandwidthHalfWidth(Bandwidth: TTunerBandwidth): Double;
 { 設定画面に出す表示名です。/ Display name for the settings panel. }
 function BandwidthCaption(Bandwidth: TTunerBandwidth): string;
 
+{ 画面で引いた幅を、選べる帯域幅のどれかに寄せます（要件 FR-D.8）。
+
+  **自動は返しません。**画面で幅を引くのは手で選ぶという意思表示であり、
+  そこへ自動を返すと、次に信号の状況が変わったときに幅が勝手に戻ります。
+  自動へ戻すのは詳細設定の仕事です。
+
+  寄せ先を 3 つに限るのは、この 3 つが実測で決めた幅だからです（付録 E）。
+  任意の幅を許すと、測っていない帯域幅で復号することになります。
+
+  Snaps a width dragged on screen to one of the offered bandwidths
+  (requirement FR-D.8).
+
+  **Never automatic.** Dragging a width on screen is an act of choosing by
+  hand; answering "automatic" would let the width change again on its own the
+  next time conditions do. Returning to automatic is the settings panel's job.
+
+  The three targets are the three widths measurement settled on (appendix E);
+  allowing an arbitrary width would mean decoding at one never measured. }
+function NearestBandwidth(HalfWidthHz: Double): TTunerBandwidth;
+
 { 同調している音程を、いま実際に信号が居る位置へ寄せます。
 
   受信機のドリフトや相手局の移動で音程は動きます。同調したまま読めなくなるのは、
@@ -455,6 +475,29 @@ begin
       Result := BandPassFilter(Result, ModelRate,
         TUNER_TARGET_TONE_HZ - Half, TUNER_TARGET_TONE_HZ + Half);
   end;
+end;
+
+function NearestBandwidth(HalfWidthHz: Double): TTunerBandwidth;
+var
+  Choice, Best: TTunerBandwidth;
+  Distance, Closest: Double;
+begin
+  Best := tbNarrow;
+  Closest := Abs(HalfWidthHz - BandwidthHalfWidth(tbNarrow));
+  for Choice := tbNormal to tbWide do
+  begin
+    Distance := Abs(HalfWidthHz - BandwidthHalfWidth(Choice));
+    { 等距離のときは狭い方に留めます。広げる側に倒すと、隣の信号が混じった
+      まま「合っている」と見えてしまいます。
+      A tie stays with the narrower choice: erring wide leaves a neighbouring
+      signal mixed in while the display says the width was set. }
+    if Distance < Closest then
+    begin
+      Closest := Distance;
+      Best := Choice;
+    end;
+  end;
+  Result := Best;
 end;
 
 function BandwidthCaption(Bandwidth: TTunerBandwidth): string;

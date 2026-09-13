@@ -36,6 +36,14 @@ type
     procedure Tap(X: Integer; Button: TMouseButton);
     procedure Wheel(Delta: Integer);
     procedure Press(AKey: Word);
+    { 帯域の境界を掴み、動かし、放します（要件 FR-D.8）。押す・動かす・放すを
+      分けているのは、**引いている最中の見た目**も検査の対象だからです。
+      Takes hold of a band edge, moves it and lets go (requirement FR-D.8).
+      Press, move and release are separate because **what is seen during the
+      drag** is under test too. }
+    procedure Grab(X: Integer);
+    procedure Hover(X: Integer);
+    procedure LetGo(X: Integer);
     { 描画のたびに画像を作り直させます。実際に新しい行が来たときと同じ費用に
       なります。
       Forces the image to be rebuilt on every paint, matching what a newly
@@ -115,6 +123,21 @@ end;
 procedure TProbeView.Press(AKey: Word);
 begin
   KeyDown(AKey, []);
+end;
+
+procedure TProbeView.Grab(X: Integer);
+begin
+  MouseDown(mbLeft, [], X, 40);
+end;
+
+procedure TProbeView.Hover(X: Integer);
+begin
+  MouseMove([], X, 40);
+end;
+
+procedure TProbeView.LetGo(X: Integer);
+begin
+  MouseUp(mbLeft, [], X, 40);
 end;
 
 procedure TProbeView.Touch;
@@ -388,6 +411,7 @@ var
   Before, After_: TMemoryUse;
   View: TProbeView;
   Watcher: TWatcher;
+  Widths: TWatcher;
   Audio: TSingleArray;
   Rate, X, Frame: Integer;
   OutDir: string;
@@ -497,6 +521,116 @@ begin
   { 右クリックで解除できること。/ A right click clears the tuning. }
   View.Tap(X, mbRight);
   Check('右クリックで解除する', View.TuneHz = 0, Format('(%.1f Hz)', [View.TuneHz]));
+
+  { 帯域幅をウォーターフォール上で引いて決められること（要件 FR-D.8）。
+    詳細設定を開かずに変えられるのが目的なので、**掴めること・引いた幅が見える
+    こと・放したときに伝わること**の 3 つを見ます。
+
+    Setting the bandwidth by dragging on the waterfall (requirement FR-D.8).
+    The point is to change it without opening the settings tab, so three things
+    are checked: **that an edge can be taken hold of, that the dragged width is
+    visible, and that the release is reported.** }
+  Widths := TWatcher.Create;
+  Widths.Changes := 0;
+  View.OnBandwidthChanged := @Widths.Changed;
+  View.TuneHz := 1900;
+  View.HalfWidthHz := 250;
+  Application.ProcessMessages;
+
+  { 境界の上で押しても同調はやり直されないこと。**やり直されると、幅を変えよう
+    として読んでいた信号を見失います。**
+    A press on an edge must not retune: **it would lose the signal being read
+    in the act of changing the width.** }
+  View.Grab(View.ColumnFor(2150));
+  Check('境界を掴んでも同調は動かない', Abs(View.TuneHz - 1900) < 0.01,
+    Format('(%.1f Hz)', [View.TuneHz]));
+  Check('掴んでいることが分かる', View.HoldingEdge);
+
+  { 引いているあいだに幅が変わり、しかも選べる幅に寄っていること。
+    The width changes during the drag, and lands on one that can be chosen. }
+  View.Hover(View.ColumnFor(2300));
+  Check('引くと幅が広がる', Abs(View.HalfWidthHz - 400) < 0.01,
+    Format('(±%.0f Hz)', [View.HalfWidthHz]));
+  View.Hover(View.ColumnFor(2000));
+  Check('引き戻すと幅が狭まる', Abs(View.HalfWidthHz - 125) < 0.01,
+    Format('(±%.0f Hz)', [View.HalfWidthHz]));
+  SaveView(View, IncludeTrailingPathDelimiter(OutDir) + 'waterfall_drag.png');
+
+  { 放したときに、引いた幅が画面側へ伝わること。**伝わらなければ、帯は変わった
+    のに復号は前の幅のままです。**
+    The release reports the width: **without it the band would change while
+    decoding carried on at the old width.** }
+  View.Hover(View.ColumnFor(2300));
+  View.LetGo(View.ColumnFor(2300));
+  Check('放すと通知が来る', Widths.Changes = 1, Format('(%d 回)', [Widths.Changes]));
+  Check('引いた幅が読める', Abs(View.RequestedHalfWidthHz - 400) < 0.01,
+    Format('(±%.0f Hz)', [View.RequestedHalfWidthHz]));
+  Check('放せば掴んでいない', not View.HoldingEdge);
+
+  { 左の境界でも同じこと。片側でしか効かないと、狭める向きの操作が片方だけ
+    自然になります。
+    The left edge behaves the same; working on one side only would make
+    narrowing natural in one direction alone. }
+  View.HalfWidthHz := 250;
+  View.Grab(View.ColumnFor(1650));
+  View.Hover(View.ColumnFor(1500));
+  View.LetGo(View.ColumnFor(1500));
+  Check('左の境界でも引ける', Abs(View.HalfWidthHz - 400) < 0.01,
+    Format('(±%.0f Hz)', [View.HalfWidthHz]));
+
+  { 境界から離れたところは、いままでどおり同調であること（要件 FR-D.1）。
+    Away from the edges it still tunes as before (requirement FR-D.1). }
+  View.TuneHz := 1900;
+  View.HalfWidthHz := 250;
+  Widths.Changes := 0;
+  View.Tap(View.ColumnFor(1200), mbLeft);
+  Check('境界から離れれば同調し直す', Abs(View.TuneHz - 1200) <= TUNER_STEP_HZ,
+    Format('(%.1f Hz)', [View.TuneHz]));
+  Check('同調のし直しは幅の通知を出さない', Widths.Changes = 0,
+    Format('(%d 回)', [Widths.Changes]));
+
+  { 同調していなければ境界は描かれておらず、掴めないこと。**見えない線を掴め
+    てしまうと、同調するつもりの操作が幅の変更になります。**
+    With nothing tuned there are no edges to take hold of: **an invisible line
+    that could be grabbed would turn a click meant to tune into a change of
+    width.** }
+  View.TuneHz := 0;
+  Widths.Changes := 0;
+  { **幅は残したまま**同調だけを外します。境界は同調点の左右に描かれるので、
+    同調が無いときに境界があるとしたら 0 Hz の左右、つまり 250 Hz 付近です。
+    そこを押します。離れた場所を押すと、除外が効いていなくても当たり判定が
+    外れてしまい、**検査が何も確かめません**（変異検査で分かりました）。
+
+    **The width is left in place** while the tuning is cleared. Edges are drawn
+    to either side of the tuned pitch, so with nothing tuned they would fall to
+    either side of 0 Hz, which is to say near 250 Hz, and that is where the
+    press goes. Pressing somewhere further away would miss the edge even with
+    the guard removed, and **the check would confirm nothing** — as mutation
+    testing showed. }
+  View.Grab(View.ColumnFor(250));
+  Check('同調していなければ掴めない', not View.HoldingEdge);
+  Check('同調していなければ同調になる', Abs(View.TuneHz - 250) <= TUNER_STEP_HZ,
+    Format('(%.1f Hz)', [View.TuneHz]));
+  View.LetGo(View.ColumnFor(250));
+  Check('掴んでいなければ通知は出ない', Widths.Changes = 0,
+    Format('(%d 回)', [Widths.Changes]));
+
+  { 掴める場所では、掴めることが形で分かること。掴めるかどうかを試して
+    確かめさせるのは、操作を覚えさせるのと同じです。
+    Where an edge can be grabbed, the pointer says so. Leaving it to be found
+    by trial is the same as asking the operator to memorise it. }
+  View.TuneHz := 1900;
+  View.HalfWidthHz := 250;
+  View.Hover(View.ColumnFor(2150));
+  Check('境界の上では形が変わる', View.Cursor = crSizeWE,
+    Format('(%d)', [Ord(View.Cursor)]));
+  View.Hover(View.ColumnFor(1900));
+  Check('境界の外では形が戻る', View.Cursor = crDefault,
+    Format('(%d)', [Ord(View.Cursor)]));
+  View.TuneHz := 0;
+  View.HalfWidthHz := 0;
+  Widths.Free;
+  View.OnBandwidthChanged := nil;
 
   { 録音周波数が変わっても壊れないこと。/ It survives a change of rate. }
   View.PushSamples(TestAudio(44100), 44100, 0);

@@ -6,7 +6,8 @@ unit WaterfallView;
   モデルの読める音程へ寄せられ、以後その信号が復号されます。運用者に見える
   のは、クリックした信号が読めるようになることだけです（要件 FR-D.1）。
   ホイールと上下キーで 12.5 Hz ずつ微調整でき（FR-D.2）、いま何を狙って
-  いるかは縦線と帯で示します（FR-D.5）。
+  いるかは縦線と帯で示します（FR-D.5）。帯を示す線は掴んで引くことができ、
+  帯域幅を詳細設定を開かずに変えられます（FR-D.8）。
 
   描画は、環状に使う 1 枚の画像へ新しい行だけを書き込み、表示のときに 2 回に
   分けて写す方式です。1 行ごとに画像全体を書き直すより軽く済みます。新しい行は
@@ -19,7 +20,9 @@ unit WaterfallView;
   is what gets decoded; all the operator sees is that the signal they clicked
   becomes readable (requirement FR-D.1). The wheel and the arrow keys trim it
   in 12.5 Hz steps (FR-D.2), and a line and a band show what is currently
-  being aimed at (FR-D.5).
+  being aimed at (FR-D.5). The lines marking the band can be taken hold of and
+  dragged, which changes the bandwidth without opening the settings
+  (FR-D.8).
 
   Only the new row is written into a single image used as a ring, and the
   image is drawn in two pieces, which is cheaper than rewriting the whole
@@ -59,6 +62,12 @@ const
     display whenever a strong station appears, which the eye never settles
     into. }
   WATERFALL_RANGE_DB = 60.0;
+  { 帯域の境界線を掴める幅（画素）。狭すぎると掴めず、広すぎると同調の
+    クリック（要件 FR-D.1）を奪います。境界線 1 本の左右にこれだけ取ります。
+    How near the band's edge a press counts as taking hold of it, in pixels.
+    Too narrow and it cannot be grabbed; too wide and it steals the click that
+    tunes (requirement FR-D.1). Measured to each side of the line. }
+  WATERFALL_EDGE_GRAB_PIXELS = 6;
 
 type
   { 帯域にいる 1 局の見出し。**この部品は「どう決めたか」を知りません。**
@@ -142,7 +151,15 @@ type
       it to explain that a pitch could not be tuned (requirement FR-D.4). }
     FRequestedHz: Double;
     FHalfWidthHz: Double;
+    { 帯域の境界を掴んでいるか。-1 が左、+1 が右、0 は掴んでいません。
+      Which edge of the band is held: -1 left, +1 right, 0 none. }
+    FHeldEdge: Integer;
+    { 引き終えた時点の片側の広さ。画面側が設定へ写すために読みます。
+      The half-width at the end of the drag, for the form to copy into the
+      settings. }
+    FRequestedHalfWidthHz: Double;
     FOnTuneChanged: TNotifyEvent;
+    FOnBandwidthChanged: TNotifyEvent;
     FMessage: string;
 
     procedure SetShowChars(Value: Boolean);
@@ -163,6 +180,15 @@ type
       rounding or clamping. The gap between the two is how the form knows to
       explain that the pitch was moved. }
     procedure ApplyTune(Value, Requested: Double);
+    { 押された位置が帯域のどちらの境界に掛かるか。掛からなければ 0 です。
+      Which edge of the band the given column falls on, or 0 for neither. }
+    function EdgeAt(X: Integer): Integer;
+    function GetHoldingEdge: Boolean;
+    { 引かれた幅を、選べる幅へ寄せて当てます。引いている最中の見た目が、
+      放したときに得られる幅と食い違わないようにするためです。
+      Applies a dragged width, snapped to one that can actually be chosen, so
+      that what is seen during the drag is what the release will give. }
+    procedure DragEdgeTo(X: Integer);
     procedure SetTuneHz(Value: Double);
     procedure SetHalfWidthHz(Value: Double);
   protected
@@ -178,6 +204,9 @@ type
     procedure MarkImageStale;
     procedure Paint; override;
     procedure MouseDown(Button: TMouseButton; Shift: TShiftState;
+      X, Y: Integer); override;
+    procedure MouseMove(Shift: TShiftState; X, Y: Integer); override;
+    procedure MouseUp(Button: TMouseButton; Shift: TShiftState;
       X, Y: Integer); override;
     function DoMouseWheel(Shift: TShiftState; WheelDelta: Integer;
       MousePos: TPoint): Boolean; override;
@@ -253,6 +282,11 @@ type
     property SampleRate: Integer read FSampleRate;
     { 直前にクリックされた、丸める前の音程。/ The last click, unrounded. }
     property RequestedHz: Double read FRequestedHz;
+    { 直前に引き終えた帯域の片側の広さ（要件 FR-D.8）。
+      The half-width left by the last drag (requirement FR-D.8). }
+    property RequestedHalfWidthHz: Double read FRequestedHalfWidthHz;
+    { 帯域の境界を掴んでいる最中か。/ Whether an edge is currently held. }
+    property HoldingEdge: Boolean read GetHoldingEdge;
     { 動いていく信号を自動で追いかけるか。既定で有効です（要件 FR-D.7）。
       Whether to follow a signal that moves; on by default (FR-D.7). }
     property Tracking: Boolean read FTracking write FTracking;
@@ -269,6 +303,14 @@ type
     function HighestHz: Double;
 
     property OnTuneChanged: TNotifyEvent read FOnTuneChanged write FOnTuneChanged;
+    { 帯域の境界を引き終えたときに呼びます。**この部品は設定を書き換えません。**
+      幅を決めるのは設定 1 か所のままにし、こちらは「こう引かれた」とだけ
+      伝えます（要件 FR-D.3・FR-D.8）。
+      Raised when an edge has been dragged and released. **This control does
+      not write the setting.** The width is still decided in one place; this
+      only reports what was drawn (requirements FR-D.3 and FR-D.8). }
+    property OnBandwidthChanged: TNotifyEvent
+      read FOnBandwidthChanged write FOnBandwidthChanged;
 
     property Align;
     property Anchors;
@@ -883,9 +925,28 @@ begin
     begin
       BandLeft := FrequencyToX(FTuneHz - FHalfWidthHz);
       BandRight := FrequencyToX(FTuneHz + FHalfWidthHz);
-      Canvas.Pen.Color := clNavy;
+      { 掴んでいるあいだは境界を明るくし、いまいくつなのかを数で出します。
+        数が出ていなければ、引いた結果が分かるのは手を放したあと、それも
+        設定タブを開いた先になってしまいます（要件 FR-D.8）。
+
+        While an edge is held the lines brighten and the width is spelled out.
+        Without the number, the result of the drag would only be legible after
+        letting go, and then only in the settings tab (requirement FR-D.8). }
+      if FHeldEdge <> 0 then
+        Canvas.Pen.Color := clAqua
+      else
+        Canvas.Pen.Color := clNavy;
       Canvas.Line(BandLeft, 0, BandLeft, ScaleTop);
       Canvas.Line(BandRight, 0, BandRight, ScaleTop);
+      if FHeldEdge <> 0 then
+      begin
+        Caption_ := Format('±%.0f Hz', [FHalfWidthHz]);
+        Canvas.Font.Color := clAqua;
+        Canvas.Brush.Style := bsClear;
+        Canvas.TextOut(Max(0, (BandLeft + BandRight - Canvas.TextWidth(Caption_)) div 2),
+          Max(0, ScaleTop - Canvas.TextHeight(Caption_) - 4), Caption_);
+        Canvas.Brush.Style := bsSolid;
+      end;
     end;
     X := FrequencyToX(FTuneHz);
     Canvas.Pen.Color := clYellow;
@@ -959,6 +1020,39 @@ begin
   ApplyTune(Wanted, Wanted);
 end;
 
+function TWaterfallView.EdgeAt(X: Integer): Integer;
+begin
+  Result := 0;
+  { 同調していないとき、帯域の境界は描かれていません。見えない線は掴めません。
+    With nothing tuned there are no edges drawn, and an invisible line cannot
+    be taken hold of. }
+  if (FTuneHz <= 0) or (FHalfWidthHz <= 0) then
+    Exit;
+  if Abs(X - FrequencyToX(FTuneHz - FHalfWidthHz)) <= WATERFALL_EDGE_GRAB_PIXELS then
+    Result := -1
+  else if Abs(X - FrequencyToX(FTuneHz + FHalfWidthHz)) <= WATERFALL_EDGE_GRAB_PIXELS then
+    Result := 1;
+end;
+
+function TWaterfallView.GetHoldingEdge: Boolean;
+begin
+  Result := FHeldEdge <> 0;
+end;
+
+procedure TWaterfallView.DragEdgeTo(X: Integer);
+var
+  Raw: Double;
+begin
+  { 掴んだのが左の境界でも右の境界でも、決まるのは同調点からの距離です。
+    片側だけ動かすと帯域の中心が同調点からずれ、いま何を読んでいるのかが
+    画面と処理で食い違います。
+    Whichever edge is held, what it sets is the distance from the tuned pitch.
+    Moving one side alone would take the band's centre off that pitch, and the
+    display would no longer agree with what is being decoded. }
+  Raw := Abs(XToFrequency(X) - FTuneHz);
+  SetHalfWidthHz(BandwidthHalfWidth(NearestBandwidth(Raw)));
+end;
+
 procedure TWaterfallView.MouseDown(Button: TMouseButton; Shift: TShiftState;
   X, Y: Integer);
 var
@@ -969,6 +1063,19 @@ begin
     SetFocus;
   if Button = mbLeft then
   begin
+    { 帯域の境界の上で押されたなら、同調のし直しではなく幅の変更です
+      （要件 FR-D.8）。同調は帯域の内側のどこを押しても効くので、狭い掴み幅を
+      境界に譲っても、同調のしにくさにはなりません。
+
+      A press on one of the band's edges changes the width rather than
+      retuning (requirement FR-D.8). Tuning still answers anywhere else, so
+      giving the edges a narrow band of pixels costs nothing in tuning. }
+    FHeldEdge := EdgeAt(X);
+    if FHeldEdge <> 0 then
+    begin
+      DragEdgeTo(X);
+      Exit;
+    end;
     Wanted := XToFrequency(X);
     { 範囲へ寄せてから渡します。0 は「同調しない」の意味を持つため、左端に
       近いクリックをそのまま渡すと、同調するつもりが解除になります。
@@ -981,6 +1088,31 @@ begin
   end
   else if Button = mbRight then
     SetTuneHz(0);
+end;
+
+procedure TWaterfallView.MouseMove(Shift: TShiftState; X, Y: Integer);
+begin
+  inherited MouseMove(Shift, X, Y);
+  if FHeldEdge <> 0 then
+    DragEdgeTo(X)
+  else if EdgeAt(X) <> 0 then
+    Cursor := crSizeWE
+  else
+    Cursor := crDefault;
+end;
+
+procedure TWaterfallView.MouseUp(Button: TMouseButton; Shift: TShiftState;
+  X, Y: Integer);
+begin
+  inherited MouseUp(Button, Shift, X, Y);
+  if FHeldEdge = 0 then
+    Exit;
+  DragEdgeTo(X);
+  FHeldEdge := 0;
+  FRequestedHalfWidthHz := FHalfWidthHz;
+  Invalidate;
+  if Assigned(FOnBandwidthChanged) then
+    FOnBandwidthChanged(Self);
 end;
 
 function TWaterfallView.DoMouseWheel(Shift: TShiftState; WheelDelta: Integer;
