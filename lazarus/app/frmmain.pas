@@ -36,7 +36,8 @@ uses
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
   DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster,
-  TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView;
+  TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView,
+  ViewColors;
 
 type
   { 受信のしかた（要件 FR-I.6）。
@@ -508,6 +509,9 @@ type
     FSetPrefixesClear: TButton;
     FSetPrefixesInfo: TLabel;
     FPrefixFile: string;
+    { 高コントラスト表示（要件 NFR-5.5）。
+      High contrast (requirement NFR-5.5). }
+    FSetHighContrast: TCheckBox;
     FSetApply: TButton;
     FSetInfo: TMemo;
 
@@ -601,6 +605,8 @@ type
     procedure SetPrefixesClearClick(Sender: TObject);
     procedure LoadPrefixes(const FileName: string);
     procedure UpdatePrefixesInfo;
+    procedure HighContrastChanged(Sender: TObject);
+    procedure ApplyHighContrast;
     procedure ShowStationLabels;
     function SelectedBand: string;
     function WithoutWorked(const Entries: TBandEntries): TBandEntries;
@@ -836,6 +842,12 @@ begin
     something useful, but never block startup on a missing runtime. }
   { 読み込んだ表示設定を実際に反映します。設定は代入だけでは効きません。
     Apply the loaded display settings; assigning the controls is not enough. }
+  { 高コントラスト表示も同じです（要件 NFR-5.5）。**覚えていても、渡さなければ
+    効きません。**起動のたびに切れているのでは、覚えた意味がありません。
+    High contrast is no different (requirement NFR-5.5): **remembered but not
+    handed over, it does nothing**, and coming up off on every launch would make
+    remembering it pointless. }
+  ApplyHighContrast;
   UpdateRecordInfo;
   RxDisplayChanged(nil);
   FRxMode.OnChange := @RxModeChanged;
@@ -2627,7 +2639,7 @@ begin
     10.42, 10.36). The last row sits at 178 and is 22 tall, so 210 is not
     enough. 前置符字表（要件 FR-K.12）を足したので、さらに 32 画素。
     The prefix table row (requirement FR-K.12) adds another 32. }
-  Operating.Height := 274;
+  Operating.Height := 300;
   Operating.Caption := '運用設定';
   Stretch(Operating, alTop);
 
@@ -2731,6 +2743,19 @@ begin
   FSetPrefixesClear := AddButton(Operating, '使わない', 278, 210, 150,
     @SetPrefixesClearClick);
   FSetPrefixesInfo := AddLabel(Operating, '', 440, 214);
+
+  { 高コントラスト表示（要件 NFR-5.5）。**この製品が想定する利用者は老眼を
+    抱える運用者**なので、薄い文字は読めないことがあります。
+    High contrast (requirement NFR-5.5): **the operators this product is for
+    have presbyopia**, and faint text can simply be unreadable to them. }
+  FSetHighContrast := TCheckBox.Create(Operating);
+  FSetHighContrast.Parent := Operating;
+  FSetHighContrast.SetBounds(14, 244, 420, 22);
+  FSetHighContrast.Caption := '高コントラスト表示（薄い文字を濃くする）';
+  FSetHighContrast.Checked := False;
+  FSetHighContrast.OnChange := @HighContrastChanged;
+  AddLabel(Operating, '確からしさの濃淡は残りますが、幅は狭くなります',
+    440, 246);
 
   { ── 詳細・診断：困ったときだけ見るもの ──
     Advanced and diagnostics: only looked at when something is wrong. }
@@ -2853,6 +2878,8 @@ begin
       "cannot match", not "cannot start" (requirement FR-K.10). }
     LoadRoster(Ini.ReadString('roster', 'file', ''));
     LoadPrefixes(Ini.ReadString('roster', 'prefixes', ''));
+    FSetHighContrast.Checked :=
+      Ini.ReadBool('receive', 'high_contrast', False);
     FPrDelay.Checked := Ini.ReadBool('practice', 'delay', True);
     FPrDelaySeconds.Value := ClampInt(
       Ini.ReadInteger('practice', 'delay_seconds', REVEAL_DELAY_DEFAULT_SECONDS),
@@ -2961,6 +2988,7 @@ begin
         says the file is the operator's). }
       Ini.WriteString('roster', 'file', FRosterFile);
       Ini.WriteString('roster', 'prefixes', FPrefixFile);
+      Ini.WriteBool('receive', 'high_contrast', FSetHighContrast.Checked);
       Ini.WriteBool('practice', 'delay', FPrDelay.Checked);
       Ini.WriteInteger('practice', 'delay_seconds', FPrDelaySeconds.Value);
       Ini.WriteInteger('fist', 'kind', FFtKind.ItemIndex);
@@ -3970,6 +3998,80 @@ begin
     FRxTranscript.Message_ := '読み込んだ音を解析しています。'
   else
     FRxTranscript.Message_ := '受信を開始すると、ここに読めた文字が出ます。';
+end;
+
+{ 高コントラスト表示を効かせます（要件 NFR-5.5）。
+
+  薄くする計算は `ViewColors.BlendColor` 1 か所に集まっているので、**入切も
+  そこへ渡すだけ**で、確からしさの濃淡・一覧の休止行・待っているあいだの言葉・
+  折れ線の目盛りが一度に濃くなります。
+
+  そのうえで、文字の並ぶ欄は**地と文字を白と黒に決め打ちます。**画面の主題色は
+  環境によって灰色寄りのことがあり、**高コントラストと名乗るなら、環境任せに
+  しません。**
+
+  描き直しは呼ぶ側から明示します。色は計算のときに決まるので、**描き直さないと
+  次に何かが起きるまで前の色のままです。**
+
+  Puts high contrast into effect (requirement NFR-5.5).
+
+  The fading arithmetic lives in one place, `ViewColors.BlendColor`, so **handing
+  the switch to it** is enough to darken the confidence shading, the paused rows
+  of the list, the words shown while waiting and the trend's gridlines all at
+  once.
+
+  On top of that the text areas are **pinned to black on white**: a desktop's own
+  window colours can be greyish, and **naming something high contrast means not
+  leaving it to the desktop.**
+
+  The repaints are asked for explicitly: colours are decided as they are drawn,
+  so **without a repaint the old ones stay until something else happens.** }
+procedure TMainForm.ApplyHighContrast;
+var
+  On_: Boolean;
+begin
+  if FSetHighContrast = nil then
+    Exit;
+  On_ := FSetHighContrast.Checked;
+  SetHighContrast(On_);
+  if FRxTranscript <> nil then
+  begin
+    if On_ then
+    begin
+      FRxTranscript.Color := clWhite;
+      FRxTranscript.Font.Color := clBlack;
+    end
+    else
+    begin
+      FRxTranscript.Color := clWindow;
+      FRxTranscript.Font.Color := clWindowText;
+    end;
+    FRxTranscript.Invalidate;
+  end;
+  if FRxBandMap <> nil then
+  begin
+    if On_ then
+    begin
+      FRxBandMap.Color := clWhite;
+      FRxBandMap.Font.Color := clBlack;
+    end
+    else
+    begin
+      FRxBandMap.Color := clWindow;
+      FRxBandMap.Font.Color := clWindowText;
+    end;
+    FRxBandMap.Invalidate;
+  end;
+  if FFtTrend <> nil then
+    FFtTrend.Invalidate;
+  if FFtHistogram <> nil then
+    FFtHistogram.Invalidate;
+end;
+
+procedure TMainForm.HighContrastChanged(Sender: TObject);
+begin
+  ApplyHighContrast;
+  MarkSettingsDirty;
 end;
 
 { 国別前置符字表を読み込み、形の規則へ渡します（要件 FR-K.12）。

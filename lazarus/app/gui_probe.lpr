@@ -22,7 +22,8 @@ uses
   DeepCW.Review, DeepCW.Multi, DeepCW.BandMap, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Platform,
   DeepCW.FistLog, DeepCW.Fist,
-  WaterfallView, TranscriptView, BandMapView, TrendView, HistogramView;
+  WaterfallView, TranscriptView, BandMapView, TrendView, HistogramView,
+  ViewColors;
 
 type
   { 部品の保護された入力処理は、そのままでは外から呼べません。派生させて
@@ -396,6 +397,8 @@ var
   Choice: TChoiceWatcher;
   Chooser: TStationWatcher;
   BandMap: TProbeBandMap;
+  Faint, Strong: TColor;
+  DoubtfulChars: TDecodedChars;
   Listed: TAlwaysInRoster;
   Worked: TAlwaysWorked;
   Logs: TStationLogs;
@@ -1328,6 +1331,84 @@ begin
     What is checked here is that the words appear only while there is no
     character, and go when one arrives: **staying, they would be drawn over the
     text that was read.** }
+  { ── 高コントラスト表示（要件 NFR-5.5）──
+    この製品が想定する利用者は老眼を抱える運用者である。薄い文字は、見えにくい
+    のではなく**読めない**ことがある。
+
+    確かめるのは見た目ではなく**対比の数字**（WCAG の相対輝度比）である。
+    「濃くなった気がする」では要件を満たしたことにならない。
+
+    High contrast (requirement NFR-5.5). The operators this product is for have
+    presbyopia, and faint text is not merely hard for them but **unreadable.**
+
+    What is checked is not the look but **the contrast figure** (the WCAG
+    relative luminance ratio): "it seems darker" does not meet a requirement. }
+  WriteLn;
+  WriteLn('高コントラスト表示の検証 / high contrast checks');
+
+  SetHighContrast(False);
+  Faint := BlendColor(clWhite, clBlack, 0.20);
+  Check('切ってあるとき、薄い文字は薄いまま',
+    ContrastRatio(clWhite, Faint) < 2.0,
+    Format('(対比 %.2f)', [ContrastRatio(clWhite, Faint)]));
+
+  SetHighContrast(True);
+  Faint := BlendColor(clWhite, clBlack, 0.20);
+  { **7.0 は WCAG の AAA 相当**である。4.5（AA）で満たしたことにしないのは、
+    高コントラストと名乗るからである（付録 AR で測った）。
+    **7.0 is the WCAG AAA level.** Settling for 4.5 (AA) would not do for
+    something called high contrast (measured in appendix AR). }
+  Check('入れると、いちばん薄い文字でも対比 7.0 以上',
+    ContrastRatio(clWhite, Faint) >= 7.0,
+    Format('(対比 %.2f)', [ContrastRatio(clWhite, Faint)]));
+
+  { **濃いものを薄くしません。**持ち上げるだけです。
+    **What is already strong is not faded**: the floor only lifts. }
+  Strong := BlendColor(clWhite, clBlack, 0.95);
+  Check('既に濃いものは、そのまま',
+    ContrastRatio(clWhite, Strong) > 15.0,
+    Format('(対比 %.2f)', [ContrastRatio(clWhite, Strong)]));
+
+  { 確からしさの濃淡は**残る**こと（要件 FR-C.2・NFR-5.4）。潰してしまえば、
+    色を使わずに確からしさを伝える手立てが無くなる。
+    The confidence shading **survives** (requirements FR-C.2, NFR-5.4): flattened
+    away, there would be nothing left to carry confidence without colour. }
+  Check('高コントラストでも、濃淡の差は残る',
+    ContrastRatio(clWhite, BlendColor(clWhite, clBlack, 0.20)) <
+    ContrastRatio(clWhite, BlendColor(clWhite, clBlack, 1.00)),
+    Format('(%.2f 対 %.2f)',
+      [ContrastRatio(clWhite, BlendColor(clWhite, clBlack, 0.20)),
+       ContrastRatio(clWhite, BlendColor(clWhite, clBlack, 1.00))]));
+
+  { 受信テキストの薄い文字も、同じ計算を通ること。**部品ごとに写しを持っていた
+    ら、ここで差が出ます。**
+    The transcript's faint characters go through the same arithmetic: **a copy
+    kept per control would show up here.** }
+  Transcript.Clear;
+  Transcript.ShowDoubt := True;
+  Transcript.DoubtStrength := 1.0;
+  Transcript.Color := clWhite;
+  Transcript.Font.Color := clBlack;
+  SetLength(DoubtfulChars, 1);
+  DoubtfulChars[0].Text := 'E';
+  DoubtfulChars[0].Seconds := 0;
+  DoubtfulChars[0].EndSeconds := 0.1;
+  { いちばん怪しい文字。**確からしさが低いほど薄く描かれます。**
+    The most doubtful character: **the lower the confidence the fainter it is
+    drawn.** }
+  DoubtfulChars[0].Confidence := 0.5;
+  Transcript.SetChars(DoubtfulChars);
+  Application.ProcessMessages;
+  Check('受信テキストの、いちばん怪しい文字も対比 7.0 以上',
+    ContrastRatio(clWhite, Transcript.ShadeAt(0)) >= 7.0,
+    Format('(対比 %.2f)', [ContrastRatio(clWhite, Transcript.ShadeAt(0))]));
+
+  SetHighContrast(False);
+  Check('切れば、怪しい文字はまた薄くなる',
+    ContrastRatio(clWhite, Transcript.ShadeAt(0)) < 4.5,
+    Format('(対比 %.2f)', [ContrastRatio(clWhite, Transcript.ShadeAt(0))]));
+  Transcript.Clear;
+
   WriteLn;
   WriteLn('待っているあいだの言葉の検証 / waiting message checks');
   Transcript.Clear;

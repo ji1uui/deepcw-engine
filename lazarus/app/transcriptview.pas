@@ -237,6 +237,15 @@ type
       without drawing it.** This control's `PaintTo` renders no content
       (appendix S.7), so pixels cannot answer it. }
     function ShowsMessage: Boolean;
+    { その文字を描く色（要件 FR-C.2）。**描いた色を、描かずに言えるようにします。**
+      この部品の `PaintTo` は中身を描かないため（付録 S.7）、画素では確かめ
+      られません。高コントラスト表示（要件 NFR-5.5）が効いているかも、ここで
+      対比として測れます。
+      The colour a character is drawn in (requirement FR-C.2): **so that what is
+      drawn can be told without drawing it**, this control's `PaintTo` rendering
+      no content (appendix S.7). Whether high contrast (requirement NFR-5.5) is
+      in effect is measurable here as a ratio. }
+    function ShadeAt(Index: Integer): TColor;
 
     { 選ばれている文字。設定すると、その文字が枠で囲まれます。
       The chosen character; setting it draws a box around that character. }
@@ -448,6 +457,17 @@ begin
     needed only when they are. }
   if Length(FChars) = 0 then
     Invalidate;
+end;
+
+function TTranscriptView.ShadeAt(Index: Integer): TColor;
+begin
+  { 色を決めるのは `ShadeFor` です。**ここで作り直すと、試験が見る色と画面に
+    出る色が別物になります。**
+    `ShadeFor` decides the colour: **built again here, what the test reads and
+    what the screen shows would be two different things.** }
+  if (Index < 0) or (Index > High(FChars)) then
+    Exit(Font.Color);
+  Result := ShadeFor(Index);
 end;
 
 function TTranscriptView.ShowsMessage: Boolean;
