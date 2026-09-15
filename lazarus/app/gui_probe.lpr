@@ -23,7 +23,7 @@ uses
   DeepCW.Platform,
   DeepCW.FistLog, DeepCW.Fist,
   WaterfallView, TranscriptView, BandMapView, TrendView, HistogramView,
-  ViewColors;
+  ViewColors, LayoutCheck, StdCtrls, ExtCtrls;
 
 type
   { 部品の保護された入力処理は、そのままでは外から呼べません。派生させて
@@ -445,6 +445,167 @@ var
   Png: TPortableNetworkGraphic;
   Sessions: TFistRecords;
   LeftY, RightY, Ink, Coloured: Integer;
+
+
+{ わざと壊した画面を組み、破綻が数えられることを確かめます（要件 NFR-5.1）。
+  Builds a deliberately broken screen and checks that the breakage is counted
+  (requirement NFR-5.1). }
+procedure CheckLayoutChecker;
+var
+  Host: TForm;
+  Panel: TPanel;
+  Scroller: TScrollBox;
+  Narrow, Roomy, Hidden_: TCheckBox;
+  Left_, Right_: TLabel;
+  Outside, Inside: TLabel;
+  Problems: TLayoutProblems;
+  Wanted, WantedHeight: Integer;
+
+  function Count(Kind: TLayoutProblemKind): Integer;
+  var
+    I: Integer;
+  begin
+    Result := 0;
+    for I := 0 to High(Problems) do
+      if Problems[I].Kind = Kind then
+        Inc(Result);
+  end;
+
+  function Mentions(const Text_: string): Boolean;
+  var
+    I: Integer;
+  begin
+    Result := False;
+    for I := 0 to High(Problems) do
+      if Pos(Text_, DescribeProblem(Problems[I])) > 0 then
+        Exit(True);
+  end;
+
+begin
+  Host := TForm.Create(nil);
+  try
+    Host.SetBounds(0, 0, 400, 300);
+
+    { 何も壊れていない画面では、何も見つからないこと。**何にでも当たる道具は、
+      当たったことに意味がありません。**
+      Nothing is found on a screen that is not broken: **an instrument that
+      answers yes to everything says nothing when it does.** }
+    Panel := TPanel.Create(Host);
+    Panel.Parent := Host;
+    Panel.SetBounds(0, 0, 400, 120);
+    Roomy := TCheckBox.Create(Panel);
+    Roomy.Parent := Panel;
+    Roomy.AutoSize := False;
+    Roomy.Caption := 'ゆとりがある';
+    Roomy.SetBounds(4, 4, 300, 24);
+    Host.Show;
+    Application.ProcessMessages;
+    Problems := FindLayoutProblems(Host);
+    Check('壊れていなければ何も見つけない', Length(Problems) = 0,
+      Format('(%d 件)', [Length(Problems)]));
+
+    { ちょうど足りる幅は、狭くないこと。**1 画素でも足りなければ狭い、
+      ちょうどなら狭くない**——この境目を突いておかないと、判定を「以下」に
+      変えても検査は落ちません（変異検査で分かりました）。
+      A width that is exactly enough is not too narrow. **A pixel short is
+      narrow; exactly enough is not** -- without pressing on that boundary,
+      changing the test to "or equal" leaves the checks passing, as mutation
+      testing showed. }
+    Roomy.GetPreferredSize(Wanted, WantedHeight);
+    Roomy.Width := Wanted;
+    Application.ProcessMessages;
+    Problems := FindLayoutProblems(Host);
+    Check('ちょうど足りる幅は狭くない', Count(lpTooNarrow) = 0,
+      Format('(要る幅 %d、%d 件)', [Wanted, Count(lpTooNarrow)]));
+    Roomy.Width := 300;
+
+    { 文字が入らない幅。/ Not wide enough for its own text. }
+    Narrow := TCheckBox.Create(Panel);
+    Narrow.Parent := Panel;
+    Narrow.AutoSize := False;
+    Narrow.Caption := 'これは入りきらないほど長い文字です';
+    Narrow.SetBounds(4, 34, 30, 24);
+    Application.ProcessMessages;
+    Problems := FindLayoutProblems(Host);
+    Check('狭すぎる部品を見つける', Count(lpTooNarrow) = 1,
+      Format('(%d 件)', [Count(lpTooNarrow)]));
+    Check('どの部品かが分かる', Mentions('入りきらない'));
+
+    { 重なり。/ An overlap. }
+    Left_ := TLabel.Create(Panel);
+    Left_.Parent := Panel;
+    Left_.AutoSize := False;
+    Left_.Caption := '左';
+    Left_.SetBounds(100, 64, 100, 20);
+    Right_ := TLabel.Create(Panel);
+    Right_.Parent := Panel;
+    Right_.AutoSize := False;
+    Right_.Caption := '右';
+    Right_.SetBounds(150, 64, 100, 20);
+    Application.ProcessMessages;
+    Problems := FindLayoutProblems(Host);
+    Check('重なりを見つける', Count(lpOverlap) = 1,
+      Format('(%d 件)', [Count(lpOverlap)]));
+
+    { 触れ合うだけでは重なりではないこと。**1 画素の隙間まで重なりと言うと、
+      隣り合わせに置けなくなります。**
+      Touching is not overlapping: **were it, nothing could be placed beside
+      anything else.** }
+    Right_.Left := 200;
+    Application.ProcessMessages;
+    Problems := FindLayoutProblems(Host);
+    Check('隣り合わせは重なりではない', Count(lpOverlap) = 0,
+      Format('(%d 件)', [Count(lpOverlap)]));
+
+    { 親からのはみ出し。/ Outside the parent. }
+    Outside := TLabel.Create(Panel);
+    Outside.Parent := Panel;
+    Outside.AutoSize := False;
+    Outside.Caption := '外';
+    Outside.SetBounds(380, 4, 100, 20);
+    Application.ProcessMessages;
+    Problems := FindLayoutProblems(Host);
+    Check('はみ出しを見つける', Count(lpOutside) = 1,
+      Format('(%d 件)', [Count(lpOutside)]));
+    Outside.Free;
+
+    { 巻き取れる親の中は、はみ出しと数えないこと。設定タブは実際に巻き取ります。
+      Inside a parent that scrolls it is not counted; the settings tab scrolls. }
+    Scroller := TScrollBox.Create(Host);
+    Scroller.Parent := Host;
+    Scroller.SetBounds(0, 130, 200, 100);
+    Inside := TLabel.Create(Scroller);
+    Inside.Parent := Scroller;
+    Inside.AutoSize := False;
+    Inside.Caption := '巻き取る中';
+    Inside.SetBounds(150, 4, 300, 20);
+    Application.ProcessMessages;
+    Problems := FindLayoutProblems(Host);
+    Check('巻き取れる親の中は数えない', Count(lpOutside) = 0,
+      Format('(%d 件)', [Count(lpOutside)]));
+
+    { 見えていない部品は数えないこと。**隠してある部品の位置は決まって
+      いません。**
+      An invisible control is not counted: **a hidden control has no settled
+      position.** }
+    Hidden_ := TCheckBox.Create(Panel);
+    Hidden_.Parent := Panel;
+    Hidden_.AutoSize := False;
+    Hidden_.Caption := '見えていないが入りきらないほど長い文字です';
+    Hidden_.SetBounds(4, 94, 20, 24);
+    Hidden_.Visible := False;
+    Application.ProcessMessages;
+    Problems := FindLayoutProblems(Host);
+    Check('見えていない部品は数えない', not Mentions('見えていないが'));
+
+    { 1 件が 1 行になること。報告は人が読みます。
+      One problem reads as one line; a person reads the report. }
+    Check('1 件が 1 行になる',
+      (Length(Problems) > 0) and (Pos(#10, DescribeProblem(Problems[0])) = 0));
+  finally
+    Host.Free;
+  end;
+end;
 
 begin
   OutDir := ParamStr(1);
@@ -2216,6 +2377,17 @@ begin
 
   Watcher.Free;
   Form.Free;
+
+  { 組み方の破綻を見つける道具そのものを確かめます（要件 NFR-5.1）。
+    **わざと壊した画面を作って、見つけられることを見ます。**見つけられない
+    道具は、破綻が無いことの証拠になりません。
+
+    Checks the instrument that finds layout breakage (requirement NFR-5.1).
+    **A deliberately broken screen is built and the instrument is asked to find
+    it**: one that cannot find breakage is no evidence that there is none. }
+  WriteLn;
+  WriteLn('組み方の破綻を見つける道具 / the layout checker');
+  CheckLayoutChecker;
 
   WriteLn;
   if Failures = 0 then

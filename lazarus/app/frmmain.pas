@@ -38,7 +38,7 @@ uses
   DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster,
   DeepCW.Platform,
   TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView,
-  ViewColors;
+  ViewColors, LayoutCheck;
 
 type
   { 受信のしかた（要件 FR-I.6）。
@@ -716,6 +716,19 @@ type
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
+
+    { すべてのタブを順に前へ出し、そのつど組み方の破綻を数えます
+      （要件 NFR-5.1）。**前へ出さないタブは数えられません。**隠れている
+      部品の位置は、まだ決まっていないことがあるからです。
+
+      戻り値は 1 件 1 行。空なら破綻なしです。
+
+      Brings each tab to the front in turn and counts the layout breakages on
+      it (requirement NFR-5.1). **A tab that is not brought forward cannot be
+      counted**: a hidden control's position may not have been decided yet.
+
+      One line per problem; empty means none. }
+    function ReportLayout: TStringList;
   end;
 
 var
@@ -834,14 +847,21 @@ begin
     CreateNew skips the .lfm lookup that Create would perform. }
   inherited CreateNew(AOwner);
   Caption := 'DeepCW モールス通信 - 送受信';
-  Width := 940;
+  { 窓の既定の幅。**中身から決めます。**受信タブの表示の行と、送信訓練の案内文が
+    いちばん幅を要る（付録 AW.2 の実測で 1033 画素）。狭くすると、それらは
+    静かに切れます——警告も出ず、切れていることが画面から分かりません。
+    The window's default width, **decided by what it has to hold**: the display
+    row of the receive tab and the guidance line of the transmit drill need the
+    most (1033 pixels, measured in appendix AW.2). Narrower than that and they
+    are cut off in silence -- no warning, and no way to tell from the screen. }
+  Width := 1080;
   Height := 700;
   { グループ枠の中の操作列は固定位置で配置しているため、読みやすさを保つには
     おおよそこの幅が必要です。
 
     The control rows inside the group boxes are laid out at fixed offsets and
     need roughly this much width to stay readable. }
-  Constraints.MinWidth := 900;
+  Constraints.MinWidth := 1040;
   Constraints.MinHeight := 560;
   Position := poScreenCenter;
 
@@ -1404,7 +1424,11 @@ begin
 
   TextTools := TPanel.Create(TextPanel);
   TextTools.Parent := TextPanel;
-  TextTools.Height := 34;
+  { つまみ（`TTrackBar`）は、部品側が要る高さを持っています。実測で 39 画素
+    あり、34 の行に入れると下がはみ出していました。
+    The slider carries a height of its own -- 39 pixels, measured -- and stuck
+    out of the bottom of a 34-pixel row. }
+  TextTools.Height := 42;
   StackBelow(TextTools);
   TextTools.Align := alTop;
   TextTools.BevelOuter := bvNone;
@@ -1461,7 +1485,11 @@ begin
     where they cannot be pressed (the minimum width is 900). }
   FindTools := TPanel.Create(TextPanel);
   FindTools.Parent := TextPanel;
-  FindTools.Height := 34;
+  { 2 段です。上の段に操作、下の段に聴き直しの状態を置きます。**1 段に収める
+    と、状態の文が行の外へ出て、一度も見えませんでした**（付録 AW.3）。
+    Two rows: the controls above, the replay's state below. **On one row the
+    state ran off the end and was never once visible** (appendix AW.3). }
+  FindTools.Height := 58;
   StackBelow(FindTools);
   FindTools.Align := alTop;
   FindTools.BevelOuter := bvNone;
@@ -1505,13 +1533,17 @@ begin
   FRxReplayStop.Enabled := False;
   FRxReplayInfo := TLabel.Create(FindTools);
   FRxReplayInfo.Parent := FindTools;
-  FRxReplayInfo.SetBounds(944, 9, 300, 20);
-  { 窓の幅に合わせて伸ばします。固定幅だと、狭い窓では文が途中で切れ、広い窓では
-    余白が空きます。
-    Stretched with the window: at a fixed width the sentence is cut off in a
-    narrow window and leaves a gap in a wide one. }
-  FRxReplayInfo.Anchors := [akLeft, akTop, akRight];
-  FRxReplayInfo.BorderSpacing.Right := 8;
+  FRxReplayInfo.SetBounds(6, 34, 300, 20);
+  { 幅は文字に任せます（`AutoSize`）。**右端に留める指定をしていたのが誤りで
+    した。**左右どちらも留めると幅は引き伸ばされ、置き場所を左へ移したあとも
+    最初の置き場所から測った右端を守り続けて、親の外まで伸びていました。
+    文字に任せれば、文が伸びた分だけ伸びます（付録 AW.3）。
+
+    The width is left to the text (`AutoSize`). **Anchoring it to the right was
+    the mistake**: anchored on both sides it is stretched, and it went on
+    honouring a right edge measured from its first position even after being
+    moved left, reaching past its parent. Left to the text it grows by exactly
+    as much as the sentence does (appendix AW.3). }
   FRxReplayInfo.Caption := '文字を押すと、その音を聴き直せます。';
 
   FRxTranscript := TTranscriptView.Create(TextPanel);
@@ -2063,9 +2095,11 @@ begin
     FFtBasis.Items.Add(FIST_STANDARD_NAMES[Standard_]);
   FFtBasis.ItemIndex := 0;
   FFtBasis.OnChange := @FtOptionsChanged;
+  { 採点の基準のすぐ下に置きます。右隣に置くと行に収まりませんでした。
+    Directly under the basis; to its right it did not fit on the row. }
   AddLabel(Options,
     '基準は「正しさ」ではありません。バグキーの符号は、バグキーの基準で測ります。',
-    692, 34);
+    496, 60);
 
   { 課題文なしでも測れますが、間隔の種別をしきい値で分けるため**参考値**に
     なります（要件 FR-H.3）。画面でそう分かるようにします。
@@ -2858,7 +2892,7 @@ begin
   AddLabel(Row, '推論スレッド', 328, 12);
   FSetThreads := TComboBox.Create(Row);
   FSetThreads.Parent := Row;
-  FSetThreads.SetBounds(408, 8, 110, 28);
+  FSetThreads.SetBounds(416, 8, 110, 28);
   FSetThreads.Style := csDropDownList;
   FSetThreads.Items.Add('自動');
   FSetThreads.Items.Add('1');
@@ -2873,7 +2907,7 @@ begin
   AddLabel(Row, '同調時の帯域幅', 536, 12);
   FSetBandwidth := TComboBox.Create(Row);
   FSetBandwidth.Parent := Row;
-  FSetBandwidth.SetBounds(632, 8, 160, 28);
+  FSetBandwidth.SetBounds(648, 8, 160, 28);
   FSetBandwidth.Style := csDropDownList;
   for Choice := Low(TTunerBandwidth) to High(TTunerBandwidth) do
     FSetBandwidth.Items.Add(BandwidthCaption(Choice));
@@ -6106,6 +6140,31 @@ begin
   RxConfirmSpeedChanged(Sender);
   SetStatus('', '', Format('帯域幅を %s にしました。',
     [BandwidthCaption(Chosen)]));
+end;
+
+{ すべてのタブを順に前へ出して、組み方の破綻を数えます（要件 NFR-5.1）。
+  Counts the layout breakages on every tab in turn (requirement NFR-5.1). }
+function TMainForm.ReportLayout: TStringList;
+var
+  Was, I: Integer;
+  Problems: TLayoutProblems;
+  J: Integer;
+begin
+  Result := TStringList.Create;
+  Was := FPages.ActivePageIndex;
+  try
+    for I := 0 to FPages.PageCount - 1 do
+    begin
+      FPages.ActivePageIndex := I;
+      Application.ProcessMessages;
+      Problems := FindLayoutProblems(FPages.Pages[I]);
+      for J := 0 to High(Problems) do
+        Result.Add(Format('[%s] %s',
+          [FPages.Pages[I].Caption, DescribeProblem(Problems[J])]));
+    end;
+  finally
+    FPages.ActivePageIndex := Was;
+  end;
 end;
 
 procedure TMainForm.RxConfirmSpeedChanged(Sender: TObject);

@@ -13,15 +13,40 @@ uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Interfaces, Forms, FrmMain;
+  SysUtils, Classes, Interfaces, Forms, FrmMain;
 
 {$R *.res}
 
+var
+  Problems: TStringList;
+  Line: Integer;
 begin
   Application.Title := 'DeepCW Morse Station';
   RequireDerivedFormResource := False;
   Application.Scaled := True;
   Application.Initialize;
   Application.CreateForm(TMainForm, MainForm);
+  { 画面の組み方だけを調べて終える道です（要件 NFR-5.1）。回帰試験が、
+    画素密度の違う画面で 2 度走らせます。**普段の起動では通りません。**
+    A path that inspects the layout and exits (requirement NFR-5.1); the
+    regression suite runs it twice, on screens of different pixel density.
+    **A normal start never takes it.** }
+  if GetEnvironmentVariable('DEEPCW_LAYOUT_CHECK') <> '' then
+  begin
+    MainForm.Show;
+    Application.ProcessMessages;
+    Problems := MainForm.ReportLayout;
+    try
+      WriteLn(Format('画素密度 %d dpi / 窓 %d x %d',
+        [Screen.PixelsPerInch, MainForm.Width, MainForm.Height]));
+      for Line := 0 to Problems.Count - 1 do
+        WriteLn('  ', Problems[Line]);
+      WriteLn(Format('組み方の破綻 %d 件', [Problems.Count]));
+      Flush(Output);
+      Halt(Ord(Problems.Count > 0));
+    finally
+      Problems.Free;
+    end;
+  end;
   Application.Run;
 end.

@@ -83,6 +83,11 @@ step "強制終了しても記録が残る" ./tools/kill_safety_test.sh
 # (requirement NFR-8.2). **What cannot be fixed after shipping belongs in the
 # regression.**
 step "配布物に許諾条項が入る" ./tools/bundle_licence_test.sh
+# 画素密度の違う画面で、窓の組み方が破綻しないこと（要件 NFR-5.1）。
+# **1 つの画面で見て回るだけでは、高 DPI の破綻は見つからない。**
+# The layout holds on screens of different pixel density (requirement NFR-5.1).
+# **Looking around one screen never finds the breakage on another.**
+step "画素密度を変えても組み方が崩れない" ./tools/layout_dpi_test.sh
 echo
 
 # ---- エンジンを使う検証 ----
