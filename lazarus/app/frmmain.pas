@@ -35,7 +35,7 @@ uses
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
-  DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster,
+  DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster, DeepCW.CopyLog,
   DeepCW.Platform,
   TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView,
   ViewColors, LayoutCheck;
@@ -426,6 +426,12 @@ type
     FPrResult: TLabel;
     FPrAnswer: TMemo;
     FPrMistakes: TLabel;
+    { これまでの練習から見える傾向（要件 FR-F.5）。**1 回ぶんの結果とは別の
+      行に置きます。**同じ行に足すと、どちらが今回の話なのか読めません。
+      The tendency across past sessions (requirement FR-F.5), on a row of its
+      own: added to the same row, there would be no telling which part is about
+      this session. }
+    FPrHistory: TLabel;
     FPrText: string;
     FPrSamples: TSingleArray;
     { 各文字を見せてよい時刻（音の先頭から）と、鳴らし始めた時刻。
@@ -546,6 +552,8 @@ type
     function PracticeKind: TExerciseKind;
     procedure PrRender;
     procedure PrOptionsChanged(Sender: TObject);
+    function CopyLogFileName: string;
+    procedure PrShowHistory;
     procedure PrPlayClick(Sender: TObject);
     procedure PrAgainClick(Sender: TObject);
     procedure PrStopClick(Sender: TObject);
@@ -1814,6 +1822,51 @@ begin
   Stretch(FPrAnswer, alTop);
 
   FPrMistakes := AddTopLabel(Sheet, '');
+  FPrHistory := AddTopLabel(Sheet, '');
+  PrShowHistory;
+end;
+
+{ 練習の記録の置き場所。送信訓練の記録と同じところに置きます。
+  Where the practice records live: beside the send-practice records. }
+function TMainForm.CopyLogFileName: string;
+begin
+  Result := IncludeTrailingPathDelimiter(
+    ExtractFilePath(ConfigFileName)) + 'copy.csv';
+end;
+
+{ これまでの練習から見えることを 1 行にします（要件 FR-F.5）。
+
+  **回数が少ないうちは傾向を出しません。**1 度読み違えただけの符号を
+  「いつも間違える符号」として見せると、運用者は直すところを取り違えます。
+
+  Puts what past sessions show into one line (requirement FR-F.5).
+
+  **No tendency is offered while there are few sessions.** A character misread
+  once, shown as one always misread, sends the operator to practise the wrong
+  thing. }
+procedure TMainForm.PrShowHistory;
+var
+  Items: TCopyRecords;
+  Found: TConfusions;
+  Line: string;
+begin
+  if FPrHistory = nil then
+    Exit;
+  Items := LoadCopyRecords(CopyLogFileName);
+  if Length(Items) = 0 then
+  begin
+    FPrHistory.Caption := '';
+    Exit;
+  end;
+  Line := Format('これまで %d 回 ／ 直近 10 回の平均 %.0f%%',
+    [Length(Items), AveragePercent(Items, 10)]);
+  if Length(Items) >= COPYLOG_MIN_SESSIONS then
+  begin
+    Found := TallyConfusions(Items, 3);
+    if Length(Found) > 0 then
+      Line := Line + ' ／ 続けて間違えている符号: ' + ConfusionCaption(Found);
+  end;
+  FPrHistory.Caption := Line;
 end;
 
 function TMainForm.PracticeKind: TExerciseKind;
@@ -1966,6 +2019,7 @@ procedure TMainForm.PrMarkClick(Sender: TObject);
 var
   Score: TCopyScore;
   Mistakes: string;
+  Item: TCopyRecord;
 begin
   if FPrText = '' then
   begin
@@ -1987,6 +2041,41 @@ begin
     FPrMistakes.Caption := '間違いはありません。'
   else
     FPrMistakes.Caption := '間違えやすかった符号: ' + Mistakes;
+
+  { 1 回ぶんを残します（要件 FR-F.5）。**残すのは出題と写しそのもの**で、
+    傾向はそこから数え直します（`DeepCW.CopyLog` の頭書き）。
+
+    残せなくても練習は続きます。**答え合わせができたのに「記録できません」で
+    止まるほうが損です**（受信は fail-soft）。
+
+    One session is kept (requirement FR-F.5). **What is kept is the text sent
+    and the text copied**; the tendency is counted from those (see the head of
+    `DeepCW.CopyLog`).
+
+    Practice carries on when it cannot be kept: **stopping at "cannot record"
+    after the copy has been marked costs more than it saves** (receive is
+    fail-soft). }
+  Item := Default(TCopyRecord);
+  Item.When_ := Now;
+  Item.Kind := EXERCISE_NAMES[PracticeKind];
+  Item.Groups := FPrGroups.Value;
+  Item.Wpm := FPrWpm.Value;
+  Item.Noise := FPrNoise.Position / 100;
+  Item.Total := Score.Total;
+  Item.Same := Score.Same;
+  Item.Wrong := Score.Wrong;
+  Item.Missed := Score.Missed;
+  Item.Extra := Score.Extra;
+  Item.Percent := Score.Percent;
+  Item.Truth := FPrText;
+  Item.Typed := FPrCopy.Text;
+  try
+    AppendCopyRecord(CopyLogFileName, Item);
+  except
+    on E: Exception do
+      LogDiagnostic('受信練習の記録', E.Message);
+  end;
+  PrShowHistory;
 end;
 
 { 遅らせて正解を出します（要件 FR-F.4）。

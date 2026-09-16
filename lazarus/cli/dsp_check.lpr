@@ -24,7 +24,7 @@ uses
   Classes, SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
   DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder, DeepCW.Stream,
   DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
-  DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.Callsign,
+  DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.CopyLog, DeepCW.Callsign,
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
   DeepCW.Reference, DeepCW.Roster, DeepCW.Platform, FistCases;
 
@@ -3969,6 +3969,218 @@ begin
     Format('(%.1f 秒)', [AUDIO_RETRY_SECONDS]));
 end;
 
+procedure TestCopyLog;
+var
+  Path: string;
+  Item: TCopyRecord;
+  Back: TCopyRecords;
+  Found: TConfusions;
+  I: Integer;
+
+  function Made(const Truth, Typed: string; Percent: Double): TCopyRecord;
+  begin
+    Result := Default(TCopyRecord);
+    Result.When_ := EncodeDate(2026, 9, 16) + EncodeTime(10, 30, 45, 0);
+    Result.Kind := '欧文（A〜Z）';
+    Result.Groups := 5;
+    Result.Wpm := 20;
+    Result.Noise := 0.25;
+    Result.Truth := Truth;
+    Result.Typed := Typed;
+    Result.Percent := Percent;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('受信練習の記録（要件 FR-F.5）');
+
+  Path := GetTempDir + 'deepcw_copylog_test.csv';
+  DeleteFile(Path);
+
+  { 記録が無いうちは、空を返すこと。**例外を投げない**のは、初めて練習する人が
+    いちばん先に通る道だからです。
+    With no records it answers empty. **Nothing is raised**: this is the first
+    path anyone practising for the first time takes. }
+  Back := LoadCopyRecords(Path);
+  Check('記録が無ければ空', Length(Back) = 0, Format('(%d 件)', [Length(Back)]));
+  Check('記録が無ければ平均は 0', AveragePercent(Back) = 0);
+  Check('記録が無ければ傾向も空',
+    Length(TallyConfusions(Back)) = 0);
+
+  Item := Made('CQ DE JA1ABC', 'CQ DE JA1ABX', 91.7);
+  AppendCopyRecord(Path, Item);
+  Back := LoadCopyRecords(Path);
+  Check('書いたら 1 件読める', Length(Back) = 1, Format('(%d 件)', [Length(Back)]));
+
+  { 往復して同じであること。**書けても読めなければ、記録した意味がありません。**
+    It comes back as it went in: **written but unreadable records nothing.** }
+  if Length(Back) = 1 then
+  begin
+    Check('出題が往復する', Back[0].Truth = 'CQ DE JA1ABC', Back[0].Truth);
+    Check('写しが往復する', Back[0].Typed = 'CQ DE JA1ABX', Back[0].Typed);
+    Check('種類が往復する', Back[0].Kind = '欧文（A〜Z）', Back[0].Kind);
+    Check('速さが往復する', Back[0].Wpm = 20, IntToStr(Back[0].Wpm));
+    Check('雑音が往復する', Abs(Back[0].Noise - 0.25) < 0.001,
+      Format('%.3f', [Back[0].Noise]));
+    Check('正答率が往復する', Abs(Back[0].Percent - 91.7) < 0.05,
+      Format('%.1f', [Back[0].Percent]));
+    { **日時も往復すること。**書いておいて読み戻さない欄は、次に読む人を
+      間違えさせます（教訓 10.38）。
+      **The time comes back too**: a column written but never read back misleads
+      whoever reads the code next (lesson 10.38). }
+    Check('日時が往復する',
+      Abs(Back[0].When_ - (EncodeDate(2026, 9, 16) + EncodeTime(10, 30, 45, 0)))
+        < 1 / 86400,
+      DateTimeToStr(Back[0].When_));
+  end;
+
+  { 区切りと引用符を含む文が壊れないこと。**課題文に読点は出ませんが、
+    写しは運用者が打つので何が入るか分かりません。**
+    A separator or a quote inside the text must survive: **the exercise never
+    contains a comma, but the copy is typed by the operator and may contain
+    anything.** }
+  AppendCopyRecord(Path, Made('A B', 'A, "B"', 50));
+  Back := LoadCopyRecords(Path);
+  Check('区切りを含む写しが壊れない',
+    (Length(Back) = 2) and (Back[1].Typed = 'A, "B"'),
+    Format('(%d 件) %s', [Length(Back), Back[High(Back)].Typed]));
+
+  { 列を足しても古い記録が読めること。**名前で引く**ことの意味です。
+    A column added later leaves the old records readable — the point of reading
+    by name. }
+  DeleteFile(Path);
+  with TStringList.Create do
+  try
+    Add('datetime,kind,truth,typed,percent,mode');
+    Add('2026-09-16T10:30:45,欧文,AB,AC,50.0,新しい欄');
+    SaveToFile(Path);
+  finally
+    Free;
+  end;
+  Back := LoadCopyRecords(Path);
+  Check('知らない列があっても読める',
+    (Length(Back) = 1) and (Back[0].Typed = 'AC'),
+    Format('(%d 件)', [Length(Back)]));
+
+  { 列の並びが変わっても読めること。
+    A different column order is still readable. }
+  DeleteFile(Path);
+  with TStringList.Create do
+  try
+    Add('typed,truth,percent,datetime,kind');
+    Add('AC,AB,50.0,2026-09-16T10:30:45,欧文');
+    SaveToFile(Path);
+  finally
+    Free;
+  end;
+  Back := LoadCopyRecords(Path);
+  Check('列の並びが違っても読める',
+    (Length(Back) = 1) and (Back[0].Truth = 'AB') and (Back[0].Typed = 'AC'),
+    Format('(%d 件)', [Length(Back)]));
+
+  { 傾向。**同じ読み違えが積み上がること**が要件の中身です（FR-F.5）。
+    The tendency: **the same misreading accumulating** is what the requirement
+    is about (FR-F.5). }
+  DeleteFile(Path);
+  for I := 1 to 4 do
+    AppendCopyRecord(Path, Made('R K E', 'K K E', 66.7));
+  AppendCopyRecord(Path, Made('R K E', 'R K I', 66.7));
+  Back := LoadCopyRecords(Path);
+  Found := TallyConfusions(Back, 3);
+  Check('積み上がった読み違えが出る', Length(Found) >= 1,
+    Format('(%d 組)', [Length(Found)]));
+  Check('多いものが先に来る',
+    (Length(Found) >= 1) and (Found[0].Truth = 'R') and (Found[0].Typed = 'K')
+    and (Found[0].Count = 4),
+    ConfusionCaption(Found));
+  Check('1 度きりのものも数える',
+    (Length(Found) >= 2) and (Found[1].Count = 1), ConfusionCaption(Found));
+  Check('上位だけを返す', Length(TallyConfusions(Back, 1)) = 1,
+    Format('(%d 組)', [Length(TallyConfusions(Back, 1))]));
+
+  { **点数からではなく、文から数え直していること。**記録の percent を書き換えて
+    も傾向は変わりません。逆に、写しを書き換えれば変わります。
+    **The count comes from the text, not from the stored score**: changing the
+    recorded percentage leaves the tendency alone, while changing the copy moves
+    it. }
+  for I := 0 to High(Back) do
+    Back[I].Percent := 0;
+  Check('点数を書き換えても傾向は変わらない',
+    (Length(TallyConfusions(Back, 1)) = 1) and
+    (TallyConfusions(Back, 1)[0].Count = 4),
+    ConfusionCaption(TallyConfusions(Back, 1)));
+  for I := 0 to High(Back) do
+    Back[I].Typed := Back[I].Truth;
+  Check('写しを直せば傾向も消える', Length(TallyConfusions(Back)) = 0,
+    Format('(%d 組)', [Length(TallyConfusions(Back))]));
+
+  { 書き落としは、別の文字を書いたのとは違う形で出ること。
+    A miss reads differently from writing another character. }
+  Back := nil;
+  SetLength(Back, 1);
+  Back[0] := Made('ABC', 'AC', 66.7);
+  Found := TallyConfusions(Back);
+  Check('書き落としが数えられる',
+    (Length(Found) = 1) and (Found[0].Truth = 'B') and (Found[0].Typed = #0),
+    ConfusionCaption(Found));
+  Check('書き落としは言葉が違う',
+    Pos('落とし', ConfusionCaption(Found)) > 0, ConfusionCaption(Found));
+
+  { **空白は数えないこと。**語の切れ目をどう書くかは写し方の癖であって、符号を
+    読めたかどうかとは別のことです（`ScoreCopy`・`MistakeSummary` と同じ規則）。
+    実機の画面で、除いていなかったために `　（落とし 196 回）` が先頭に出ました。
+    **Spaces are not counted**: how the breaks between words are written is a
+    habit of copying, not whether the code was read (the rule `ScoreCopy` and
+    `MistakeSummary` use). On the real screen, without this the list led with
+    `　（落とし 196 回）`. }
+  Back := nil;
+  SetLength(Back, 1);
+  Back[0] := Made('AB CD EF', '', 0);
+  Found := TallyConfusions(Back, 0);
+  Check('空白は傾向に入らない', Length(Found) = 6,
+    Format('(%d 組) %s', [Length(Found), ConfusionCaption(Found)]));
+  for I := 0 to High(Found) do
+    Check(Format('%d 組目が空白でない', [I + 1]),
+      (Found[I].Truth <> ' ') and (Found[I].Typed <> ' '),
+      ConfusionCaption(Found));
+
+  { 書き足しも数えること。**その場で出す言葉（`MistakeSummary`）が「足した」を
+    数えているので、積み上げるほうだけ数えないと、2 つの画面が食い違います。**
+    Extra characters are counted too: **the in-session phrase counts them, and
+    counting them in only one of the two views would make the two disagree.** }
+  Back[0] := Made('AB', 'AXB', 100);
+  Found := TallyConfusions(Back, 0);
+  Check('書き足しが数えられる',
+    (Length(Found) = 1) and (Found[0].Truth = #0) and (Found[0].Typed = 'X'),
+    ConfusionCaption(Found));
+  Check('書き足しは言葉が違う',
+    Pos('足し', ConfusionCaption(Found)) > 0, ConfusionCaption(Found));
+
+  { 平均。直近だけを見られること。**伸びているかどうかは、全部の平均では
+    見えません。**
+    The mean, and over the recent few: **whether it is improving cannot be seen
+    in the mean of everything.** }
+  SetLength(Back, 4);
+  Back[0] := Made('A', 'A', 40);
+  Back[1] := Made('A', 'A', 50);
+  Back[2] := Made('A', 'A', 90);
+  Back[3] := Made('A', 'A', 100);
+  Check('全部の平均', Abs(AveragePercent(Back) - 70) < 0.01,
+    Format('%.1f', [AveragePercent(Back)]));
+  Check('直近 2 件の平均', Abs(AveragePercent(Back, 2) - 95) < 0.01,
+    Format('%.1f', [AveragePercent(Back, 2)]));
+  Check('件数より多く求めても全部の平均',
+    Abs(AveragePercent(Back, 99) - 70) < 0.01,
+    Format('%.1f', [AveragePercent(Back, 99)]));
+
+  { 傾向と呼ぶまでの回数。**1 回や 2 回を「いつも間違える」と見せない。**
+    How many sessions make a tendency: **one or two is not "always".** }
+  Check('傾向と呼ぶ回数は 2 より多い', COPYLOG_MIN_SESSIONS > 2,
+    IntToStr(COPYLOG_MIN_SESSIONS));
+
+  DeleteFile(Path);
+end;
+
 procedure TestNearestBandwidth;
 var
   Widths: Integer;
@@ -4156,6 +4368,7 @@ begin
     TestLicences;
     TestWaitingForDevice;
     TestNearestBandwidth;
+    TestCopyLog;
   finally
     Meta.Free;
   end;
