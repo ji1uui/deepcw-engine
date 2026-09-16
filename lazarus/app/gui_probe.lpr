@@ -607,6 +607,195 @@ begin
   end;
 end;
 
+
+{ わざと順序を狂わせた画面を組み、食い違いが数えられることを確かめます
+  （要件 NFR-5.6）。
+  Builds a screen whose Tab order is deliberately wrong and checks that the
+  disagreement is counted (requirement NFR-5.6). }
+{ 空の配列でも安全に 1 行にします。**添字を先に書くと、件数が 0 のときに
+  その場で落ちます**（検査の中で実際に落ちました）。
+  Renders a line safely even for an empty array: **an index written first
+  crashes on the spot when there are none**, as it did inside this check. }
+{ 挙がった中に、その文字を含む行があるか。/ Whether any line mentions the text. }
+function Mentions(const Problems: TLayoutProblems; const Text_: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to High(Problems) do
+    if Pos(Text_, DescribeProblem(Problems[I])) > 0 then
+      Exit(True);
+end;
+
+function Describe(const Problems: TLayoutProblems): string;
+begin
+  if Length(Problems) = 0 then
+    Result := '(0 件)'
+  else
+    Result := '(' + DescribeProblem(Problems[0]) + ')';
+end;
+
+procedure CheckTabOrderChecker;
+var
+  Host: TForm;
+  Wrapper, Top_, Middle, Bottom_: TPanel;
+  A, B, B2, C, D: TButton;
+  Problems: TLayoutProblems;
+begin
+  Host := TForm.Create(nil);
+  try
+    Host.SetBounds(0, 0, 400, 300);
+    { 上から下へ 3 段。作った順が、そのまま見た目の順です。
+      Three rows top to bottom, built in the order they are seen. }
+    { 3 段をまとめて包む枠。**それ自身も Tab で止まれる入れ物**にします。
+      実物のタブ帯（`TPageControl`）がこれで、**高さが中身ぜんぶに及ぶため、
+      位置を比べる相手にすると何も「上にある」ことにならなくなります。**
+      入れ物を外す規則が効いていることを、この枠が確かめます。
+
+      A frame wrapping all three rows, **itself a stop and a container**. The
+      real tab strip (`TPageControl`) is one of these, and **because its height
+      covers everything inside, nothing ever counts as above it** when it is
+      compared against. This frame is what checks that containers are left out. }
+    Wrapper := TPanel.Create(Host);
+    Wrapper.Parent := Host;
+    Wrapper.SetBounds(0, 0, 400, 200);
+    Wrapper.TabStop := True;
+
+    Top_ := TPanel.Create(Wrapper);
+    Top_.Parent := Wrapper;
+    Top_.SetBounds(0, 0, 400, 60);
+    Middle := TPanel.Create(Wrapper);
+    Middle.Parent := Wrapper;
+    Middle.SetBounds(0, 60, 400, 60);
+    Bottom_ := TPanel.Create(Wrapper);
+    Bottom_.Parent := Wrapper;
+    Bottom_.SetBounds(0, 120, 400, 60);
+
+    A := TButton.Create(Top_);
+    A.Parent := Top_;
+    A.SetBounds(4, 4, 80, 28);
+    A.Caption := '上';
+    { 同じ行の右隣。**左右に動くのは食い違いではありません。**
+      Beside it on the same row: **moving sideways is not a disagreement.** }
+    B := TButton.Create(Top_);
+    B.Parent := Top_;
+    B.SetBounds(100, 4, 80, 28);
+    B.Caption := '上の右';
+    { 同じ行でも、部品ごとに上端は少しずつ違います（実物では札が y+9、釦が
+      y+2 など）。**上端がぴったり同じ部品しか置かないと、「少しでも上なら
+      戻った」という緩い判定でも検査は落ちません**（変異検査で分かりました）。
+      4 画素だけ高い部品を置いて、その差を検査に持ち込みます。
+
+      Even on one row the tops differ a little (a label at y+9 beside a button
+      at y+2, in the real window). **With only controls at identical tops,
+      loosening the rule to "any pixel higher counts as back" leaves the checks
+      passing**, as mutation testing showed. A control 4 pixels higher brings
+      that difference into the check. }
+    B2 := TButton.Create(Top_);
+    B2.Parent := Top_;
+    B2.SetBounds(200, 0, 80, 28);
+    B2.Caption := '上の右の右';
+
+    C := TButton.Create(Middle);
+    C.Parent := Middle;
+    C.SetBounds(4, 4, 80, 28);
+    C.Caption := '中';
+    D := TButton.Create(Bottom_);
+    D.Parent := Bottom_;
+    D.SetBounds(4, 4, 80, 28);
+    D.Caption := '下';
+    Host.Show;
+    { 順序は番号で決めます。**`A.TabOrder := B.TabOrder` は元へ戻す手立てには
+      なりません**——代入した時点で番号が詰め直されるので、同じ式をもう一度
+      書いても元の並びにはなりません（この検査を書いていて踏みました）。
+      The order is set by number. **`A.TabOrder := B.TabOrder` is no way to put
+      it back**: the numbers are renumbered by the assignment itself, so writing
+      the same expression again does not restore the order -- as writing this
+      check showed. }
+    Top_.TabOrder := 0;
+    Middle.TabOrder := 1;
+    Bottom_.TabOrder := 2;
+    Application.ProcessMessages;
+
+    Problems := FindTabOrderProblems(Host);
+    Check('順序が合っていれば何も見つけない', Length(Problems) = 0,
+      Format('(%d 件)', [Length(Problems)]));
+
+    { **巻き戻しの 1 回は数えないこと。**最後の部品から先頭へ帰るのは要ります。
+      上の検査が 0 件であることが、そのまま巻き戻しを許している証拠です。
+      **The single wrap is not counted**: the return from the last control to
+      the first has to happen, and the check above passing is the evidence that
+      it is allowed. }
+
+    { いちばん下の枠を、いちばん上の枠の前へ動かします。置き場所は動かしません。
+      **これは「回しただけ」の並びです**——上へ戻るのは相変わらず 1 回で、
+      戻る場所が変わっただけ。見つけるのは始まりの場所の規則のほうです。
+      The bottom panel is moved ahead of the top one, leaving the positions
+      alone. **This is the order merely rotated**: there is still one jump back,
+      only in a different place. It is the rule about where the order starts
+      that catches it. }
+    Bottom_.TabOrder := 0;
+    Application.ProcessMessages;
+    Problems := FindTabOrderProblems(Host);
+    Check('回しただけの並びを見つける', Length(Problems) = 1,
+      Format('(%d 件)', [Length(Problems)]));
+    Check('始まりが上でないと分かる',
+      (Length(Problems) = 1) and (Pos('画素上にある', DescribeProblem(Problems[0])) > 0),
+      Describe(Problems));
+
+    { こんどは本当に単調でない並びにします。上・下・中の順です。上へ戻るのが
+      2 回になります（版 2.46 で見つけたのと同じ形）。
+      Now an order that really is not monotonic: top, bottom, middle. The focus
+      jumps back up twice -- the shape found in version 2.46. }
+    Top_.TabOrder := 0;
+    Middle.TabOrder := 1;
+    Bottom_.TabOrder := 1;
+    Application.ProcessMessages;
+    Problems := FindTabOrderProblems(Host);
+    { **上へ戻る歩みは全部挙がります。**巻き戻し（下→上）と、本物の食い違い
+      （下→中）の 2 つです。どちらが巻き戻しかは輪からは決められないので、
+      道具は選びません。
+      **Every jump back up is listed**: the wrap (bottom to top) and the real
+      disagreement (bottom to middle). Which one is the wrap cannot be told
+      from a loop, so the instrument does not choose. }
+    Check('上へ戻る順序を見つける', Length(Problems) = 2,
+      Format('(%d 件)', [Length(Problems)]));
+    Check('本物の食い違いが挙がる', Mentions(Problems, '「下」 から TButton「中」'),
+      Describe(Problems));
+    Check('巻き戻しも隠さずに挙げる', Mentions(Problems, '「中」 から TButton「上」'),
+      Describe(Problems));
+
+    { 元へ戻せば、また 0 件になること。**一度でも見つけたら見つけ続ける道具は、
+      直したことを確かめられません。**
+      Putting it back returns to none: **an instrument that goes on reporting
+      once it has reported cannot confirm a repair.** }
+    Top_.TabOrder := 0;
+    Middle.TabOrder := 1;
+    Bottom_.TabOrder := 2;
+    Application.ProcessMessages;
+    Problems := FindTabOrderProblems(Host);
+    Check('直せば見つけなくなる', Length(Problems) = 0,
+      Format('(%d 件)', [Length(Problems)]));
+
+    { 押せる部品が 1 つも無ければ、何も言わないこと。
+      With nothing focusable it says nothing. }
+    A.TabStop := False;
+    B.TabStop := False;
+    C.TabStop := False;
+    D.TabStop := False;
+    Top_.TabStop := False;
+    Middle.TabStop := False;
+    Bottom_.TabStop := False;
+    Wrapper.TabStop := False;
+    Application.ProcessMessages;
+    Problems := FindTabOrderProblems(Host);
+    Check('押せる部品が無ければ何も言わない', Length(Problems) = 0,
+      Format('(%d 件)', [Length(Problems)]));
+  finally
+    Host.Free;
+  end;
+end;
+
 begin
   OutDir := ParamStr(1);
   if OutDir = '' then
@@ -2388,6 +2577,12 @@ begin
   WriteLn;
   WriteLn('組み方の破綻を見つける道具 / the layout checker');
   CheckLayoutChecker;
+
+  { タブ順序の食い違いを見つける道具（要件 NFR-5.6）。
+    The instrument for Tab order (requirement NFR-5.6). }
+  WriteLn;
+  WriteLn('タブ順序を見つける道具 / the Tab order checker');
+  CheckTabOrderChecker;
 
   WriteLn;
   if Failures = 0 then

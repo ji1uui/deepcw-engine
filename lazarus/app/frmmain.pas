@@ -1361,6 +1361,36 @@ begin
   FRxAntiAlias.Checked := True;
   FRxAntiAlias.OnChange := @RxConfirmSpeedChanged;
 
+  { この塊は、**画面の並びと作った順が一致していない。**置き場所の都合（幅の
+    広い入力装置の欄を先に取る、通知を繋ぐ順序）で作る順が決まり、LCL は
+    タブ順序を作った順で取るためである。**置き場所は動かさず、順序だけを
+    目で追う順に置き直す**（要件 NFR-5.6）。
+
+    番号で与える。`A.TabOrder := B.TabOrder` は代入のたびに番号が詰め直される
+    ので、**続けて書くと意図した並びにならない**（付録 AX.3）。
+
+    1 行目: 受信開始・受信停止・表示をクリア・文字が決まるまで・帯域外の雑音
+    2 行目: 入力装置・再検出・交信モード
+
+    In this group **the order on screen and the order of construction do not
+    agree.** What to build first was decided by where things go (the wide device
+    box needs its space; notifications are attached in a certain order), and the
+    LCL takes the Tab order from the order of construction. **The positions stay
+    put; only the order is laid back out the way the eye follows it**
+    (requirement NFR-5.6).
+
+    Given by number: `A.TabOrder := B.TabOrder` renumbers as it assigns, so
+    **written one after another it does not produce the order intended**
+    (appendix AX.3). }
+  FRxStart.TabOrder := 0;
+  FRxStop.TabOrder := 1;
+  FRxClear.TabOrder := 2;
+  FRxConfirmSpeed.TabOrder := 3;
+  FRxAntiAlias.TabOrder := 4;
+  FRxDevice.TabOrder := 5;
+  FRxDeviceRefresh.TabOrder := 6;
+  FRxMode.TabOrder := 7;
+
   FRxBusy := AddTopLabel(Sheet, '');
 
   WaterfallPanel := TPanel.Create(Sheet);
@@ -6152,12 +6182,25 @@ var
 begin
   Result := TStringList.Create;
   Was := FPages.ActivePageIndex;
+  { 焦点を先頭へ戻してから数えます。**押したところから始まる輪は、押した場所に
+    よって形が変わって見えます。**
+    The focus is put back to the start first: **a loop begun wherever the mouse
+    last landed looks different depending on where that was.** }
   try
     for I := 0 to FPages.PageCount - 1 do
     begin
       FPages.ActivePageIndex := I;
       Application.ProcessMessages;
       Problems := FindLayoutProblems(FPages.Pages[I]);
+      for J := 0 to High(Problems) do
+        Result.Add(Format('[%s] %s',
+          [FPages.Pages[I].Caption, DescribeProblem(Problems[J])]));
+      { タブ順序は窓全体で 1 本の輪になっているので、窓から辿ります。
+        前へ出ているタブの部品だけが輪に入ります（要件 NFR-5.6）。
+        The Tab chain is one loop over the whole window, so it is followed from
+        the window; only the controls of the tab in front take part in it
+        (requirement NFR-5.6). }
+      Problems := FindTabOrderProblems(Self);
       for J := 0 to High(Problems) do
         Result.Add(Format('[%s] %s',
           [FPages.Pages[I].Caption, DescribeProblem(Problems[J])]));
