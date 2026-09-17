@@ -46,6 +46,22 @@ const
     The ADIF version declared on export, which tells a reader how to read it. }
   ADIF_VERSION = '3.1.4';
 
+  { ADIF の DXCC 列挙（仕様 III.B.8）で日本を表す番号。
+
+    **`CNTY` を書くときは、必ずこれも書きます。**仕様 III.C.1.b は `CNTY` の型を
+    「`DXCC` の値による列挙」と定めており、I.E は「依存する欄を書き出すなら、
+    依存先の欄も書き出すこと」と述べている。`DXCC` が無ければ、読み手は
+    `100101` を米国の郡名の形式（`MA,Middlesex`）として解釈しようとする。
+
+    The DXCC entity code for Japan (specification III.B.8).
+
+    **Whenever `CNTY` is written, this is written with it.** III.C.1.b defines
+    `CNTY` as an enumeration that is a function of the `DXCC` field's value, and
+    I.E says that if a dependent field is exported, so is the field it depends
+    on. Without `DXCC`, a reader would try to read `100101` in the shape used
+    for US counties (`MA,Middlesex`). }
+  ADIF_DXCC_JAPAN = '339';
+
 type
   { 記録の 1 項目。名前は大文字で持ちます。ADIF の項目名は大文字小文字を
     区別しないためで、比べるたびに変換すると取りこぼしが出ます。
@@ -259,8 +275,80 @@ type
   match up.** The conversion itself belongs to the caller
   (`LocalTimeToUniversal(Now)`); doing it here would convert twice on any path
   that already holds a UTC moment, such as rebuilding an imported record. }
+{ Subdivision は手入力された JCC/JCG コードです（要件 FR-E.7）。読み取れた
+  ときだけ `CNTY` と `DXCC` を書きます。**読み取れないものは書きません**——
+  形式に合わない `CNTY` は、読み手にとって郡名の書き損じと区別が付きません。
+  Subdivision is a hand-entered JCC/JCG code (requirement FR-E.7). `CNTY` and
+  `DXCC` are written only when it reads: **what does not read is not written**,
+  a malformed `CNTY` being indistinguishable to a reader from a mistyped county
+  name. }
 function BuildContact(const Callsign: string; MomentUtc: TDateTime;
-  const Mode: string = 'CW'; const Band: string = ''): TAdifRecord;
+  const Mode: string = 'CW'; const Band: string = '';
+  const Subdivision: string = ''): TAdifRecord;
+
+type
+  { 日本の第 2 行政区分コードの種別（要件 FR-E.7）。
+
+    ADIF 仕様 III.B.22 が DXCC 339（日本）について定める形式:
+
+    | 種別 | 形式 | 例 |
+    | --- | --- | --- |
+    | 市（JCC） | 2 桁の都道府県＋2 桁または 4 桁の市 | `0101`＝札幌市、`100101`＝千代田区 |
+    | 郡（JCG） | 2 桁の都道府県＋3 桁の郡 | `01001`＝阿寒郡 |
+    | 区（WAKU） | 2 桁の都道府県＋2 桁の市＋2 桁の区 | `010101`＝札幌市中央区 |
+
+    **6 桁は 2 通りに読める。**JCC の 4 桁市コードと、区コードが同じ長さになる。
+    どちらであるかは JARL の一覧を引かなければ決まらず、この機械は一覧を持たない
+    （同梱しない方針）。**決められないことを決めたふりはしない**ので、6 桁は
+    「市または区」として扱う。ADIF へ書く値はどちらでも同じなので、記録の
+    正しさは損なわれない。
+
+    The kind of Japanese secondary administrative subdivision code
+    (requirement FR-E.7), in the formats specification III.B.22 lays down for
+    DXCC 339.
+
+    **Six digits read two ways**: a JCC with a 4-digit city code and a ward code
+    have the same length. Which one it is cannot be settled without JARL's
+    lists, which this machine does not carry. **Rather than pretend to settle
+    what cannot be settled**, six digits are treated as "city or ward"; the
+    value written to ADIF is the same either way, so nothing in the record
+    suffers. }
+  TJapanSubdivision = (
+    jsUnknown,      { 形式に合わない / does not fit the format }
+    jsCity,         { 市（JCC、4 桁） / a city, 4 digits }
+    jsGun,          { 郡（JCG、5 桁） / a gun, 5 digits }
+    jsCityOrWard    { 市または区（6 桁） / a city or a ward, 6 digits }
+  );
+
+{ 手入力された JCC/JCG コードを読み取ります（要件 FR-E.7）。
+
+  受け付けるのは、頭に `JCC` または `JCG` の語が付いていてもよい数字列です。
+  空白は落とします。**語と桁数が食い違えば受け付けません**——`JCG 0101` は
+  4 桁なので市のコードであり、打った本人の意図と食い違う。黙って市として
+  書けば、賞の申請でその 1 行だけが通らない。
+
+  都道府県は 01〜47 でなければなりません（仕様 III.B.12 の DXCC 339 の一覧）。
+
+  読み取れたときは Code に数字だけを返します。読み取れなければ jsUnknown を
+  返し、Code は空です。
+
+  Reads a hand-entered JCC/JCG code (requirement FR-E.7).
+
+  What is accepted is a run of digits, optionally headed by the word `JCC` or
+  `JCG`; spaces are dropped. **A word that disagrees with the digit count is
+  refused**: `JCG 0101` has four digits and is therefore a city code, against
+  what the person typing meant. Written through in silence, it would be the one
+  line that fails an award application.
+
+  The prefecture must be 01 to 47 (the enumeration for DXCC 339 in III.B.12).
+
+  On success Code holds the digits alone; otherwise jsUnknown is returned and
+  Code is empty. }
+function ParseJapanSubdivision(const Text_: string;
+  out Code: string): TJapanSubdivision;
+
+{ 画面に出す読み。/ What to call it on screen. }
+function JapanSubdivisionCaption(Kind: TJapanSubdivision): string;
 
 { 呼出符号を索引に使う形へ直します。附加符号を落とし、大文字にします。
   形として成立しないものは、そのまま大文字にして返します。**記録は運用者のもので
@@ -274,8 +362,85 @@ function LogKeyOf(const Callsign: string): string;
 
 implementation
 
+function JapanSubdivisionCaption(Kind: TJapanSubdivision): string;
+begin
+  case Kind of
+    jsCity: Result := '市（JCC）';
+    jsGun: Result := '郡（JCG）';
+    jsCityOrWard: Result := '市または区（JCC／WAKU）';
+  else
+    Result := '';
+  end;
+end;
+
+function ParseJapanSubdivision(const Text_: string;
+  out Code: string): TJapanSubdivision;
+var
+  Work, Label_: string;
+  I, Prefecture: Integer;
+begin
+  Result := jsUnknown;
+  Code := '';
+  Work := UpperCase(Trim(Text_));
+  if Work = '' then
+    Exit;
+
+  { 頭の語を外します。外したあとに何も残らなければ、語だけが打たれたということ
+    で、コードではありません。
+    A heading word is taken off; nothing left after it means a word was typed
+    without a code. }
+  Label_ := '';
+  if (Copy(Work, 1, 3) = 'JCC') or (Copy(Work, 1, 3) = 'JCG') then
+  begin
+    Label_ := Copy(Work, 1, 3);
+    Work := Trim(Copy(Work, 4, Length(Work)));
+    { 語と数字のあいだの区切りを落とします。/ The separator after the word. }
+    while (Work <> '') and ((Work[1] = ':') or (Work[1] = '-')) do
+      Work := Trim(Copy(Work, 2, Length(Work)));
+  end;
+
+  { 残りは数字だけであること。**空白混じりは受け付けません。**打ち間違いと
+    区切りの区別が付かず、`10 0101` を `100101` と読むのは推測になります。
+    What is left must be digits alone. **Spaces inside are not accepted**: a
+    mistype cannot be told from a separator, and reading `10 0101` as `100101`
+    would be a guess. }
+  if Work = '' then
+    Exit;
+  for I := 1 to Length(Work) do
+    if not (Work[I] in ['0'..'9']) then
+      Exit;
+
+  { 桁数で種別が決まります（仕様 III.B.22）。
+    The digit count decides the kind (specification III.B.22). }
+  case Length(Work) of
+    4: Result := jsCity;
+    5: Result := jsGun;
+    6: Result := jsCityOrWard;
+  else
+    Exit;
+  end;
+
+  { 打った人の言葉と桁数が食い違えば、受け付けません。
+    A word that disagrees with the digit count is refused. }
+  if (Label_ = 'JCC') and (Result = jsGun) then
+    Exit(jsUnknown);
+  if (Label_ = 'JCG') and (Result <> jsGun) then
+    Exit(jsUnknown);
+
+  { 都道府県は 01〜47（仕様 III.B.12、DXCC 339 の一覧）。
+    The prefecture is 01 to 47 (III.B.12, the enumeration for DXCC 339). }
+  Prefecture := StrToIntDef(Copy(Work, 1, 2), 0);
+  if (Prefecture < 1) or (Prefecture > 47) then
+    Exit(jsUnknown);
+
+  Code := Work;
+end;
+
 function BuildContact(const Callsign: string; MomentUtc: TDateTime;
-  const Mode: string; const Band: string): TAdifRecord;
+  const Mode: string; const Band: string;
+  const Subdivision: string): TAdifRecord;
+var
+  Code: string;
 begin
   Result := Default(TAdifRecord);
   SetAdifValue(Result, 'CALL', UpperCase(Trim(Callsign)));
@@ -291,6 +456,15 @@ begin
     better with a logger than writing it empty. }
   if Trim(Band) <> '' then
     SetAdifValue(Result, 'BAND', UpperCase(Trim(Band)));
+  { JCC/JCG（要件 FR-E.7）。**`CNTY` だけでは読めません。**形式が `DXCC` の値で
+    変わるため、依存先の `DXCC` を添えます（仕様 I.E）。
+    JCC/JCG (requirement FR-E.7). **`CNTY` alone cannot be read**: its format is
+    a function of `DXCC`, so the field it depends on goes with it (I.E). }
+  if ParseJapanSubdivision(Subdivision, Code) <> jsUnknown then
+  begin
+    SetAdifValue(Result, 'CNTY', Code);
+    SetAdifValue(Result, 'DXCC', ADIF_DXCC_JAPAN);
+  end;
 end;
 
 function LogKeyOf(const Callsign: string): string;

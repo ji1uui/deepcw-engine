@@ -390,6 +390,12 @@ type
     FRxReplay: TButton;
     FRxReplayStop: TButton;
     FRxReplayInfo: TLabel;
+    { 相手局の JCC/JCG（要件 FR-E.7）。手で打ちます——この機械は市区町村の
+      一覧を持ちません（同梱しない方針）。
+      The contacted station's JCC/JCG (requirement FR-E.7), typed by hand: this
+      machine carries no list of cities and guns, and is not to. }
+    FRxSubdivision: TEdit;
+    FRxSubdivisionInfo: TLabel;
     FRxFind: TEdit;
     FRxFindPrev: TButton;
     FRxFindNext: TButton;
@@ -607,6 +613,7 @@ type
       The worked-before lookup the band map uses, given only a call sign. }
     function WorkedBefore(const Callsign: string): Boolean;
     procedure RxWorkedClick(Sender: TObject);
+    procedure RxSubdivisionChanged(Sender: TObject);
     procedure SetLogImportClick(Sender: TObject);
     procedure SetLogExportClick(Sender: TObject);
     procedure UpdateLogInfo;
@@ -1527,7 +1534,7 @@ begin
     と、状態の文が行の外へ出て、一度も見えませんでした**（付録 AW.3）。
     Two rows: the controls above, the replay's state below. **On one row the
     state ran off the end and was never once visible** (appendix AW.3). }
-  FindTools.Height := 58;
+  FindTools.Height := 62;
   StackBelow(FindTools);
   FindTools.Align := alTop;
   FindTools.BevelOuter := bvNone;
@@ -1571,7 +1578,41 @@ begin
   FRxReplayStop.Enabled := False;
   FRxReplayInfo := TLabel.Create(FindTools);
   FRxReplayInfo.Parent := FindTools;
-  FRxReplayInfo.SetBounds(6, 34, 300, 20);
+  { JCC/JCG（要件 FR-E.7）。**交信を記録する釦と同じ塊に置きます。**打ってから
+    記録する、という順序が場所で分かるようにするためです。
+
+    伸びる札（聴き直しの状態）は**この右**に置きます。逆に置くと、札が伸びた
+    ぶんだけ入力欄に重なります。伸びるものは行の終わりに置く。
+
+    JCC/JCG (requirement FR-E.7), in the same group as the button that records
+    the contact, so that the order -- type it, then record -- is legible from
+    where things sit.
+
+    The label that grows (the replay state) goes **to the right of this**: the
+    other way round, it would grow over the input. What grows belongs at the
+    end of the row. }
+  AddLabel(FindTools, 'JCC/JCG', 6, 40);
+  FRxSubdivision := TEdit.Create(FindTools);
+  FRxSubdivision.Parent := FindTools;
+  FRxSubdivision.SetBounds(72, 36, 110, 26);
+  FRxSubdivision.OnChange := @RxSubdivisionChanged;
+  { 打ちながら読みが出ます。**記録を押してから「書けませんでした」と言われる
+    のでは遅い。**
+    The reading appears as it is typed: **being told "could not be written"
+    after pressing record comes too late.** }
+  FRxSubdivisionInfo := AddLabel(FindTools, '', 190, 40);
+  RxSubdivisionChanged(nil);
+
+  { 読みの札（`FRxSubdivisionInfo`）が伸びる先を空けておきます。**実機で
+    重なりました。**組み方の検査は、部品が生まれたときの文字しか見ていない
+    ——起動時の「相手局の市郡区番号（任意）」は短く、打ってから出る
+    「この形では記録に書けません（4・5・6 桁）」は長い（付録 AZ.3）。
+
+    Room is left for the reading label (`FRxSubdivisionInfo`) to grow into.
+    **They overlapped on the real screen.** The layout check only ever sees the
+    text a control was born with: the short one at startup, not the longer one
+    that appears once something is typed (appendix AZ.3). }
+  FRxReplayInfo.SetBounds(560, 40, 300, 20);
   { 幅は文字に任せます（`AutoSize`）。**右端に留める指定をしていたのが誤りで
     した。**左右どちらも留めると幅は引き伸ばされ、置き場所を左へ移したあとも
     最初の置き場所から測った右端を守り続けて、親の外まで伸びていました。
@@ -4870,11 +4911,43 @@ end;
   Records one contact (requirement FR-E.3). The times are UTC: ADIF defines
   QSO_DATE and TIME_ON as UTC, and writing local time would have the logger that
   reads it treat them as a different moment. }
+{ 打たれた JCC/JCG の読みを、その場で出します（要件 FR-E.7）。
+
+  **記録できなかったことを、記録したあとに知らせるのでは遅い。**打っている
+  あいだに「市」「郡」と出れば、桁を間違えたことはその場で分かります。
+
+  Shows what the typed JCC/JCG reads as, as it is typed (requirement FR-E.7).
+
+  **Telling someone after the fact that it could not be recorded comes too
+  late.** With "city" or "gun" appearing as they type, a wrong digit count
+  shows itself there and then. }
+procedure TMainForm.RxSubdivisionChanged(Sender: TObject);
+var
+  Code: string;
+  Kind: TJapanSubdivision;
+begin
+  if (FRxSubdivision = nil) or (FRxSubdivisionInfo = nil) then
+    Exit;
+  if Trim(FRxSubdivision.Text) = '' then
+  begin
+    FRxSubdivisionInfo.Caption := '相手局の市郡区番号（任意）';
+    Exit;
+  end;
+  Kind := ParseJapanSubdivision(FRxSubdivision.Text, Code);
+  if Kind = jsUnknown then
+    FRxSubdivisionInfo.Caption := 'この形では記録に書けません（4・5・6 桁）'
+  else
+    FRxSubdivisionInfo.Caption := JapanSubdivisionCaption(Kind) + ' ' + Code;
+end;
+
 procedure TMainForm.RxWorkedClick(Sender: TObject);
 var
   Item: TAdifRecord;
   Call: string;
   Moment: TDateTime;
+  Code: string;
+  Entered: string;
+  Typed: Boolean;
 begin
   Call := CallsignToLog;
   if Call = '' then
@@ -4885,7 +4958,21 @@ begin
     these two fields as UTC, and left local the logger that reads them would
     treat them as a different moment. }
   Moment := LocalTimeToUniversal(Now);
-  Item := BuildContact(Call, Moment, 'CW', SelectedBand);
+  { 打たれたかどうかと、読み取れたかどうかを分けて控えます。**打っていない
+    のに「書けませんでした」と言えば、打ち忘れたのかと思わせます。**
+    Whether something was typed and whether it read are noted apart: **saying
+    "could not be written" when nothing was typed would suggest it had been
+    forgotten.** }
+  { **欄を消す前に控えます。**案内文の中で欄を読み直すと、消したあとの空文字を
+    読んで「JCC/JCG「」は形が違う」と出ます（実機の画面で出しました）。
+    **Taken before the box is cleared**: read back inside the message, it would
+    be the emptied box that was read, and the line would say the code `「」` was
+    malformed -- as it did on the real screen. }
+  Entered := Trim(FRxSubdivision.Text);
+  Typed := Entered <> '';
+  ParseJapanSubdivision(Entered, Code);
+  Item := BuildContact(Call, Moment, 'CW', SelectedBand,
+    FRxSubdivision.Text);
   if not FLog.Add(Item) then
   begin
     LogDiagnostic('交信記録', FLog.LastError);
@@ -4898,6 +4985,11 @@ begin
     the candidate to log would stay the previous station even as the next one
     starts coming in. }
   FChosenCallsign := '';
+  { 符丁は局ごとに違います。持ち越すと、次の局に前の局の市を付けて記録します。
+    The code differs from station to station; carried over, the next contact
+    would be filed under the previous station's city. }
+  FRxSubdivision.Text := '';
+  RxSubdivisionChanged(nil);
   UpdateLogInfo;
   UpdateRate(True);
   FBandMapAt := 0;
@@ -4912,7 +5004,17 @@ begin
     置き換わります（`DeepCW.Journal` に同じ注記）。
     The separator is quoted, or it is replaced by the environment's own (the
     same note as in `DeepCW.Journal`). }
-  if SelectedBand <> '' then
+  { 打たれていたのに書けなかったなら、そう言います。**黙って落とすと、運用者は
+    記録に入っていると思い込みます。**交信そのものは残す——市郡区が書けない
+    ことより、交信が残らないことのほうが損です（受信は fail-soft）。
+    When something was typed but could not be written, it is said: **dropped in
+    silence, the operator would believe it went in.** The contact itself is
+    kept: losing the contact costs more than losing the subdivision. }
+  if Typed and (Code = '') then
+    SetStatus('', '', Format(
+      '%s との交信を記録しました。JCC/JCG「%s」は形が違うので書いていません。',
+      [Call, Entered]))
+  else if SelectedBand <> '' then
     SetStatus('', '', Format('%s との交信を %s で記録しました（%s UTC）。',
       [Call, FRxBand.Text, FormatDateTime('yyyy-mm-dd hh":"nn', Moment)]))
   else

@@ -3969,6 +3969,129 @@ begin
     Format('(%.1f 秒)', [AUDIO_RETRY_SECONDS]));
 end;
 
+procedure TestJapanSubdivision;
+var
+  Code: string;
+  Item: TAdifRecord;
+  Line: string;
+  Back: TAdifRecords;
+begin
+  WriteLn;
+  WriteLn('JCC/JCG コード（要件 FR-E.7、ADIF 3.1.7 仕様 III.B.22）');
+
+  { 仕様が挙げている例をそのまま通します。**仕様書の例で落ちる実装は、
+    読み違えています。**
+    The specification's own examples are run through: **an implementation that
+    fails them has misread it.** }
+  Check('0101 は市（仕様の例: 札幌市）',
+    (ParseJapanSubdivision('0101', Code) = jsCity) and (Code = '0101'), Code);
+  Check('100101 は市または区（仕様の例: 千代田区）',
+    (ParseJapanSubdivision('100101', Code) = jsCityOrWard) and (Code = '100101'),
+    Code);
+  Check('01001 は郡（仕様の例: 阿寒郡）',
+    (ParseJapanSubdivision('01001', Code) = jsGun) and (Code = '01001'), Code);
+  Check('010101 は市または区（仕様の例: 札幌市中央区）',
+    ParseJapanSubdivision('010101', Code) = jsCityOrWard, Code);
+
+  { 頭の語を許すこと。**電波では「JCC 100101」と送られてきます。**
+    A heading word is allowed: **on the air it arrives as "JCC 100101".** }
+  Check('JCC 100101 が読める',
+    (ParseJapanSubdivision('JCC 100101', Code) = jsCityOrWard) and
+    (Code = '100101'), Code);
+  Check('JCG 01001 が読める',
+    (ParseJapanSubdivision('JCG 01001', Code) = jsGun) and (Code = '01001'),
+    Code);
+  Check('小文字でも読める',
+    ParseJapanSubdivision('jcc 0101', Code) = jsCity, Code);
+  Check('コロン区切りでも読める',
+    ParseJapanSubdivision('JCC:0101', Code) = jsCity, Code);
+
+  { 語と桁数が食い違えば受け付けないこと。**黙って市として書けば、賞の申請で
+    その 1 行だけが通りません。**
+    A word that disagrees with the digit count is refused: **written through in
+    silence it would be the one line that fails an award application.** }
+  Check('JCG なのに 4 桁は受け付けない',
+    ParseJapanSubdivision('JCG 0101', Code) = jsUnknown, Code);
+  Check('JCC なのに 5 桁は受け付けない',
+    ParseJapanSubdivision('JCC 01001', Code) = jsUnknown, Code);
+  Check('食い違ったらコードも返さない',
+    (ParseJapanSubdivision('JCG 0101', Code) = jsUnknown) and (Code = ''),
+    '(' + Code + ')');
+
+  { 桁数が形式に無いものは受け付けないこと（仕様 III.B.22 は 4・5・6 桁のみ）。
+    Digit counts the format does not have are refused (III.B.22 has 4, 5 and 6
+    only). }
+  Check('3 桁は受け付けない', ParseJapanSubdivision('010', Code) = jsUnknown);
+  Check('7 桁は受け付けない', ParseJapanSubdivision('0100101', Code) = jsUnknown);
+
+  { 都道府県は 01〜47（仕様 III.B.12、DXCC 339 の一覧）。**48 という県は
+    ありません。**
+    The prefecture is 01 to 47 (III.B.12): **there is no prefecture 48.** }
+  Check('都道府県 47 は通る（沖縄）',
+    ParseJapanSubdivision('4701', Code) = jsCity, Code);
+  Check('都道府県 48 は通らない',
+    ParseJapanSubdivision('4801', Code) = jsUnknown);
+  Check('都道府県 00 は通らない',
+    ParseJapanSubdivision('0001', Code) = jsUnknown);
+
+  { 数字以外・空白混じりは受け付けないこと。
+    Non-digits and embedded spaces are refused. }
+  Check('空は受け付けない', ParseJapanSubdivision('', Code) = jsUnknown);
+  Check('語だけは受け付けない', ParseJapanSubdivision('JCC', Code) = jsUnknown);
+  Check('英字混じりは受け付けない',
+    ParseJapanSubdivision('10A101', Code) = jsUnknown);
+  Check('中に空白があれば受け付けない',
+    ParseJapanSubdivision('10 0101', Code) = jsUnknown);
+
+  { 読みの言葉が種別ごとに違うこと。**同じ言葉なら、区別した意味がありません。**
+    Each kind reads differently: **the same words would make the distinction
+    pointless.** }
+  Check('市と郡は違う言葉',
+    JapanSubdivisionCaption(jsCity) <> JapanSubdivisionCaption(jsGun));
+  Check('読み取れないものに言葉は無い',
+    JapanSubdivisionCaption(jsUnknown) = '');
+
+  { 記録に入ること。**`CNTY` だけでは読めません**（仕様 I.E）。
+    It reaches the record, and **`CNTY` alone cannot be read** (I.E). }
+  Item := BuildContact('JA1ABC', 45000, 'CW', '40M', 'JCC 100101');
+  Check('CNTY が書かれる', AdifValue(Item, 'CNTY') = '100101',
+    AdifValue(Item, 'CNTY'));
+  Check('依存先の DXCC も書かれる',
+    AdifValue(Item, 'DXCC') = ADIF_DXCC_JAPAN, AdifValue(Item, 'DXCC'));
+  Check('DXCC は日本の 339', ADIF_DXCC_JAPAN = '339', ADIF_DXCC_JAPAN);
+
+  { 読み取れないものは書かないこと。**形式に合わない `CNTY` は、読み手には
+    郡名の書き損じと区別が付きません。**
+    What does not read is not written: **a malformed `CNTY` is
+    indistinguishable to a reader from a mistyped county name.** }
+  { **「欄が無い」と「欄が空」を、行を見て区別します。**`AdifValue` はどちらにも
+    空文字を返すので、値だけを見る検査は `<CNTY:0>` を見逃します（変異検査で
+    実際に見逃しました）。空の `CNTY` は読み手にとって意味のない雑音です。
+    **Absent and empty are told apart by looking at the line**: `AdifValue`
+    answers empty to both, so a check on the value alone misses `<CNTY:0>` -- as
+    it did under mutation. An empty `CNTY` is noise to a reader. }
+  Item := BuildContact('JA1ABC', 45000, 'CW', '40M', '4801');
+  Line := UpperCase(FormatAdifRecord(Item));
+  Check('読み取れなければ CNTY の欄ごと無い', Pos('<CNTY', Line) = 0, Line);
+  Check('読み取れなければ DXCC の欄ごと無い', Pos('<DXCC', Line) = 0, Line);
+  Item := BuildContact('JA1ABC', 45000, 'CW', '40M');
+  Line := UpperCase(FormatAdifRecord(Item));
+  Check('渡さなければ CNTY の欄ごと無い', Pos('<CNTY', Line) = 0, Line);
+
+  { ADIF の 1 行として出て、読み戻せること。**長さの数は文字数です。**
+    It comes out as a line of ADIF and reads back; **the length is the count of
+    characters.** }
+  Item := BuildContact('JA1ABC', 45000, 'CW', '40M', '100101');
+  Line := FormatAdifRecord(Item);
+  Check('ADIF の行に CNTY が出る', Pos('<CNTY:6>100101', Line) > 0, Line);
+  Check('ADIF の行に DXCC が出る', Pos('<DXCC:3>339', Line) > 0, Line);
+  Back := ParseAdif(Line);
+  Check('読み戻せる',
+    (Length(Back) = 1) and (AdifValue(Back[0], 'CNTY') = '100101') and
+    (AdifValue(Back[0], 'DXCC') = '339'),
+    Format('(%d 件)', [Length(Back)]));
+end;
+
 procedure TestCopyLog;
 var
   Path: string;
@@ -4369,6 +4492,7 @@ begin
     TestWaitingForDevice;
     TestNearestBandwidth;
     TestCopyLog;
+    TestJapanSubdivision;
   finally
     Meta.Free;
   end;
