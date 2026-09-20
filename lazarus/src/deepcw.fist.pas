@@ -128,8 +128,54 @@ type
 const
   FIST_ELEMENT_NAMES: array[TElementKind] of string = (
     '短点', '長点', '符号内', '文字間', '語間');
+  { 記録に書く鍵です（要件 NFR-7.6）。**表示名とは別にします。**
+
+    表示名は訳されます。記録に書いたものが訳されると、**日本語で貯めた記録は、
+    英語に切り替えた日から読めなくなります。**鍵は訳さず、綴りも変えません。
+
+    The keys written into records (requirement NFR-7.6). **They are kept apart
+    from the names shown.**
+
+    The names shown are translated. If what was written into a record were
+    translated too, **records gathered in Japanese would stop being readable on
+    the day the operator switched to English.** These keys are never translated
+    and never respelled. }
+  FIST_STANDARD_KEYS: array[TFistStandard] of string = (
+    'standard', 'farnsworth', 'bug', 'own');
+
+  { 画面に出す名前です。**訳される側**なので、記録には書きません。
+    The names shown on screen. **This is the side that gets translated**, so it
+    is never written into a record. }
   FIST_STANDARD_NAMES: array[TFistStandard] of string = (
     '標準', 'ファンズワース', 'バグキー', '自分の過去');
+
+  { 鍵を使う前の記録に書かれていた日本語の名前です。**凍結します。**
+
+    表示名を訳すと `FIST_STANDARD_NAMES` は言語ごとに変わるため、古い記録を
+    読み戻す照合には使えません。**古い記録のためだけに、この綴りをここへ
+    写し取って動かさないようにします。**
+
+    The Japanese names that older records carry, from before the keys existed.
+    **They are frozen here.** Once the names shown are translated,
+    `FIST_STANDARD_NAMES` changes with the language and can no longer be matched
+    against an old file, so the old spellings are copied here and left alone. }
+  FIST_STANDARD_LEGACY_NAMES: array[TFistStandard] of string = (
+    '標準', 'ファンズワース', 'バグキー', '自分の過去');
+
+  { 鍵の種類。**これも記録に書かれます**（`fist.csv` の `key` 欄）。推移の絞り込み
+    もこの値で行うため、**訳すと同じ鍵の記録が 2 つに割れます。**基準と同じく、
+    鍵・表示名・凍結した日本語の 3 つに分けます（要件 NFR-7.6）。
+    The kind of key. **This is written into records too** (the `key` column of
+    `fist.csv`), and the trend is narrowed by the same value, so **translating it
+    would split one hand's history in two.** As with the basis, it is kept as
+    three things: the key, the name shown, and the frozen Japanese. }
+  FIST_KEY_KEYS: array[0..3] of string = (
+    'straight', 'paddle', 'bug', 'keyer');
+  FIST_KEY_NAMES: array[0..3] of string = (
+    '縦振り', 'パドル', 'バグ', 'エレキー');
+  FIST_KEY_LEGACY_NAMES: array[0..3] of string = (
+    '縦振り', 'パドル', 'バグ', 'エレキー');
+
   FIST_SCORE_NAMES: array[0..4] of string = (
     '速度の安定', '短長の明瞭', '区切りの明瞭', '間隔の正確', '写しやすさ');
 
@@ -214,6 +260,44 @@ function FistTargetFor(Standard: TFistStandard; const Own: TFistTarget): TFistTa
 { 測定そのものを基準にします。「自分の過去」を選ぶための材料です。
   Turns a measurement into a basis -- the material for "my own past". }
 function TargetFromMeasurement(const M: TFistMeasurement): TFistTarget;
+
+{ 記録に書かれている基準を読み戻します（要件 NFR-7.6）。
+
+  **鍵と、鍵を使う前の日本語の名前の両方を受け取ります。**古い `fist.csv` は
+  日本語で書かれており、**利用者に書き換えさせるわけにはいきません。**
+
+  読めなければ `False` を返し、`Standard` には触れません。呼ぶ側が何を既定に
+  するかを決めます（受信は fail-soft）。
+
+  Reads a basis back out of a record (requirement NFR-7.6).
+
+  **Both the key and the Japanese name used before the keys existed are
+  accepted**: an older `fist.csv` is written in Japanese, and **the operator
+  cannot be asked to edit it.**
+
+  Returns `False` when neither matches, leaving `Standard` untouched so the
+  caller decides the default (receive is fail-soft). }
+function FistStandardByKey(const Key: string;
+  out Standard: TFistStandard): Boolean;
+
+{ 鍵の種類を、記録に書く綴りへ直します（要件 NFR-7.6）。
+
+  表示名でも、鍵より前の日本語でも、鍵そのものでも、**同じ鍵を返します。**
+  どれでもないものは**そのまま返します**——利用者が自分で書き込んだ鍵の名前を
+  捨てないためです。
+
+  Normalises the kind of key to the spelling written into records (NFR-7.6).
+
+  The name shown, the Japanese used before the keys existed, and the key itself
+  all give **the same key back**. Anything else **comes back unchanged**, so a
+  name the operator put in by hand is not thrown away. }
+function FistKeyToKey(const Text_: string): string;
+
+{ 記録にある鍵の種類を、画面に出す名前にします（要件 NFR-7.6）。
+  知らない綴りはそのまま返します。
+  Turns the kind of key in a record into the name shown (NFR-7.6). A spelling it
+  does not know comes back unchanged. }
+function FistKeyCaption(const Key: string): string;
 
 { 分布のヒストグラム（要件 FR-H.9）。
 
@@ -1080,6 +1164,44 @@ begin
   Result.IntraRatio := M.IntraRatio;
   Result.CharRatio := M.CharRatio;
   Result.WordRatio := M.WordRatio;
+end;
+
+function FistStandardByKey(const Key: string;
+  out Standard: TFistStandard): Boolean;
+var
+  Which: TFistStandard;
+begin
+  Result := False;
+  if Key = '' then
+    Exit;
+  for Which := Low(TFistStandard) to High(TFistStandard) do
+    if (FIST_STANDARD_KEYS[Which] = Key) or
+       (FIST_STANDARD_LEGACY_NAMES[Which] = Key) then
+    begin
+      Standard := Which;
+      Exit(True);
+    end;
+end;
+
+function FistKeyToKey(const Text_: string): string;
+var
+  I: Integer;
+begin
+  Result := Text_;
+  for I := Low(FIST_KEY_KEYS) to High(FIST_KEY_KEYS) do
+    if (FIST_KEY_KEYS[I] = Text_) or (FIST_KEY_NAMES[I] = Text_) or
+       (FIST_KEY_LEGACY_NAMES[I] = Text_) then
+      Exit(FIST_KEY_KEYS[I]);
+end;
+
+function FistKeyCaption(const Key: string): string;
+var
+  I: Integer;
+begin
+  Result := Key;
+  for I := Low(FIST_KEY_KEYS) to High(FIST_KEY_KEYS) do
+    if FIST_KEY_KEYS[I] = Key then
+      Exit(FIST_KEY_NAMES[I]);
 end;
 
 { 分離度を点数にします。**重なりが無くなる手前から、はっきり離れるまでを

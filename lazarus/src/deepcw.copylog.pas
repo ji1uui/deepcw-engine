@@ -46,7 +46,13 @@ uses
 type
   TCopyRecord = record
     When_: TDateTime;   { 記録した日時（地方時） / local time }
-    Kind: string;       { 出題の種類の名前 / the kind of exercise }
+    { 出題の種類の鍵（`EXERCISE_KEYS`）。**表示名ではありません**（要件 NFR-7.6）。
+      鍵を使う前の記録には日本語の名前が入っているため、読み戻しは
+      `ExerciseKindByKey` を通します。
+      The key of the kind of exercise (`EXERCISE_KEYS`), **not the name shown**
+      (requirement NFR-7.6). Records written before the keys existed carry the
+      Japanese name instead, so read it back through `ExerciseKindByKey`. }
+    Kind: string;
     Groups: Integer;
     Wpm: Integer;
     Noise: Double;

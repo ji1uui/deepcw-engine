@@ -221,7 +221,9 @@ begin
     Escape(Stamp(Item.When_)) + ',' +
     Num(Item.Seconds, 1) + ',' +
     Escape(Item.Key) + ',' +
-    Escape(FIST_STANDARD_NAMES[Item.Standard]) + ',' +
+    { 表示名ではなく鍵を書きます（要件 NFR-7.6）。表示名は訳されるためです。
+      The key goes in, not the name shown: the name shown is translated. }
+    Escape(FIST_STANDARD_KEYS[Item.Standard]) + ',' +
     BoolToStr(Item.Reference, '1', '0') + ',' +
     Escape(Item.Text_) + ',' +
     IntToStr(Item.Characters) + ',' +
@@ -284,14 +286,15 @@ var
       Result := Fields[At_];
   end;
 
+  { 鍵でも、鍵を使う前の日本語の名前でも読めます（要件 NFR-7.6）。
+    どちらでもなければ標準として扱い、**その 1 行だけを捨てることはしません。**
+    Reads either the key or the Japanese name used before the keys existed.
+    Neither one matching falls back to the standard basis rather than **throwing
+    the line away.** }
   function Standard_(const Name: string): TFistStandard;
-  var
-    S: TFistStandard;
   begin
-    Result := fsStandard;
-    for S := Low(TFistStandard) to High(TFistStandard) do
-      if FIST_STANDARD_NAMES[S] = Name then
-        Exit(S);
+    if not FistStandardByKey(Name, Result) then
+      Result := fsStandard;
   end;
 
 begin
@@ -320,7 +323,13 @@ begin
       Result[Count] := Default(TFistRecord);
       Result[Count].When_ := ParseStamp(Field('datetime'));
       Result[Count].Seconds := ParseNum(Field('seconds'));
-      Result[Count].Key := Field('key');
+      { 鍵の種類は、読むときに記録用の綴りへ揃えます（要件 NFR-7.6）。
+        **揃えないと、鍵より前の日本語の記録と、鍵で書いた記録が、同じ鍵なのに
+        別々のものとして推移に並びます。**
+        The kind of key is normalised as it is read (NFR-7.6). **Without this, a
+        record written in Japanese and one written with the key would stand in
+        the trend as two different hands.** }
+      Result[Count].Key := FistKeyToKey(Field('key'));
       Result[Count].Standard := Standard_(Field('standard'));
       Result[Count].Reference := Field('reference') = '1';
       Result[Count].Text_ := Field('text');
@@ -355,7 +364,7 @@ end;
 function FistRecordCaption(const Item: TFistRecord): string;
 begin
   Result := Format('%s  %s  総合 %.0f（速度 %.0f / 短長 %.0f / 区切り %.0f / 間隔 %.0f）  %.1f WPM  %s',
-    [FormatDateTime('mm"/"dd" "hh":"nn', Item.When_), Item.Key,
+    [FormatDateTime('mm"/"dd" "hh":"nn', Item.When_), FistKeyCaption(Item.Key),
      Item.Score.Overall, Item.Score.Speed, Item.Score.Clarity,
      Item.Score.Separation, Item.Score.Spacing,
      Item.Measurement.EffectiveWpm, FIST_STANDARD_NAMES[Item.Standard]]);

@@ -1471,9 +1471,13 @@ begin
       Lines.Free;
     end;
     Back := LoadFistRecords(Path);
+    { 鍵の種類は、読むときに記録用の綴りへ揃えます（要件 NFR-7.6、付録 BB）。
+      **`縦振り` と `straight` を別の鍵として推移に並べないため**です。
+      The kind of key is normalised as it is read (NFR-7.6, appendix BB), so
+      that **`縦振り` and `straight` do not stand in the trend as two hands.** }
     Check('列が足りない古い記録も読める',
       (Length(Back) = 1) and (Back[0].Score.Overall = 77) and
-      (Back[0].Key = '縦振り'), '');
+      (Back[0].Key = 'straight'), Back[0].Key);
 
     { 並びが違っても読めること。**これが「名前で引く」ということです。**
       並びを当てにしていれば、ここで別の列を読みます。
@@ -1489,7 +1493,7 @@ begin
     end;
     Back := LoadFistRecords(Path);
     Check('列の並びが違っても読める',
-      (Length(Back) = 1) and (Back[0].Key = 'エレキー') and
+      (Length(Back) = 1) and (Back[0].Key = 'keyer') and
       (Back[0].Score.Overall = 88) and
       (Abs(Back[0].Measurement.EffectiveWpm - 23.5) < 0.01) and
       (Abs(Back[0].Measurement.Ratio - 3.12) < 0.001),
@@ -4092,6 +4096,323 @@ begin
     Format('(%d 件)', [Length(Back)]));
 end;
 
+{ 記録に書く鍵と、画面に出す名前の分離（要件 NFR-7.6）。
+
+  **画面の文言を訳す前に、記録に書かれる文字列を訳されない鍵にしておきます。**
+  訳される文字列をそのまま記録に書いていると、**日本語で貯めた記録は、英語に
+  切り替えた日から読めなくなります。**言語は運用者が変えられるのに、過ぎた
+  記録は書き直せません。
+
+  ここで確かめるのは 4 つです。
+
+    1. 鍵は訳されない綴り（ASCII の小文字）で、重なっていないこと
+    2. 記録に書かれるのは鍵であって、表示名ではないこと
+    3. 鍵で書かれた記録が読み戻せること
+    4. **鍵を使う前の日本語で書かれた記録も、そのまま読み戻せること**
+
+  Keys written into records, kept apart from the names shown (NFR-7.6).
+
+  **Before the words on screen are translated, the strings written into records
+  are made into keys that are never translated.** Writing a translated string
+  into a record would mean **records gathered in Japanese stop being readable on
+  the day the operator switches to English**: the language can be changed, but
+  records already written cannot.
+
+  Four things are checked: that the keys are spelled in lower-case ASCII and do
+  not collide; that a record carries the key and not the name shown; that such a
+  record reads back; and **that a record written in Japanese, before the keys
+  existed, still reads back too.** }
+procedure TestRecordKeys;
+var
+  Standard_, OtherStandard: TFistStandard;
+  Kind, OtherKind: TExerciseKind;
+  Path, Dir: string;
+  Item: TFistRecord;
+  Back: TFistRecords;
+  Copies: TCopyRecords;
+  Copy_: TCopyRecord;
+  Lines: TStringList;
+  Plain, Distinct, Apart: Boolean;
+  I: Integer;
+  Text_: string;
+
+  { ASCII の小文字と数字と下線だけか。**訳す人が手を入れない綴りである**
+    ことの、機械で確かめられる代わりです。
+    Lower-case ASCII, digits and underscore only -- what can be checked by
+    machine in place of "a spelling no translator will touch". }
+  function PlainKey(const Key: string): Boolean;
+  var
+    C: Integer;
+  begin
+    Result := Key <> '';
+    for C := 1 to Length(Key) do
+      if not (Key[C] in ['a'..'z', '0'..'9', '_']) then
+        Exit(False);
+  end;
+
+begin
+  WriteLn;
+  WriteLn('記録の鍵と表示名の分離（要件 NFR-7.6）');
+
+  Plain := True;
+  for Standard_ := Low(TFistStandard) to High(TFistStandard) do
+    if not PlainKey(FIST_STANDARD_KEYS[Standard_]) then
+      Plain := False;
+  for Kind := Low(TExerciseKind) to High(TExerciseKind) do
+    if not PlainKey(EXERCISE_KEYS[Kind]) then
+      Plain := False;
+  Check('鍵は訳されない綴り（ASCII の小文字）', Plain,
+    FIST_STANDARD_KEYS[fsBug] + ' / ' + EXERCISE_KEYS[ekQso]);
+
+  Distinct := True;
+  for Standard_ := Low(TFistStandard) to High(TFistStandard) do
+    for OtherStandard := Low(TFistStandard) to High(TFistStandard) do
+      if (Standard_ <> OtherStandard) and
+         (FIST_STANDARD_KEYS[Standard_] = FIST_STANDARD_KEYS[OtherStandard]) then
+        Distinct := False;
+  for Kind := Low(TExerciseKind) to High(TExerciseKind) do
+    for OtherKind := Low(TExerciseKind) to High(TExerciseKind) do
+      if (Kind <> OtherKind) and (EXERCISE_KEYS[Kind] = EXERCISE_KEYS[OtherKind]) then
+        Distinct := False;
+  Check('鍵は重なっていない', Distinct, '');
+
+  { **表示名と鍵が同じ綴りなら、分離できていません。**1 つの表にまとめ直されて
+    いないことを、ここで見ます。
+    **If the name shown and the key were the same string, nothing is separated.**
+    This catches the two tables being folded back into one. }
+  Apart := True;
+  for Standard_ := Low(TFistStandard) to High(TFistStandard) do
+    if FIST_STANDARD_NAMES[Standard_] = FIST_STANDARD_KEYS[Standard_] then
+      Apart := False;
+  for Kind := Low(TExerciseKind) to High(TExerciseKind) do
+    if EXERCISE_NAMES[Kind] = EXERCISE_KEYS[Kind] then
+      Apart := False;
+  Check('表示名と鍵は別のもの', Apart, '');
+
+  { 凍結した綴り。**訳すときにここへ手が入れば、古い記録が読めなくなります。**
+    The frozen spellings: **a hand laid on these while translating would make
+    the old records unreadable.** }
+  Check('鍵より前の日本語の綴りは凍結されている',
+    (FIST_STANDARD_LEGACY_NAMES[fsStandard] = '標準') and
+    (FIST_STANDARD_LEGACY_NAMES[fsFarnsworth] = 'ファンズワース') and
+    (FIST_STANDARD_LEGACY_NAMES[fsBug] = 'バグキー') and
+    (FIST_STANDARD_LEGACY_NAMES[fsOwn] = '自分の過去') and
+    (EXERCISE_LEGACY_NAMES[ekLetters] = '欧文（A〜Z）') and
+    (EXERCISE_LEGACY_NAMES[ekMixed] = '欧文と数字') and
+    (EXERCISE_LEGACY_NAMES[ekCallsigns] = '呼出符号') and
+    (EXERCISE_LEGACY_NAMES[ekQso] = 'QSO 定型文'), '');
+
+  for Standard_ := Low(TFistStandard) to High(TFistStandard) do
+  begin
+    OtherStandard := fsOwn;
+    Check('鍵から基準が戻る（' + FIST_STANDARD_KEYS[Standard_] + '）',
+      FistStandardByKey(FIST_STANDARD_KEYS[Standard_], OtherStandard) and
+      (OtherStandard = Standard_), '');
+    OtherStandard := fsOwn;
+    Check('鍵より前の名前からも基準が戻る（' +
+      FIST_STANDARD_LEGACY_NAMES[Standard_] + '）',
+      FistStandardByKey(FIST_STANDARD_LEGACY_NAMES[Standard_], OtherStandard) and
+      (OtherStandard = Standard_), '');
+  end;
+
+  for Kind := Low(TExerciseKind) to High(TExerciseKind) do
+  begin
+    OtherKind := ekQso;
+    Check('鍵から出題の種類が戻る（' + EXERCISE_KEYS[Kind] + '）',
+      ExerciseKindByKey(EXERCISE_KEYS[Kind], OtherKind) and (OtherKind = Kind), '');
+    OtherKind := ekQso;
+    Check('鍵より前の名前からも種類が戻る（' + EXERCISE_LEGACY_NAMES[Kind] + '）',
+      ExerciseKindByKey(EXERCISE_LEGACY_NAMES[Kind], OtherKind) and
+      (OtherKind = Kind), '');
+  end;
+
+  { 読めない綴りでは `False` を返し、**渡した変数に触れません。**呼ぶ側が
+    何を既定にするかを決められるためです。
+    An unreadable spelling answers `False` and **leaves the variable alone**, so
+    the caller decides the default. }
+  OtherStandard := fsBug;
+  Check('読めない綴りは False で、変数に触れない',
+    (not FistStandardByKey('Standard', OtherStandard)) and
+    (OtherStandard = fsBug), '');
+  OtherKind := ekCallsigns;
+  Check('読めない出題の綴りも False で、変数に触れない',
+    (not ExerciseKindByKey('letter', OtherKind)) and (OtherKind = ekCallsigns), '');
+  OtherStandard := fsBug;
+  Check('空は読めない', (not FistStandardByKey('', OtherStandard)) and
+    (OtherStandard = fsBug), '');
+  OtherKind := ekCallsigns;
+  Check('空の出題も読めない', (not ExerciseKindByKey('', OtherKind)) and
+    (OtherKind = ekCallsigns), '');
+
+  Dir := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw-keys-' +
+    IntToStr(Random(1000000));
+  Path := IncludeTrailingPathDelimiter(Dir) + 'fist.csv';
+  try
+    Item := Default(TFistRecord);
+    Item.When_ := EncodeDate(2026, 9, 20) + EncodeTime(8, 0, 0, 0);
+    Item.Key := 'パドル';
+    Item.Standard := fsBug;
+    Item.Score.Overall := 80;
+    AppendFistRecord(Path, Item);
+
+    Lines := TStringList.Create;
+    try
+      Lines.LoadFromFile(Path);
+      Text_ := '';
+      for I := 1 to Lines.Count - 1 do
+        Text_ := Text_ + Lines[I];
+      { **書かれているのは鍵。**表示名がそのまま入っていれば、訳した日に
+        意味が変わります。
+        **The key is what is written.** Had the name shown gone in, its meaning
+        would change on the day it was translated. }
+      Check('送信訓練の記録に書かれるのは鍵',
+        Pos(',' + FIST_STANDARD_KEYS[fsBug] + ',', Text_) > 0, Text_);
+      Check('送信訓練の記録に表示名は書かれない',
+        Pos(FIST_STANDARD_NAMES[fsBug], Text_) = 0, Text_);
+    finally
+      Lines.Free;
+    end;
+
+    Back := LoadFistRecords(Path);
+    Check('鍵で書いた記録から基準が戻る',
+      (Length(Back) = 1) and (Back[0].Standard = fsBug),
+      Format('(%d 件)', [Length(Back)]));
+
+    { **鍵より前に貯めた記録。**利用者に書き換えさせるわけにはいきません。
+      **A record gathered before the keys existed**: the operator cannot be
+      asked to edit it. }
+    Lines := TStringList.Create;
+    try
+      Lines.Add('datetime,standard,overall,key');
+      Lines.Add('2026-01-02 03:04:05,バグキー,77,縦振り');
+      Lines.Add('2026-01-03 03:04:05,ファンズワース,71,縦振り');
+      Lines.SaveToFile(Path);
+    finally
+      Lines.Free;
+    end;
+    Back := LoadFistRecords(Path);
+    Check('鍵より前の日本語の記録からも基準が戻る',
+      (Length(Back) = 2) and (Back[0].Standard = fsBug) and
+      (Back[1].Standard = fsFarnsworth),
+      Format('(%d 件)', [Length(Back)]));
+
+    { 読めない綴りでも、その 1 行を捨てません。**採点は残っています。**
+      An unreadable spelling does not cost the line: **the score is still there.** }
+    Lines := TStringList.Create;
+    try
+      Lines.Add('datetime,standard,overall,key');
+      Lines.Add('2026-01-02 03:04:05,なにか,77,縦振り');
+      Lines.SaveToFile(Path);
+    finally
+      Lines.Free;
+    end;
+    Back := LoadFistRecords(Path);
+    Check('読めない基準でも行は捨てない',
+      (Length(Back) = 1) and (Back[0].Score.Overall = 77) and
+      (Back[0].Standard = fsStandard), Format('(%d 件)', [Length(Back)]));
+
+    { 鍵の種類（`fist.csv` の `key` 欄）。**基準と同じ話がもう 1 つある**ことに、
+      突き合わせで気づきました。推移の絞り込みもこの値で行うため、訳すと
+      同じ鍵の記録が 2 つに割れます（付録 BB.3）。
+      The kind of key (the `key` column). **The cross-check turned up a second
+      instance of the same story**: the trend is narrowed by this value too, so
+      translating it would split one hand's history in two. }
+    for I := Low(FIST_KEY_KEYS) to High(FIST_KEY_KEYS) do
+    begin
+      Check('鍵の種類は表示名から鍵に直る（' + FIST_KEY_NAMES[I] + '）',
+        FistKeyToKey(FIST_KEY_NAMES[I]) = FIST_KEY_KEYS[I],
+        FistKeyToKey(FIST_KEY_NAMES[I]));
+      Check('鍵の種類は鍵を渡しても鍵のまま（' + FIST_KEY_KEYS[I] + '）',
+        FistKeyToKey(FIST_KEY_KEYS[I]) = FIST_KEY_KEYS[I], '');
+      Check('鍵の種類は鍵から表示名に戻る（' + FIST_KEY_KEYS[I] + '）',
+        FistKeyCaption(FIST_KEY_KEYS[I]) = FIST_KEY_NAMES[I], '');
+      Check('鍵の種類の鍵は訳されない綴り（' + FIST_KEY_KEYS[I] + '）',
+        PlainKey(FIST_KEY_KEYS[I]) and
+        (FIST_KEY_KEYS[I] <> FIST_KEY_NAMES[I]), FIST_KEY_KEYS[I]);
+    end;
+
+    { **利用者が自分で書いた鍵の名前は捨てません。**一覧に無いものを打つ人は
+      います（`バグ, 横振り` のような書き方も現に記録にあります）。
+      **A name the operator wrote themselves is not thrown away**: people do
+      enter kinds that are not on the list. }
+    Check('知らない鍵の種類はそのまま通す',
+      (FistKeyToKey('バグ, 横振り') = 'バグ, 横振り') and
+      (FistKeyCaption('バグ, 横振り') = 'バグ, 横振り'), '');
+    Check('空の鍵の種類もそのまま', (FistKeyToKey('') = '') and
+      (FistKeyCaption('') = ''), '');
+
+    { **鍵より前の記録と、鍵で書いた記録が、1 つの鍵にまとまること。**推移の
+      絞り込みはここに掛かっています。
+      **A record from before the keys and one written with the key come to one
+      key**, which is what the trend's narrowing rests on. }
+    Path := IncludeTrailingPathDelimiter(Dir) + 'fist.csv';
+    Lines := TStringList.Create;
+    try
+      Lines.Add('datetime,key,overall');
+      Lines.Add('2026-01-02 03:04:05,縦振り,70');
+      Lines.Add('2026-01-03 03:04:05,straight,72');
+      Lines.Add('2026-01-04 03:04:05,パドル,74');
+      Lines.SaveToFile(Path);
+    finally
+      Lines.Free;
+    end;
+    Back := LoadFistRecords(Path);
+    Check('鍵より前の記録と鍵の記録が 1 つの鍵にまとまる',
+      (Length(Back) = 3) and (Length(KeysUsed(Back)) = 2) and
+      (Length(FilterByKey(Back, 'straight')) = 2),
+      Format('(%d 種)', [Length(KeysUsed(Back))]));
+
+    Path := IncludeTrailingPathDelimiter(Dir) + 'copy.csv';
+    Copy_ := Default(TCopyRecord);
+    Copy_.When_ := EncodeDate(2026, 9, 20) + EncodeTime(8, 30, 0, 0);
+    Copy_.Kind := EXERCISE_KEYS[ekCallsigns];
+    Copy_.Truth := 'JA1ABC';
+    Copy_.Typed := 'JA1ABC';
+    Copy_.Percent := 100;
+    AppendCopyRecord(Path, Copy_);
+
+    Lines := TStringList.Create;
+    try
+      Lines.LoadFromFile(Path);
+      Text_ := '';
+      for I := 1 to Lines.Count - 1 do
+        Text_ := Text_ + Lines[I];
+      Check('受信練習の記録に書かれるのは鍵',
+        (Pos(',' + EXERCISE_KEYS[ekCallsigns] + ',', Text_) > 0) and
+        (Pos(EXERCISE_NAMES[ekCallsigns], Text_) = 0), Text_);
+    finally
+      Lines.Free;
+    end;
+
+    Copies := LoadCopyRecords(Path);
+    OtherKind := ekLetters;
+    Check('鍵で書いた練習の記録から種類が戻る',
+      (Length(Copies) = 1) and ExerciseKindByKey(Copies[0].Kind, OtherKind) and
+      (OtherKind = ekCallsigns), '');
+
+    { 鍵より前の `copy.csv`。日本語のままでも種類が読み取れること。
+      A `copy.csv` from before the keys: the kind still reads out of Japanese. }
+    Lines := TStringList.Create;
+    try
+      Lines.Add(COPYLOG_HEADER);
+      Lines.Add('2026-01-02 03:04:05,呼出符号,5,20,0.00,6,6,0,0,0,100.0,JA1ABC,JA1ABC');
+      Lines.SaveToFile(Path);
+    finally
+      Lines.Free;
+    end;
+    Copies := LoadCopyRecords(Path);
+    OtherKind := ekLetters;
+    Check('鍵より前の日本語の練習の記録からも種類が戻る',
+      (Length(Copies) = 1) and ExerciseKindByKey(Copies[0].Kind, OtherKind) and
+      (OtherKind = ekCallsigns),
+      Format('(%d 件)', [Length(Copies)]));
+  finally
+    DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'fist.csv');
+    DeleteFile(IncludeTrailingPathDelimiter(Dir) + 'copy.csv');
+    RemoveDir(Dir);
+  end;
+end;
+
 procedure TestCopyLog;
 var
   Path: string;
@@ -4493,6 +4814,7 @@ begin
     TestNearestBandwidth;
     TestCopyLog;
     TestJapanSubdivision;
+    TestRecordKeys;
   finally
     Meta.Free;
   end;

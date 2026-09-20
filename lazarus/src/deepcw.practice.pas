@@ -40,8 +40,45 @@ type
   );
 
 const
+  { 記録に書く鍵です（要件 NFR-7.6）。**表示名とは別にします。**
+    表示名は訳されます。訳される文字列を記録に書くと、言語を変えた日から
+    古い記録の意味が読み取れなくなります。
+    The keys written into records (requirement NFR-7.6), kept apart from the
+    names shown. The names shown are translated; writing a translated string
+    into a record would make older records unreadable the day the language
+    changes. }
+  EXERCISE_KEYS: array[TExerciseKind] of string = (
+    'letters', 'mixed', 'callsigns', 'qso');
+
+  { 画面に出す名前です。**訳される側**なので、記録には書きません。
+    The names shown on screen. **This is the side that gets translated**, so it
+    is never written into a record. }
   EXERCISE_NAMES: array[TExerciseKind] of string = (
     '欧文（A〜Z）', '欧文と数字', '呼出符号', 'QSO 定型文');
+
+  { 鍵を使う前の記録（`copy.csv`）に書かれていた日本語の名前です。**凍結します。**
+    表示名を訳すと `EXERCISE_NAMES` は言語ごとに変わり、古い記録との照合には
+    使えなくなります。
+    The Japanese names older `copy.csv` records carry, from before the keys
+    existed. **Frozen here**, because once the names shown are translated they
+    change with the language and can no longer be matched against an old file. }
+  EXERCISE_LEGACY_NAMES: array[TExerciseKind] of string = (
+    '欧文（A〜Z）', '欧文と数字', '呼出符号', 'QSO 定型文');
+
+{ 記録に書かれている出題の種類を読み戻します（要件 NFR-7.6）。
+
+  **鍵と、鍵を使う前の日本語の名前の両方を受け取ります。**古い `copy.csv` は
+  日本語で書かれており、利用者に書き換えさせるわけにはいきません。
+
+  読めなければ `False` を返し、`Kind` には触れません。
+
+  Reads the kind of exercise back out of a record (requirement NFR-7.6).
+
+  **Both the key and the Japanese name used before the keys existed are
+  accepted**, because an older `copy.csv` is written in Japanese and the
+  operator cannot be asked to edit it. Returns `False` when neither matches,
+  leaving `Kind` untouched. }
+function ExerciseKindByKey(const Key: string; out Kind: TExerciseKind): Boolean;
 
 { 出題を 1 つ作ります。`Groups` は語（5 文字の群、呼出符号、定型文の 1 行）の数、
   `Seed` は乱数の種です。
@@ -271,6 +308,22 @@ begin
     Reaching here is not expected, but a form known to pass is better than an
     empty string: **an empty exercise is the worse outcome for the operator.** }
   Result := 'JA1ABC';
+end;
+
+function ExerciseKindByKey(const Key: string; out Kind: TExerciseKind): Boolean;
+var
+  Which: TExerciseKind;
+begin
+  Result := False;
+  if Key = '' then
+    Exit;
+  for Which := Low(TExerciseKind) to High(TExerciseKind) do
+    if (EXERCISE_KEYS[Which] = Key) or
+       (EXERCISE_LEGACY_NAMES[Which] = Key) then
+    begin
+      Kind := Which;
+      Exit(True);
+    end;
 end;
 
 function MakeExercise(Kind: TExerciseKind; Groups, Seed: Integer): string;

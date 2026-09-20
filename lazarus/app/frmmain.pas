@@ -2098,7 +2098,9 @@ begin
     fail-soft). }
   Item := Default(TCopyRecord);
   Item.When_ := Now;
-  Item.Kind := EXERCISE_NAMES[PracticeKind];
+  { 記録には鍵を書きます。表示名は訳されるためです（要件 NFR-7.6）。
+    The key is what is recorded: the name shown is translated (NFR-7.6). }
+  Item.Kind := EXERCISE_KEYS[PracticeKind];
   Item.Groups := FPrGroups.Value;
   Item.Wpm := FPrWpm.Value;
   Item.Noise := FPrNoise.Position / 100;
@@ -2209,6 +2211,7 @@ var
   Kind: TExerciseKind;
   Standard_: TFistStandard;
   Item: TFistItem;
+  KeyKind: Integer;
   Bottom: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
@@ -2239,10 +2242,12 @@ begin
   FFtKey.Parent := Options;
   FFtKey.SetBounds(330, 28, 150, 28);
   FFtKey.Style := csDropDownList;
-  FFtKey.Items.Add('縦振り');
-  FFtKey.Items.Add('パドル');
-  FFtKey.Items.Add('バグ');
-  FFtKey.Items.Add('エレキー');
+  { 並びは `FIST_KEY_KEYS` と 1 対 1 です。**記録には鍵を書き、画面には名前を
+    出します**（要件 NFR-7.6）。
+    The order matches `FIST_KEY_KEYS` one for one: **the key is what is
+    recorded, the name is what is shown** (NFR-7.6). }
+  for KeyKind := Low(FIST_KEY_NAMES) to High(FIST_KEY_NAMES) do
+    FFtKey.Items.Add(FIST_KEY_NAMES[KeyKind]);
   FFtKey.ItemIndex := 0;
   FFtKey.OnChange := @FtOptionsChanged;
 
@@ -2685,8 +2690,10 @@ begin
   Item := Default(TFistRecord);
   Item.When_ := Now;
   Item.Seconds := FFtMeasured.Seconds;
-  if FFtKey.ItemIndex >= 0 then
-    Item.Key := FFtKey.Items[FFtKey.ItemIndex];
+  if (FFtKey.ItemIndex >= 0) and (FFtKey.ItemIndex <= High(FIST_KEY_KEYS)) then
+    { 記録に書くのは鍵です。画面の名前は訳されます（要件 NFR-7.6）。
+      The key is what goes into the record: the name shown is translated. }
+    Item.Key := FIST_KEY_KEYS[FFtKey.ItemIndex];
   if FFtFree.Checked then
     Item.Text_ := ''
   else
@@ -2779,8 +2786,10 @@ begin
     in the records could end up not being offered.** Whatever was chosen is
     chosen again when it is still there. }
   Kept := FFtTrendKeyWanted;
+  { 覚えておくのは鍵のほうです（要件 NFR-7.6）。
+    What is remembered is the key, not the name shown (NFR-7.6). }
   if FFtTrendKey.ItemIndex > 0 then
-    Kept := FFtTrendKey.Items[FFtTrendKey.ItemIndex];
+    Kept := FistKeyToKey(FFtTrendKey.Items[FFtTrendKey.ItemIndex]);
   FFtTrendKeyWanted := '';
   Keys := KeysUsed(Items);
   FFtTrendKey.Items.BeginUpdate;
@@ -2788,15 +2797,15 @@ begin
     FFtTrendKey.Items.Clear;
     FFtTrendKey.Items.Add('すべて');
     for I := 0 to High(Keys) do
-      FFtTrendKey.Items.Add(Keys[I]);
+      FFtTrendKey.Items.Add(FistKeyCaption(Keys[I]));
   finally
     FFtTrendKey.Items.EndUpdate;
   end;
-  FFtTrendKey.ItemIndex := Max(0, FFtTrendKey.Items.IndexOf(Kept));
+  FFtTrendKey.ItemIndex := Max(0, FFtTrendKey.Items.IndexOf(FistKeyCaption(Kept)));
 
   Key := '';
   if FFtTrendKey.ItemIndex > 0 then
-    Key := FFtTrendKey.Items[FFtTrendKey.ItemIndex];
+    Key := FistKeyToKey(FFtTrendKey.Items[FFtTrendKey.ItemIndex]);
   Narrowed := FilterByKey(Items, Key);
 
   Shown := [fiOverall];
@@ -3189,7 +3198,9 @@ begin
       The key is remembered **by name**: by number, the day the records gain a
       new key would show the trend of a different one -- the same reasoning as
       remembering the input device. }
-    FFtTrendKeyWanted := Ini.ReadString('fist', 'trend_key', '');
+    { 鍵より前の設定には日本語が入っています。読むときに揃えます。
+      A settings file from before the keys holds Japanese; it is normalised here. }
+    FFtTrendKeyWanted := FistKeyToKey(Ini.ReadString('fist', 'trend_key', ''));
     FFtBottomKind.ItemIndex := ClampInt(Ini.ReadInteger('fist', 'bottom', 0),
       0, FFtBottomKind.Items.Count - 1);
     FtBottomChanged(nil);
@@ -3289,8 +3300,10 @@ begin
       Ini.WriteInteger('fist', 'bottom', FFtBottomKind.ItemIndex);
       Ini.WriteInteger('fist', 'trend_item', FFtTrendItem.ItemIndex);
       if FFtTrendKey.ItemIndex > 0 then
+        { 設定にも鍵を書きます（要件 NFR-7.6）。
+          The key goes into the settings too (NFR-7.6). }
         Ini.WriteString('fist', 'trend_key',
-          FFtTrendKey.Items[FFtTrendKey.ItemIndex])
+          FistKeyToKey(FFtTrendKey.Items[FFtTrendKey.ItemIndex]))
       else
         Ini.WriteString('fist', 'trend_key', '');
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
