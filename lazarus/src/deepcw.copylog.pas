@@ -430,11 +430,11 @@ begin
   for I := 0 to High(List) do
   begin
     if List[I].Typed = #0 then
-      One := Format('%s（落とし %d 回）', [List[I].Truth, List[I].Count])
+      One := Format('%0:s（落とし %1:d 回）', [List[I].Truth, List[I].Count])
     else if List[I].Truth = #0 then
-      One := Format('%s（足し %d 回）', [List[I].Typed, List[I].Count])
+      One := Format('%0:s（足し %1:d 回）', [List[I].Typed, List[I].Count])
     else
-      One := Format('%s → %s（%d 回）',
+      One := Format('%0:s → %1:s（%2:d 回）',
         [List[I].Truth, List[I].Typed, List[I].Count]);
     if Result = '' then
       Result := One

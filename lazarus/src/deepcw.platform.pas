@@ -209,7 +209,7 @@ begin
     repeat
       if (Search.Attr and faDirectory) <> 0 then
         Continue;
-      Result.Add(Format('%s（%d バイト）', [Search.Name, Search.Size]));
+      Result.Add(Format('%0:s（%1:d バイト）', [Search.Name, Search.Size]));
     until FindNext(Search) <> 0;
   finally
     FindClose(Search);

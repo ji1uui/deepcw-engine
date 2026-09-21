@@ -553,7 +553,7 @@ var
   begin
     if Actual <> Expected then
     begin
-      Lines.Add(Format('  NG   %-28s 実際 %d / C の規則では %d',
+      Lines.Add(Format('  NG   %0:-28s 実際 %1:d / C の規則では %2:d',
         [What, Actual, Expected]));
       Matches := False;
     end
@@ -566,7 +566,7 @@ begin
   PointerAlign := SizeOf(Pointer);
   Lines := TStringList.Create;
   try
-    Lines.Add(Format('ポインタ %d / culong %d / cdouble %d / cint %d バイト',
+    Lines.Add(Format('ポインタ %0:d / culong %1:d / cdouble %2:d / cint %3:d バイト',
       [SizeOf(Pointer), SizeOf(culong), SizeOf(cdouble), SizeOf(cint)]));
 
     Lines.Add('PaDeviceInfo');

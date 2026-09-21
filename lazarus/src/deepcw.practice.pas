@@ -551,7 +551,7 @@ begin
     if Result <> '' then
       Result := Result + '、';
     if Best > 1 then
-      Result := Result + Format('%s（%d 回）', [Keys[BestAt], Best])
+      Result := Result + Format('%0:s（%1:d 回）', [Keys[BestAt], Best])
     else
       Result := Result + Keys[BestAt];
     Counts[BestAt] := 0;

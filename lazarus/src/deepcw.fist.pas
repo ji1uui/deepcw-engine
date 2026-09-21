@@ -1031,7 +1031,7 @@ begin
       step, a dit would be measured as a dah and the result scored as if it
       meant something. }
     Result.Note := Format(
-      '課題文は符号 %d 個ですが、送られたのは %d 個です。' +
+      '課題文は符号 %0:d 個ですが、送られたのは %1:d 個です。' +
       '抜けたか、くっついたようです。', [Tones, Length(Spans)]);
     Exit;
   end;

@@ -363,7 +363,7 @@ end;
 
 function FistRecordCaption(const Item: TFistRecord): string;
 begin
-  Result := Format('%s  %s  総合 %.0f（速度 %.0f / 短長 %.0f / 区切り %.0f / 間隔 %.0f）  %.1f WPM  %s',
+  Result := Format('%0:s  %1:s  総合 %2:.0f（速度 %3:.0f / 短長 %4:.0f / 区切り %5:.0f / 間隔 %6:.0f）  %7:.1f WPM  %8:s',
     [FormatDateTime('mm"/"dd" "hh":"nn', Item.When_), FistKeyCaption(Item.Key),
      Item.Score.Overall, Item.Score.Speed, Item.Score.Clarity,
      Item.Score.Separation, Item.Score.Spacing,

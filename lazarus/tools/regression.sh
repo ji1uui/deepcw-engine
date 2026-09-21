@@ -105,6 +105,12 @@ fi
 # it is simply left untranslated**, and that does not show until the screen is
 # opened.
 step "訳の一覧がソースと合っている" ./tools/po_sync_test.sh
+# 差し込みが 2 つ以上の文言に番号が付いていること（要件 NFR-7.6）。
+# **英語は日本語と語順が違う。**番号が無ければ訳す人が引数を並べ替えられない。
+# Two or more placeholders carry indices (requirement NFR-7.6). **English does
+# not keep Japanese word order**, and without indices the arguments cannot be
+# reordered.
+step "文言の差し込みが並べ替えられる" ./tools/format_index_test.sh
 # 稼働中に言語を切り替えて、戻れること（要件 NFR-7.6）。
 # **日本語へ戻す道は、英語へ行く道と違う。**取り違えると一度英語にしたら戻れず、
 # 画面を開いて押してみるまで分からない。配布物と同じ並びで押す。

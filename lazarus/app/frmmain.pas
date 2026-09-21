@@ -2168,7 +2168,7 @@ begin
     FPrHistory.Caption := '';
     Exit;
   end;
-  Line := Format('これまで %d 回 ／ 直近 10 回の平均 %.0f%%',
+  Line := Format('これまで %0:d 回 ／ 直近 10 回の平均 %1:.0f%%',
     [Length(Items), AveragePercent(Items, 10)]);
   if Length(Items) >= COPYLOG_MIN_SESSIONS then
   begin
@@ -2217,7 +2217,7 @@ begin
       (lesson 10.3). }
     FPrRevealTimes := RevealTimes(FPrText, Timing, Options.LeadInSeconds,
       FPrDelaySeconds.Value);
-    FPrSummary.Caption := Format('%d 文字 / %.1f 秒',
+    FPrSummary.Caption := Format('%0:d 文字 / %1:.1f 秒',
       [Length(FPrText), Length(FPrSamples) / FTxSampleRate]);
   except
     on E: Exception do
@@ -2343,7 +2343,7 @@ begin
   Score := ScoreCopy(FPrText, FPrCopy.Text);
   FPrAnswer.Text := FPrText;
   FPrResult.Caption := Format(
-    '正答率 %.0f%%（%d 文字中 %d 文字）／ 違い %d ・ 落とし %d ・ 足し %d',
+    '正答率 %0:.0f%%（%1:d 文字中 %2:d 文字）／ 違い %3:d ・ 落とし %4:d ・ 足し %5:d',
     [Score.Percent, Score.Total, Score.Same, Score.Wrong, Score.Missed,
      Score.Extra]);
   Mistakes := MistakeSummary(Score);
@@ -2927,22 +2927,22 @@ begin
 
   Lines := TStringList.Create;
   try
-    Lines.Add(Format('総合 %.0f 点（%s の基準）', [Score.Overall,
+    Lines.Add(Format('総合 %0:.0f 点（%1:s の基準）', [Score.Overall,
       FIST_STANDARD_NAMES[FistBasis]]));
-    Lines.Add(Format('  速度の安定 %3.0f ／ 短長の明瞭 %3.0f ／ 区切りの明瞭 %3.0f ／ 間隔の正確 %3.0f',
+    Lines.Add(Format('  速度の安定 %0:3.0f ／ 短長の明瞭 %1:3.0f ／ 区切りの明瞭 %2:3.0f ／ 間隔の正確 %3:3.0f',
       [Score.Speed, Score.Clarity, Score.Separation, Score.Spacing]));
     if Score.HasCopyability then
-      Lines.Add(Format('  写しやすさ %3.0f（文字誤り率 %.1f%%）',
+      Lines.Add(Format('  写しやすさ %0:3.0f（文字誤り率 %1:.1f%%）',
         [Score.Copyability, 100 * Cer]))
     else
       Lines.Add('  写しやすさ —（課題文と読み合わせていません）');
     Lines.Add('');
-    Lines.Add(Format('実効 %.1f WPM ／ 短点 %.1f ms（ばらつき %.1f%%）／ 長短比 %.2f',
+    Lines.Add(Format('実効 %0:.1f WPM ／ 短点 %1:.1f ms（ばらつき %2:.1f%%）／ 長短比 %3:.2f',
       [FFtMeasured.EffectiveWpm, FFtMeasured.DitSeconds * 1000,
        100 * FFtMeasured.Stats[ekDit].Cv, FFtMeasured.Ratio]));
-    Lines.Add(Format('間隔の比: 符号内 %.2f ／ 文字間 %.2f ／ 語間 %.2f',
+    Lines.Add(Format('間隔の比: 符号内 %0:.2f ／ 文字間 %1:.2f ／ 語間 %2:.2f',
       [FFtMeasured.IntraRatio, FFtMeasured.CharRatio, FFtMeasured.WordRatio]));
-    Lines.Add(Format('分離度: 短点と長点 %.1f ／ 符号内と文字間 %.1f ／ 速度の変化 %.0f%%',
+    Lines.Add(Format('分離度: 短点と長点 %0:.1f ／ 符号内と文字間 %1:.1f ／ 速度の変化 %2:.0f%%',
       [FFtMeasured.ToneSeparation, FFtMeasured.GapSeparation,
        100 * FFtMeasured.Drift]));
     if FFtMeasured.Reference then
@@ -3016,7 +3016,7 @@ begin
       for I := 0 to High(Records_) do
         if Records_[I].Score.Overall > Best then
           Best := Records_[I].Score.Overall;
-      Lines.Add(Format('%d 件 ／ 自己ベスト 総合 %.0f 点 ／ %s',
+      Lines.Add(Format('%0:d 件 ／ 自己ベスト 総合 %1:.0f 点 ／ %2:s',
         [Length(Records_), Best, FistLogFileName]));
       Shown := 0;
       I := High(Records_);
@@ -3761,7 +3761,7 @@ begin
           begin
             Inc(Wrong);
             if Wrong <= 10 then
-              Result.Add(Format('切り替わっていない: 「%s」は「%s」になるはず',
+              Result.Add(Format('切り替わっていない: 「%0:s」は「%1:s」になるはず',
                 [Before[I], Pairs[J].Target]));
             Break;
           end;
@@ -3774,12 +3774,12 @@ begin
       begin
         Inc(Wrong);
         if Wrong <= 10 then
-          Result.Add(Format('戻っていない: 「%s」→「%s」', [Before[I],
+          Result.Add(Format('戻っていない: 「%0:s」→「%1:s」', [Before[I],
             Back[Min(I, Back.Count - 1)]]));
       end;
     end;
 
-    Result.Insert(0, Format('控え %d 件 / 英語で変わった %d 件 / 戻らなかった %d 件 / 切替 %d ms',
+    Result.Insert(0, Format('控え %0:d 件 / 英語で変わった %1:d 件 / 戻らなかった %2:d 件 / 切替 %3:d ms',
       [UiText.TextCount, Moved, Wrong, Spent]));
     { **1 つも変わらないのは、切替が効いていないということです。**訳が
       見つからなくても静かに通ってしまうので、ここで落とします。
@@ -3826,18 +3826,18 @@ begin
       Lines.Add('エンジン: 読み込み済み');
       Lines.Add(Format('ONNX Runtime: %s (%s)', [OnnxRuntimeVersion, OnnxRuntimeLibraryPath]));
       Lines.Add(Format('サンプリング周波数: %d Hz', [FDecoder.Metadata.SampleRate]));
-      Lines.Add(Format('FFT 長 / ホップ長: %d / %d',
+      Lines.Add(Format('FFT 長 / ホップ長: %0:d / %1:d',
         [FDecoder.Metadata.FFTLength, FDecoder.Metadata.HopLength]));
-      Lines.Add(Format('周波数帯: %.0f - %.0f Hz (%d ビン)',
+      Lines.Add(Format('周波数帯: %0:.0f - %1:.0f Hz (%2:d ビン)',
         [FDecoder.Metadata.MinFreqHz, FDecoder.Metadata.MaxFreqHz,
          FDecoder.Metadata.FrequencyBins]));
-      Lines.Add(Format('入力 / 出力: %s / %s',
+      Lines.Add(Format('入力 / 出力: %0:s / %1:s',
         [FDecoder.Metadata.InputName, FDecoder.Metadata.OutputName]));
       Alphabet := '';
       for I := 0 to FDecoder.Metadata.CharCount - 1 do
         Alphabet := Alphabet + FDecoder.Metadata.Chars[I];
-      Lines.Add(Format('文字集合 (%d): %s', [FDecoder.Metadata.CharCount, Alphabet]));
-      Lines.Add(Format('音声長の制約: %.0f - %.0f 秒（長い録音は自動的に分割）',
+      Lines.Add(Format('文字集合 (%0:d): %1:s', [FDecoder.Metadata.CharCount, Alphabet]));
+      Lines.Add(Format('音声長の制約: %0:.0f - %1:.0f 秒（長い録音は自動的に分割）',
         [DEEPCW_MIN_SECONDS, DEEPCW_MAX_SECONDS]));
     end
     else
@@ -3864,7 +3864,7 @@ begin
         The real-time ratio and the interval now kept (FR-G.4, FR-G.3): **the
         two numbers that explain what is happening on a slow machine.** }
       if FStream.RealTimeRatio > 0 then
-        Lines.Add(Format('解析 1 回: %.2f 秒 / 実時間比 %.0f 倍 / 推論間隔 %.2f 秒',
+        Lines.Add(Format('解析 1 回: %0:.2f 秒 / 実時間比 %1:.0f 倍 / 推論間隔 %2:.2f 秒',
           [FStream.StepCostSeconds, FStream.RealTimeRatio,
            FStream.PaceSeconds]));
       { 追いつけずに捨てた分は、黙って消えてはいけません。読めなかった理由が
@@ -3881,7 +3881,7 @@ begin
       else if FJournal.FileName = '' then
         Lines.Add('受信テキストの記録: ' + JournalDirectory + '（まだ書いていません）')
       else
-        Lines.Add(Format('受信テキストの記録: %s（%d 行 / %d バイト）',
+        Lines.Add(Format('受信テキストの記録: %0:s（%1:d 行 / %2:d バイト）',
           [FJournal.FileName, FJournal.LinesWritten, FJournal.BytesWritten]));
       if FJournal.LastError <> '' then
         Lines.Add('  ' + FJournal.LastError);
@@ -3905,7 +3905,7 @@ begin
           '（配布物ではなく、ビルドした木から動かしています）')
       else
       begin
-        Lines.Add(Format('同梱の許諾条項: %d 件（%s）',
+        Lines.Add(Format('同梱の許諾条項: %0:d 件（%1:s）',
           [Licences.Count, LicenceDirectory]));
         for I := 0 to Licences.Count - 1 do
           Lines.Add('  ' + Licences[I]);
@@ -3916,7 +3916,7 @@ begin
 
     if FLog <> nil then
     begin
-      Lines.Add(Format('交信記録: %d 件（%s）', [FLog.Count, FLog.FileName]));
+      Lines.Add(Format('交信記録: %0:d 件（%1:s）', [FLog.Count, FLog.FileName]));
       if FLog.LastError <> '' then
         Lines.Add('  ' + FLog.LastError);
     end;
@@ -3927,14 +3927,14 @@ begin
         How much audio is held and what it costs in memory. It grows with the
         retention, so the real figure has to be visible after the choice rather
         than only described before it (requirement FR-G.3). }
-      Lines.Add(Format('聴き直せる音声: %.0f 秒 / 保持の上限 %.0f 分（約 %.0f MB）',
+      Lines.Add(Format('聴き直せる音声: %0:.0f 秒 / 保持の上限 %1:.0f 分（約 %2:.0f MB）',
         [FHistory.RetainedSeconds, FHistory.RetentionSeconds / 60,
          FHistory.RetentionSeconds * FHistory.SampleRate * SizeOf(Single) / (1024 * 1024)]));
     if Length(FDevices) = 0 then
       Lines.Add('入力装置: 見つかりません')
     else
       for Device := 0 to High(FDevices) do
-        Lines.Add(Format('入力装置 %d: %s [%s] %d ch / %.0f Hz%s',
+        Lines.Add(Format('入力装置 %0:d: %1:s [%2:s] %3:d ch / %4:.0f Hz%5:s',
           [FDevices[Device].Index, FDevices[Device].Name, FDevices[Device].HostApi,
            FDevices[Device].MaxInputChannels, FDevices[Device].DefaultSampleRate,
            BoolToStr(FDevices[Device].IsDefault, '  ← 既定', '')]));
@@ -4234,7 +4234,7 @@ begin
   try
     FTxSegments := TextToSegments(FTxText.Text, Timing);
     FTxSamples := SegmentsToPCM(FTxSegments, Options);
-    FTxSummary.Caption := Format('%d 文字 / %.1f 秒',
+    FTxSummary.Caption := Format('%0:d 文字 / %1:.1f 秒',
       [Length(FTxNormalized), Length(FTxSamples) / FTxSampleRate]);
   except
     on E: Exception do
@@ -5016,7 +5016,7 @@ begin
     FSetPrefixesInfo.Caption := '読めませんでした。ファイルを確かめてください';
     Exit;
   end;
-  FSetPrefixesInfo.Caption := Format('%d 件 / %s',
+  FSetPrefixesInfo.Caption := Format('%0:d 件 / %1:s',
     [AllocatedPrefixCount, FPrefixes.Name]);
   if FPrefixes.Skipped > 0 then
     FSetPrefixesInfo.Caption := FSetPrefixesInfo.Caption +
@@ -5130,7 +5130,7 @@ begin
     ファイルが「読めた」ように見えます。
     **The lines that could not be read are said too**: a count alone would let a
     file half of which was skipped look as though it had been read. }
-  FSetRosterInfo.Caption := Format('%d 件 / %s', [FRoster.Count, FRoster.Name]);
+  FSetRosterInfo.Caption := Format('%0:d 件 / %1:s', [FRoster.Count, FRoster.Name]);
   if FRoster.Skipped > 0 then
     FSetRosterInfo.Caption := FSetRosterInfo.Caption +
       Format('（符号として読めなかった行 %d）', [FRoster.Skipped]);
@@ -5303,7 +5303,7 @@ begin
   FRateAt := Now;
   Hour := FLog.CountSince(IncHour(LocalTimeToUniversal(Now), -1));
   Total := FLog.Count;
-  FRxRate.Caption := Format('直近 1 時間: %d 局 ／ 記録全体: %d 局',
+  FRxRate.Caption := Format('直近 1 時間: %0:d 局 ／ 記録全体: %1:d 局',
     [Hour, Total]);
 end;
 
@@ -5376,12 +5376,12 @@ begin
       The date comes from the same band: answering the count band by band while
       taking the date from every band would offer, as the evidence of a duplicate,
       a date on which that band was not worked. }
-    FRxLogInfo.Caption := Format('%s%s（%s に交信済み）',
+    FRxLogInfo.Caption := Format('%0:s%1:s（%2:s に交信済み）',
       [Call, Note, FLog.LastWorkedOn(Call, SelectedBand)])
   else
     FRxLogInfo.Caption := Call + Note;
   if FSetLogInfo <> nil then
-    FSetLogInfo.Caption := Format('%d 件 / %s', [FLog.Count, FLog.FileName]);
+    FSetLogInfo.Caption := Format('%0:d 件 / %1:s', [FLog.Count, FLog.FileName]);
 end;
 
 { 交信を 1 件記録します（要件 FR-E.3）。時刻は協定世界時で持ちます。ADIF の
@@ -5492,13 +5492,13 @@ begin
     kept: losing the contact costs more than losing the subdivision. }
   if Typed and (Code = '') then
     SetStatus('', '', Format(
-      '%s との交信を記録しました。JCC/JCG「%s」は形が違うので書いていません。',
+      '%0:s との交信を記録しました。JCC/JCG「%1:s」は形が違うので書いていません。',
       [Call, Entered]))
   else if SelectedBand <> '' then
-    SetStatus('', '', Format('%s との交信を %s で記録しました（%s UTC）。',
+    SetStatus('', '', Format('%0:s との交信を %1:s で記録しました（%2:s UTC）。',
       [Call, FRxBand.Text, FormatDateTime('yyyy-mm-dd hh":"nn', Moment)]))
   else
-    SetStatus('', '', Format('%s との交信を記録しました（%s UTC）。',
+    SetStatus('', '', Format('%0:s との交信を記録しました（%1:s UTC）。',
       [Call, FormatDateTime('yyyy-mm-dd hh":"nn', Moment)]));
 end;
 
@@ -5527,7 +5527,7 @@ begin
     { 飛ばした件数も言います。**黙って減ると、取り込めたのかどうかが分かりません。**
       The number skipped is said too: **silence about it leaves the operator
       unable to tell whether the import worked.** }
-    SetStatus('', '', Format('%d 件を取り込みました（既にある %d 件は飛ばしました）。',
+    SetStatus('', '', Format('%0:d 件を取り込みました（既にある %1:d 件は飛ばしました）。',
       [Added, Skipped]));
   finally
     Dialog.Free;
@@ -5552,7 +5552,7 @@ begin
       SetStatus('', '', StatusLine(FLog.LastError));
       Exit;
     end;
-    SetStatus('', '', Format('%d 件を %s へ書き出しました。',
+    SetStatus('', '', Format('%0:d 件を %1:s へ書き出しました。',
       [FLog.Count, Dialog.FileName]));
   finally
     Dialog.Free;
@@ -5733,7 +5733,7 @@ begin
   if FStream <> nil then
     FStream.TuneHz := FRxWaterfall.TuneHz;
   UpdateTuneInfo;
-  SetStatus('', '', Format('%.0f Hz の局に同調し、交信モードへ移りました。%s%s',
+  SetStatus('', '', Format('%0:.0f Hz の局に同調し、交信モードへ移りました。%1:s%2:s',
     [FRxWaterfall.TuneHz, Picked, Evidence]));
 end;
 
@@ -5778,7 +5778,7 @@ begin
       Dropping a malformed call sign silently leaves no way to tell why nothing is
       ever announced. }
     FRxWatchInfo.Caption := Format(
-      '%d 局を待っています（%d 件は呼出符号の形になっていません）',
+      '%0:d 局を待っています（%1:d 件は呼出符号の形になっていません）',
       [Kept, Given - Kept])
   else
     FRxWatchInfo.Caption := Format('%d 局を待っています', [Kept]);
@@ -5808,7 +5808,7 @@ begin
     begin
       if Found <> '' then
         Found := Found + '、';
-      Found := Found + Format('%s（%.0f Hz）',
+      Found := Found + Format('%0:s（%1:.0f Hz）',
         [FBandEntries[I].Callsign, FBandEntries[I].Hz]);
     end;
   if Found <> '' then
@@ -5916,7 +5916,7 @@ begin
       ran or whether there is nothing there. }
     FRxFindInfo.Caption := '見つかりません'
   else
-    FRxFindInfo.Caption := Format('%d / %d 件',
+    FRxFindInfo.Caption := Format('%0:d / %1:d 件',
       [FRxTranscript.CurrentMatch, FRxTranscript.MatchCount]);
 end;
 
@@ -6040,7 +6040,7 @@ begin
       Dropped audio is not swallowed in silence (lesson 10.1): **a recording with
       a hole in it must not be handed over wearing the face of a whole one.** }
     Lost := Format('（%.1f 秒を取りこぼしました）', [Status.Lost / FCaptureRate]);
-  SetStatus('', '', Format('%s録音を終えました: %s（%s）%s',
+  SetStatus('', '', Format('%0:s録音を終えました: %1:s（%2:s）%3:s',
     [Why, Path, SecondsAsClock(Status.Seconds), Lost]));
 end;
 
@@ -6067,7 +6067,7 @@ begin
     StopRecording(Status.Stopped);
     Exit;
   end;
-  SetRecordStatus(Format('録音 %s（%.1f MB）',
+  SetRecordStatus(Format('録音 %0:s（%1:.1f MB）',
     [SecondsAsClock(Status.Seconds), Status.Bytes / (1000 * 1000)]));
 end;
 
@@ -6080,7 +6080,7 @@ begin
   if FSetRecordInfo = nil then
     Exit;
   FSetRecordInfo.Caption := Format(
-    '受信と同時に %s へ書きます。上限は %.0f 時間で、そこで止めて知らせます。',
+    '受信と同時に %0:s へ書きます。上限は %1:.0f 時間で、そこで止めて知らせます。',
     [RecordingDirectory, RECORD_MAX_SECONDS / 3600]);
 end;
 
@@ -6202,7 +6202,7 @@ begin
     FRxReplayInfo.Caption := '文字を押すと、その音を聴き直せます。'
   else
     FRxReplayInfo.Caption := Format(
-      '文字を押すと、その音を聴き直せます（直近 %d 分 %d 秒を保管中）。',
+      '文字を押すと、その音を聴き直せます（直近 %0:d 分 %1:d 秒を保管中）。',
       [Trunc(Held) div 60, Trunc(Held) mod 60]);
 end;
 
@@ -6333,7 +6333,7 @@ begin
     Exit;
   end;
   FRxReplayStop.Enabled := True;
-  FRxReplayInfo.Caption := Format('%s：受信開始から %d 分 %d 秒の音（%.1f 秒）',
+  FRxReplayInfo.Caption := Format('%0:s：受信開始から %1:d 分 %2:d 秒の音（%3:.1f 秒）',
     [Trim(DecodedText(Copy(FLiveChars, First, Last - First + 1))),
      Trunc(GotFrom) div 60, Trunc(GotFrom) mod 60, GotTo - GotFrom]);
 end;
@@ -6454,7 +6454,7 @@ begin
     is answered well enough by how long it was. }
   if Elapsed > 1000 then
     LogDiagnostic('語の読み直し',
-      Format('%d ms (target 1000 ms): %d 文字', [Elapsed, Length(FRecheckSent)]));
+      Format('%0:d ms (target 1000 ms): %1:d 文字', [Elapsed, Length(FRecheckSent)]));
   { 出す場所は状態表示の案内欄です。**聴き直しの欄は、既定の窓の幅では右端の
     外にあって見えません。**見えない場所に答えを書くのは、答えないのと同じです。
     It goes in the status bar's guidance panel: **the replay label sits beyond
@@ -6467,7 +6467,7 @@ begin
   else if Again = FRecheckSent then
     SetStatus('', '', Format('読み直しても %s でした。', [FRecheckSent]))
   else
-    SetStatus('', '', Format('読み直すと %s（画面は %s）。',
+    SetStatus('', '', Format('読み直すと %0:s（画面は %1:s）。',
       [Again, FRecheckSent]));
 end;
 
@@ -6565,7 +6565,7 @@ begin
     else
       Mode := '手動';
     if Half > 0 then
-      FRxTuneInfo.Caption := Format('同調: %.0f Hz ／ 帯域 ±%.0f Hz（%s）',
+      FRxTuneInfo.Caption := Format('同調: %0:.0f Hz ／ 帯域 ±%1:.0f Hz（%2:s）',
         [FRxWaterfall.TuneHz, Half, Mode])
     else
       FRxTuneInfo.Caption := Format('同調: %.0f Hz ／ 帯域制限なし',
@@ -6646,7 +6646,7 @@ begin
     the comparison would lose its point.** }
   if FRxWaterfall.TuneHz > 0 then
     SetStatus('', '', Format(
-      'デコーダが聴いている音を %.1f 秒鳴らしています（%.0f Hz を %.0f Hz へ寄せ、帯域 ±%.0f Hz）。',
+      'デコーダが聴いている音を %0:.1f 秒鳴らしています（%1:.0f Hz を %2:.0f Hz へ寄せ、帯域 ±%3:.0f Hz）。',
       [GotTo - GotFrom, FRxWaterfall.TuneHz, TUNER_TARGET_TONE_HZ,
        BandwidthHalfWidth(SelectedBandwidth)]))
   else
@@ -6716,7 +6716,7 @@ begin
     must not be excluded here. }
   if (Tuned > 0) and (Abs(Requested - Tuned) > TUNER_STEP_HZ) then
     SetStatus('', '', Format(
-      '%.0f Hz に寄せました。受信機の音程を %.0f〜%.0f Hz にしてください。',
+      '%0:.0f Hz に寄せました。受信機の音程を %1:.0f〜%2:.0f Hz にしてください。',
       [Tuned, FRxWaterfall.LowestHz, FRxWaterfall.HighestHz]))
   else if Tuned > 0 then
     SetStatus('', '', Format('%.0f Hz の信号に同調しました。', [Tuned]))
