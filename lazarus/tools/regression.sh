@@ -106,11 +106,14 @@ fi
 # opened.
 step "訳の一覧がソースと合っている" ./tools/po_sync_test.sh
 # 差し込みが 2 つ以上の文言に番号が付いていること（要件 NFR-7.6）。
-# **英語は日本語と語順が違う。**番号が無ければ訳す人が引数を並べ替えられない。
-# Two or more placeholders carry indices (requirement NFR-7.6). **English does
-# not keep Japanese word order**, and without indices the arguments cannot be
-# reordered.
-step "文言の差し込みが並べ替えられる" ./tools/format_index_test.sh
+# **番号があっても、訳文で並べ替えることはできない**（LCL が黙って捨てる。
+# 付録 BH.9）。番号は、並べ替えが本当に要るときの逃げ道
+# （`#, no-object-pascal-format`）を開けておくためにある。
+# Two or more placeholders carry indices (requirement NFR-7.6). **Indices do
+# not let a translation reorder them** -- the LCL drops such a translation in
+# silence (appendix BH.9). They keep open the one way out
+# (`#, no-object-pascal-format`) for when reordering is genuinely needed.
+step "文言の差し込みに番号が付いている" ./tools/format_index_test.sh
 # 稼働中に言語を切り替えて、戻れること（要件 NFR-7.6）。
 # **日本語へ戻す道は、英語へ行く道と違う。**取り違えると一度英語にしたら戻れず、
 # 画面を開いて押してみるまで分からない。配布物と同じ並びで押す。

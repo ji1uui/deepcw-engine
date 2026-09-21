@@ -41,7 +41,7 @@ unit TextCheck;
 interface
 
 uses
-  SysUtils, Classes, Math, Graphics, FileUtil;
+  SysUtils, Classes, Math, Graphics, FileUtil, Translations;
 
 type
   { 1 件ぶんの突き合わせ。 / One string's worth of comparison. }
@@ -160,8 +160,14 @@ function BadForCaption(const Items: TTextWidthList): TTextWidthList;
 
   訳す人が Pascal の書式を知っている必要はありません。**機械で見つけます。**
 
-  数えるのは**種類ごとの個数**です。順序は訳す人が選んでよい（番号付きにしたのは
-  そのためです）が、**何をいくつ差し込むかは変えられません。**
+  見るのは**差し込みの並びそのもの**です。番号を付けても、**LCL は並べ替えた訳を
+  受け付けません。**`.po` を読み込むとき、LCL の `Translations` は元と訳の差し込みを
+  順番どおりに突き合わせ、違えば `badformat` の印を付けて**その訳を黙って捨て、元の
+  日本語を出します**（`translations.pas` の `CompareFormatArgs` と
+  `TPOFile.Translate`。実測、付録 BH.9）。
+
+  **黙って捨てられるのが厄介です。**訳は `.po` に入っていて、幅も通り、個数も合って
+  いるのに、画面には日本語が出ます。だからここで落とします。
 
   Returns translations whose placeholders disagree with the original
   (requirement NFR-7.6).
@@ -173,9 +179,13 @@ function BadForCaption(const Items: TTextWidthList): TTextWidthList;
 
   A translator need not know Pascal's format syntax. **It is found by machine.**
 
-  What is counted is **how many of each type**. The order is the translator's to
-  choose -- that is what the indices are for -- but **what is substituted, and
-  how many, cannot change.** }
+  What is compared is **the run of placeholders in order**. Indices do not buy
+  reordering: on loading a `.po` the LCL compares the two runs and, when they
+  differ, marks the entry `badformat` and **drops the translation in silence**,
+  showing the original instead (`CompareFormatArgs` and `TPOFile.Translate` in
+  `translations.pas`; measured, appendix BH.9). **Silence is what makes it
+  costly** -- the translation is in the file, it fits, its counts match, and
+  Japanese still reaches the screen -- so it fails here instead. }
 function BadPlaceholders(const Items: TTextWidthList): TTextWidthList;
 
 { 置いてある `.po` をすべて読み、幅を報告します。広すぎるものが 1 件でもあれば
@@ -189,6 +199,21 @@ function BadPlaceholders(const Items: TTextWidthList): TTextWidthList;
 
   **With no translations it returns 0 in silence**: not having translated is
   not an error. }
+{ LCL 自身の読み込み器が捨てる訳を数えます（要件 NFR-7.6）。
+
+  **上の `BadPlaceholders` は規則を写したもの、こちらは本物です。**写した規則は
+  いつか本物とずれます。ここでは `.po` を LCL の `TPOFile` に読ませ、`fuzzy` か
+  `badformat` の印が付いた訳——つまり `TPOFile.Translate` が**使わずに捨てる**
+  訳——をそのまま数えます。
+
+  Counts the translations the LCL's own loader throws away (NFR-7.6).
+
+  **`BadPlaceholders` above copies the rule; this one is the rule.** A copied
+  rule drifts from the original in time. Here the `.po` is handed to the LCL's
+  `TPOFile` and whatever comes back marked `fuzzy` or `badformat` -- what
+  `TPOFile.Translate` **drops instead of using** -- is counted as it stands. }
+function DroppedByLcl(const FileName: string; Names: TStrings): Integer;
+
 function ReportTextWidths(Canvas_: TCanvas): Integer;
 
 implementation
@@ -344,49 +369,84 @@ begin
   end;
 end;
 
-{ 種類ごとの個数を数えます。`%%` は差し込みではありません。
-  Counts placeholders by type; `%%` is not one. }
-function PlaceholderTally(const Text_: string): string;
+{ 差し込みを、出てくる順に並べた綴りを返します。`%%` は差し込みではありません。
+
+  **LCL の `ExtractFormatArgs` と同じ規則です**（`translations.pas`、Lazarus 3.0）。
+  同じでなければ、この検査は LCL が捨てる訳を通してしまいます。`ArgError` は、
+  途中で綴りが壊れている場合にその番号（1 から）を返します。
+
+  Returns the placeholders spelled out in the order they appear; `%%` is not
+  one.
+
+  **The rule is the LCL's `ExtractFormatArgs`** (`translations.pas`, Lazarus
+  3.0). Were it not the same, this check would pass translations the LCL throws
+  away. `ArgError` is the number (from one) of the placeholder whose spelling
+  breaks off. }
+function PlaceholderRun(const Text_: string; out ArgError: Integer): string;
 var
-  Seen: array['a'..'z'] of Integer;
-  C: Char;
-  At_: Integer;
-  Kind: Char;
+  At_, StartAt, Count: Integer;
+  Started, Broken: Boolean;
 begin
-  for C := 'a' to 'z' do
-    Seen[C] := 0;
+  Result := '';
+  Count := 0;
+  ArgError := 0;
+  StartAt := 0;
+  Started := False;
+  Broken := False;
   At_ := 1;
-  while At_ <= Length(Text_) do
+  while (At_ <= Length(Text_)) and (not Broken) do
   begin
-    if Text_[At_] = '%' then
+    if not Started then
     begin
-      if (At_ < Length(Text_)) and (Text_[At_ + 1] = '%') then
+      if Text_[At_] = '%' then
       begin
-        Inc(At_, 2);
-        Continue;
-      end;
-      Inc(At_);
-      { 番号・旗・桁・精度を読み飛ばし、種類の字だけを見ます。
-        The index, flags, width and precision are skipped; only the type letter
-        is looked at. }
-      while (At_ <= Length(Text_)) and
-            (Text_[At_] in ['0'..'9', ':', '-', '.', '*']) do
-        Inc(At_);
-      if At_ <= Length(Text_) then
-      begin
-        Kind := LowerCase(Text_[At_]);
-        if Kind in ['a'..'z'] then
-          Inc(Seen[Kind]);
-        Inc(At_);
+        Started := True;
+        StartAt := At_;
       end;
     end
+    else if (Text_[At_] = '%') and (Text_[At_] = Text_[At_ - 1]) then
+      { `%%` は画面に出る `%` そのものです。/ `%%` is a literal `%`. }
+      Started := False
     else
-      Inc(At_);
+      case Text_[At_] of
+        ':', '-', '.', '*', '0'..'9': ;
+        'D', 'E', 'F', 'G', 'M', 'N', 'P', 'S', 'U', 'X',
+        'd', 'e', 'f', 'g', 'm', 'n', 'p', 's', 'u', 'x':
+          begin
+            Started := False;
+            Result := Result + Copy(Text_, StartAt + 1, At_ - StartAt);
+            Inc(Count);
+          end;
+      else
+        Broken := True;
+      end;
+    Inc(At_);
   end;
-  Result := '';
-  for C := 'a' to 'z' do
-    if Seen[C] > 0 then
-      Result := Result + C + IntToStr(Seen[C]);
+  if Started then
+    ArgError := Count + 1;
+  Result := LowerCase(Result);
+end;
+
+{ 元と訳の差し込みが同じ並びかどうか。**LCL の `CompareFormatArgs` と同じです。**
+  Whether the two runs agree. **The same as the LCL's `CompareFormatArgs`.** }
+function SameFormatArgs(const Source, Target: string): Boolean;
+var
+  RunA, RunB: string;
+  ErrA, ErrB: Integer;
+begin
+  Result := True;
+  if Source = Target then
+    Exit;
+  RunA := PlaceholderRun(Source, ErrA);
+  { 元に差し込みが無ければ、訳は自由です。/ No placeholders in the original
+    leaves the translation free. }
+  if (ErrA = 0) and (RunA = '') then
+    Exit;
+  RunB := PlaceholderRun(Target, ErrB);
+  if (ErrA = 0) and (ErrB <> 0) then
+    Result := False
+  else
+    Result := RunA = RunB;
 end;
 
 function BadPlaceholders(const Items: TTextWidthList): TTextWidthList;
@@ -396,7 +456,7 @@ begin
   SetLength(Result, Length(Items));
   Count := 0;
   for I := 0 to High(Items) do
-    if PlaceholderTally(Items[I].Source) <> PlaceholderTally(Items[I].Target) then
+    if not SameFormatArgs(Items[I].Source, Items[I].Target) then
     begin
       Result[Count] := Items[I];
       Inc(Count);
@@ -469,11 +529,46 @@ begin
      100 * Item.TargetWidth / Max(1, Item.SourceWidth)]);
 end;
 
+function DroppedByLcl(const FileName: string; Names: TStrings): Integer;
+var
+  Po: TPOFile;
+  Item: TPOFileItem;
+  I: Integer;
+begin
+  Result := 0;
+  Po := TPOFile.Create(FileName);
+  try
+    for I := 0 to Po.Count - 1 do
+    begin
+      Item := Po.PoItems[I];
+      if Item = nil then
+        Continue;
+      if Item.Translation = '' then
+        Continue;
+      { 印は読み込みのときに付きます（`TPOFile.FillItem`）。この 2 つが付いて
+        いると、`TPOFile.Translate` は訳ではなく元を返します。
+        The flags are set while loading (`TPOFile.FillItem`); with either of
+        these, `TPOFile.Translate` hands back the original, not the
+        translation. }
+      if (Pos('fuzzy', Item.Flags) > 0) or (Pos('badformat', Item.Flags) > 0) then
+      begin
+        if Names <> nil then
+          Names.Add(Format('%0:s（%1:s）: 「%2:s」', [Item.IdentifierLow, Item.Flags,
+            Item.Translation]));
+        Inc(Result);
+      end;
+    end;
+  finally
+    Po.Free;
+  end;
+end;
+
 function ReportTextWidths(Canvas_: TCanvas): Integer;
 var
   Found: TStringList;
   Items, Wide, Bad, Broken: TTextWidthList;
-  I, J, Total: Integer;
+  Dropped: TStringList;
+  I, J, Total, Gone: Integer;
   Dir: string;
 begin
   Result := 0;
@@ -495,10 +590,18 @@ begin
       Wide := TooWide(Items);
       Bad := BadForCaption(Items);
       Broken := BadPlaceholders(Items);
-      Inc(Total, Length(Wide) + Length(Bad) + Length(Broken));
-      WriteLn(Format('%s: 訳 %d 件 / 広すぎる %d / 見出しに使えない字 %d / 差し込み違い %d',
-        [ExtractFileName(Found[I]), Length(Items), Length(Wide), Length(Bad),
-         Length(Broken)]));
+      Dropped := TStringList.Create;
+      try
+        Gone := DroppedByLcl(Found[I], Dropped);
+        Inc(Total, Length(Wide) + Length(Bad) + Length(Broken) + Gone);
+        WriteLn(Format('%0:s: 訳 %1:d 件 / 広すぎる %2:d / 見出しに使えない字 %3:d / 差し込み違い %4:d / LCL が捨てる %5:d',
+          [ExtractFileName(Found[I]), Length(Items), Length(Wide), Length(Bad),
+           Length(Broken), Gone]));
+        for J := 0 to Dropped.Count - 1 do
+          WriteLn('  捨てられます: ', Dropped[J]);
+      finally
+        Dropped.Free;
+      end;
       for J := 0 to High(Broken) do
         WriteLn(Format('  %s: 差し込みが元と違います。「%s」→「%s」',
           [Broken[J].Name_, Broken[J].Source, Broken[J].Target]));

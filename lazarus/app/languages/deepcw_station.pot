@@ -1,6 +1,54 @@
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8"
 
+#: frmmain.rsctxdecode
+msgctxt "frmmain.rsctxdecode"
+msgid "デコード"
+msgstr ""
+
+#: frmmain.rsctxfistlog
+msgid "送信訓練の記録"
+msgstr ""
+
+#: frmmain.rsctxfistscore
+msgid "送信訓練の採点"
+msgstr ""
+
+#: frmmain.rsctxfiststart
+msgid "送信訓練の開始"
+msgstr ""
+
+#: frmmain.rsctxpractice
+msgctxt "frmmain.rsctxpractice"
+msgid "練習"
+msgstr ""
+
+#: frmmain.rsctxpracticelog
+msgid "受信練習の記録"
+msgstr ""
+
+#: frmmain.rsctxreceivestop
+msgid "受信の終了"
+msgstr ""
+
+#: frmmain.rsctxrecheck
+msgid "語の読み直し"
+msgstr ""
+
+#: frmmain.rsctxwavread
+msgid "WAV の読み込み"
+msgstr ""
+
+#: frmmain.rsdecodedone
+#, object-pascal-format
+msgid "デコード完了: %d 文字"
+msgstr ""
+
+#: frmmain.rserrfailedtitle
+#, object-pascal-format
+msgid "%sできませんでした"
+msgstr ""
+
 #: frmmain.rserrinputstream
 msgid ""
 "マイク（ライン入力）を開けませんでした。\n"
@@ -51,6 +99,11 @@ msgid ""
 "送信音の生成と WAV への保存は、この状態でも利用できます。"
 msgstr ""
 
+#: frmmain.rserrstatusline
+#, object-pascal-format
+msgid "%0:s: %1:s"
+msgstr ""
+
 #: frmmain.rserrtooshort
 msgid "音声が短すぎます。もう少し長い録音でお試しください。"
 msgstr ""
@@ -59,6 +112,11 @@ msgstr ""
 msgid ""
 "この音声ファイルを読み取れませんでした。\n"
 "PCM 形式のモノラルまたはステレオの WAV ファイルをお使いください。"
+msgstr ""
+
+#: frmmain.rsftadvice
+#, object-pascal-format
+msgid "直すとよい点: %s"
 msgstr ""
 
 #: frmmain.rsftallitems
@@ -81,6 +139,14 @@ msgstr ""
 msgid "下に出すもの"
 msgstr ""
 
+#: frmmain.rsftbusydrill
+msgid "訓練中です。先に「終了して採点」を押してください。"
+msgstr ""
+
+#: frmmain.rsftbusyreceiving
+msgid "受信中は訓練を始められません。先に「受信停止」を押してください。"
+msgstr ""
+
 #: frmmain.rsftfinish
 msgid "終了して採点"
 msgstr ""
@@ -89,8 +155,17 @@ msgstr ""
 msgid "課題文なしで送る（採点は参考値）"
 msgstr ""
 
+#: frmmain.rsftfreetext
+msgid "課題文なしで送ります。採点は参考値です。"
+msgstr ""
+
 #: frmmain.rsftfromwav
 msgid "WAV から採点"
+msgstr ""
+
+#: frmmain.rsftgaps
+#, object-pascal-format
+msgid "間隔の比: 符号内 %0:.2f ／ 文字間 %1:.2f ／ 語間 %2:.2f"
 msgstr ""
 
 #: frmmain.rsftgroups
@@ -114,16 +189,105 @@ msgstr ""
 msgid "課題文の内容"
 msgstr ""
 
+#: frmmain.rsftneedtext
+msgid "先に「課題文を出す」を押すか、送る文を書いてください。"
+msgstr ""
+
 #: frmmain.rsftnew
 msgid "課題文を出す"
+msgstr ""
+
+#: frmmain.rsftnewdone
+msgid "課題文を出しました。準備ができたら「訓練開始」を押してください。"
+msgstr ""
+
+#: frmmain.rsftnoaudio
+msgid "音が取り込めませんでした。入力装置と音量を確かめてください。"
+msgstr ""
+
+#: frmmain.rsftnomonitor
+msgid ""
+"モニター音が見つかりませんでした。\n"
+"無線機のモニター音量と、受信タブで選んだ入力装置を確かめてください。"
+msgstr ""
+
+#: frmmain.rsftnoreadable
+msgid "  写しやすさ —（課題文と読み合わせていません）"
+msgstr ""
+
+#: frmmain.rsftnorecords
+#, object-pascal-format
+msgid "まだ記録はありません。記録は %s に CSV で残ります。"
+msgstr ""
+
+#: frmmain.rsftnoscore
+#, object-pascal-format
+msgid ""
+"採点できませんでした。\n"
+"%s"
+msgstr ""
+
+#: frmmain.rsftnoscorestatus
+msgid "採点できませんでした。"
+msgstr ""
+
+#: frmmain.rsftnotefreetext
+msgid "※ 課題文なしで測りました。間隔の種別はしきい値で分けています（参考値）。"
+msgstr ""
+
+#: frmmain.rsftnotetrimmed
+msgid "※ 10 分を超えた分は保持から落ちました。最後の 10 分だけを採点しています。"
 msgstr ""
 
 #: frmmain.rsftoverall
 msgid "総合"
 msgstr ""
 
+#: frmmain.rsftoverallline
+#, object-pascal-format
+msgid "総合 %0:.0f 点（%1:s の基準）"
+msgstr ""
+
+#: frmmain.rsftparts
+#, object-pascal-format
+msgid "  速度の安定 %0:3.0f ／ 短長の明瞭 %1:3.0f ／ 区切りの明瞭 %2:3.0f ／ 間隔の正確 %3:3.0f"
+msgstr ""
+
+#: frmmain.rsftreadable
+#, object-pascal-format
+msgid "  写しやすさ %0:3.0f（文字誤り率 %1:.1f%%）"
+msgstr ""
+
+#: frmmain.rsftrecords
+#, object-pascal-format
+msgid "%0:d 件 ／ 自己ベスト 総合 %1:.0f 点 ／ %2:s"
+msgstr ""
+
+#: frmmain.rsftrunning
+#, object-pascal-format
+msgid "訓練中 %d Hz"
+msgstr ""
+
 #: frmmain.rsftscore
 msgid "採点"
+msgstr ""
+
+#: frmmain.rsftscored
+#, object-pascal-format
+msgid "採点しました。総合 %.0f 点。"
+msgstr ""
+
+#: frmmain.rsftscoring
+msgid "採点しています…"
+msgstr ""
+
+#: frmmain.rsftsendnow
+msgid "送ってください。終わったら「終了して採点」を押してください。"
+msgstr ""
+
+#: frmmain.rsftseparation
+#, object-pascal-format
+msgid "分離度: 短点と長点 %0:.1f ／ 符号内と文字間 %1:.1f ／ 速度の変化 %2:.0f%%"
 msgstr ""
 
 #: frmmain.rsftstart
@@ -132,6 +296,11 @@ msgstr ""
 
 #: frmmain.rsftstarthint
 msgid "「課題文を出す」を押し、無線機のモニター音が届く状態で「訓練開始」を押してください。"
+msgstr ""
+
+#: frmmain.rsftstreak
+#, object-pascal-format
+msgid "%d 日続いています"
 msgstr ""
 
 #: frmmain.rsfttab
@@ -152,6 +321,15 @@ msgstr ""
 
 #: frmmain.rsfttrenditemlabel
 msgid "推移に出す項目"
+msgstr ""
+
+#: frmmain.rsftwavhint
+msgid "受信タブの「WAV ファイルから受信」に、採点したい録音を選んでください。"
+msgstr ""
+
+#: frmmain.rsftwpm
+#, object-pascal-format
+msgid "実効 %0:.1f WPM ／ 短点 %1:.1f ms（ばらつき %2:.1f%%）／ 長短比 %3:.2f"
 msgstr ""
 
 #: frmmain.rsinfoalphabet
@@ -279,6 +457,11 @@ msgstr ""
 msgid "正解"
 msgstr ""
 
+#: frmmain.rsprconfusions
+#, object-pascal-format
+msgid "%0:s ／ 続けて間違えている符号: %1:s"
+msgstr ""
+
 #: frmmain.rsprcopylabel
 msgid "写した文字を書いてください"
 msgstr ""
@@ -304,6 +487,11 @@ msgctxt "frmmain.rsprgroups"
 msgid "出す数"
 msgstr ""
 
+#: frmmain.rsprhistory
+#, object-pascal-format
+msgid "これまで %0:d 回 ／ 直近 10 回の平均 %1:.0f%%"
+msgstr ""
+
 #: frmmain.rsprkind
 msgid "出す内容"
 msgstr ""
@@ -312,12 +500,38 @@ msgstr ""
 msgid "答え合わせ"
 msgstr ""
 
+#: frmmain.rsprmistakes
+#, object-pascal-format
+msgid "間違えやすかった符号: %s"
+msgstr ""
+
+#: frmmain.rsprneedexercise
+msgid "先に「出題して鳴らす」を押してください。"
+msgstr ""
+
 #: frmmain.rsprnoise
 msgid "雑音"
 msgstr ""
 
+#: frmmain.rsprnomistakes
+msgid "間違いはありません。"
+msgstr ""
+
+#: frmmain.rsprnosound
+msgid "音を鳴らせませんでした。正解は「答え合わせ」で出せます。"
+msgstr ""
+
 #: frmmain.rsprplay
 msgid "出題して鳴らす"
+msgstr ""
+
+#: frmmain.rsprplaying
+msgid "出題を鳴らしています。"
+msgstr ""
+
+#: frmmain.rsprresult
+#, object-pascal-format
+msgid "正答率 %0:.0f%%（%1:d 文字中 %2:d 文字）／ 違い %3:d ・ 落とし %4:d ・ 足し %5:d"
 msgstr ""
 
 #: frmmain.rsprstarthint
@@ -328,7 +542,13 @@ msgstr ""
 msgid "止める"
 msgstr ""
 
+#: frmmain.rsprsummary
+#, object-pascal-format
+msgid "%0:d 文字 / %1:.1f 秒"
+msgstr ""
+
 #: frmmain.rsprtab
+msgctxt "frmmain.rsprtab"
 msgid "練習"
 msgstr ""
 
@@ -365,6 +585,7 @@ msgid "コピー"
 msgstr ""
 
 #: frmmain.rsrxdecode
+msgctxt "frmmain.rsrxdecode"
 msgid "デコード"
 msgstr ""
 

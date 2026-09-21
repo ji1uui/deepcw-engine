@@ -49,12 +49,27 @@ if diff -q "$POT" "$WORK/check.pot" >/dev/null 2>&1; then
   for PO in app/languages/deepcw_station.*.po; do
     [ -e "$PO" ] || continue
     TOTAL=$(grep -c '^#: ' "$POT")
-    # 先頭の `Content-Type:` の行は文言ではないので数えません。
-    # The leading `Content-Type:` line is not one of the words.
-    DONE=$(awk '/^#, / { if ($0 ~ /fuzzy/) f=1; next }
-      /^#: / { f=0; next }
-      /^msgstr "..*"/ { if (!f && $0 !~ /Content-Type/) n++ }
-      END { print n+0 }' "$PO")
+    # 訳が入っている件数を数えます。**長い訳は次の行へ折り返されます**
+    # （`msgstr ""` のあとに `"..."` が続く形）。折り返しを数え落とすと、訳が
+    # 壊れていても件数が減らず、**この数えが壊れを見つけられなくなります**
+    # （付録 BH.8）。要確認（fuzzy）は画面に出ないので未訳に数えます。
+    # 先頭の `Content-Type:` の塊（`#:` より前の `msgid ""`）は文言ではありません。
+    #
+    # Counts the entries that carry a translation. **A long one is wrapped onto
+    # the following lines** (`msgstr ""` then `"..."`), and missing those would
+    # keep the count steady while a translation is broken, so **the count would
+    # no longer catch the breakage** (appendix BH.8). Fuzzy entries never reach
+    # the screen, so they count as untranslated. The leading `Content-Type:`
+    # block (the `msgid ""` before any `#:`) is not one of the words.
+    DONE=$(awk '/^#: / { f=0; seen=1; next }
+        /^#, / { if ($0 ~ /fuzzy/) f=1; next }
+        /^msgid ""$/ { hdr=(seen?0:1); pend=0; next }
+        /^msgid "/ { hdr=0; pend=0; next }
+        /^msgstr "..*"/ { if (!f && !hdr) n++; pend=0; next }
+        /^msgstr ""$/ { pend=((f||hdr)?0:1); next }
+        /^"..*"/ { if (pend) { n++; pend=0 } next }
+        { pend=0 }
+        END { print n+0 }' "$PO")
     FUZZY=$(grep -c '^#, .*fuzzy' "$PO" || true)
     echo "  $(basename "$PO"): 訳済み $DONE / $TOTAL（要確認 $FUZZY 件は画面に出ないので未訳に数える）"
   done

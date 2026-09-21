@@ -2,9 +2,15 @@
 # 差し込みが 2 つ以上ある文言に、番号（`%0:s` の形）が付いているかを確かめます
 # （要件 NFR-7.6）。
 #
-# **英語は日本語と語順が違います。**`総合 %.0f 点（%s の基準）` を
-# `%s scored %.0f` と訳したくても、番号が無ければ**引数の順序を変えられません。**
-# Pascal の `Format` は `%0:.0f` `%1:s` の形なら順序を選べます。
+# **番号があっても、訳文で並べ替えることはできません。**LCL は `.po` を読むとき、
+# 元と訳の差し込みを**出てくる順に**突き合わせ、違えば `badformat` の印を付けて
+# その訳を黙って捨てます（`translations.pas` の `CompareFormatArgs`。実測、
+# 付録 BH.9）。番号はその規則を変えません。
+#
+# では何のために付けるのか。**並べ替えが本当に要るときの逃げ道が、番号にしか
+# 開いていないから**です。その 1 件に `#, no-object-pascal-format` を付ければ
+# LCL は突き合わせをやめます。そのとき引数を選び直せるのは、番号が付いている
+# 文言だけです。番号が無ければ、逃げ道を開けても並べ替えられません。
 #
 # **これは訳す前に済ませておく仕事です。**訳してから番号を足すと、訳文も書き直し
 # になります（同じ行を 2 度触ることになる）。
@@ -14,10 +20,17 @@
 # Checks that any string with two or more placeholders carries indices
 # (the `%0:s` form) -- requirement NFR-7.6.
 #
-# **English does not keep Japanese word order.** To translate
-# `総合 %.0f 点（%s の基準）` as `%s scored %.0f`, the arguments have to be
-# reorderable, and without indices they are not. Pascal's `Format` allows
-# `%0:.0f` and `%1:s`.
+# **Indices do not let a translation reorder them.** On reading a `.po` the LCL
+# compares the two runs of placeholders **in order of appearance** and, when
+# they differ, marks the entry `badformat` and drops the translation in silence
+# (`CompareFormatArgs` in `translations.pas`; measured, appendix BH.9). An
+# index does not change that rule.
+#
+# Why require them, then? **Because the way out, when reordering is genuinely
+# needed, is open only to indexed strings**: flag that one entry
+# `#, no-object-pascal-format` and the LCL stops comparing -- and only an
+# indexed string can then pick its arguments afresh. Without indices, opening
+# the way out changes nothing.
 #
 # **This belongs before translating**: indices added afterwards mean rewriting
 # the translations too -- touching the same lines twice.

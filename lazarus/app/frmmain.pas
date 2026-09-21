@@ -1024,6 +1024,72 @@ resourcestring
   RsInfoDiagnostics = '診断情報（技術的な原文）';
   RsInfoEngineVersion = 'エンジン: ONNX Runtime %0:s';
 
+  { 困ったときの見出し（`ReportError`）。**場面の名前**を `%s` に入れます。
+    見出しと本文を 1 本の文字列につなげてしまうと、語順の違う言語で直せません
+    （付録 BH.5）。
+    The heading when something goes wrong: `%s` is the name of the occasion.
+    Joining the heading and the name into one literal would leave a language
+    with another word order no way to fix it (appendix BH.5). }
+  RsErrFailedTitle = '%sできませんでした';
+  RsErrStatusLine = '%0:s: %1:s';
+
+  { 場面の名前。診断情報にも残るので、**画面と同じ言葉**にします。
+    The names of the occasions. They are kept in the diagnostics too, so they
+    are **the same words as on screen.** }
+  RsCtxPractice = '練習';
+  RsCtxPracticeLog = '受信練習の記録';
+  RsCtxFistStart = '送信訓練の開始';
+  RsCtxFistLog = '送信訓練の記録';
+  RsCtxFistScore = '送信訓練の採点';
+  RsCtxWavRead = 'WAV の読み込み';
+  RsCtxRecheck = '語の読み直し';
+  RsCtxDecode = 'デコード';
+  RsCtxReceiveStop = '受信の終了';
+
+  { 受信練習タブ（要件 FR-F.3・FR-F.5）。
+    The copy practice tab (requirements FR-F.3, FR-F.5). }
+  RsPrHistory = 'これまで %0:d 回 ／ 直近 10 回の平均 %1:.0f%%';
+  RsPrConfusions = '%0:s ／ 続けて間違えている符号: %1:s';
+  RsPrSummary = '%0:d 文字 / %1:.1f 秒';
+  RsPrPlaying = '出題を鳴らしています。';
+  RsPrNeedExercise = '先に「出題して鳴らす」を押してください。';
+  RsPrResult = '正答率 %0:.0f%%（%1:d 文字中 %2:d 文字）／ 違い %3:d ・ 落とし %4:d ・ 足し %5:d';
+  RsPrNoMistakes = '間違いはありません。';
+  RsPrMistakes = '間違えやすかった符号: %s';
+  RsPrNoSound = '音を鳴らせませんでした。正解は「答え合わせ」で出せます。';
+
+  { 送信訓練タブ（要件 FR-H）。
+    The sending drill tab (requirements FR-H). }
+  RsFtFreeText = '課題文なしで送ります。採点は参考値です。';
+  RsFtNewDone = '課題文を出しました。準備ができたら「訓練開始」を押してください。';
+  RsFtBusyReceiving = '受信中は訓練を始められません。先に「受信停止」を押してください。';
+  RsFtNeedText = '先に「課題文を出す」を押すか、送る文を書いてください。';
+  RsFtRunning = '訓練中 %d Hz';
+  RsFtSendNow = '送ってください。終わったら「終了して採点」を押してください。';
+  RsFtBusyDrill = '訓練中です。先に「終了して採点」を押してください。';
+  RsFtWavHint = '受信タブの「WAV ファイルから受信」に、採点したい録音を選んでください。';
+  RsFtNoAudio = '音が取り込めませんでした。入力装置と音量を確かめてください。';
+  RsFtNoMonitor = 'モニター音が見つかりませんでした。'#10 +
+    '無線機のモニター音量と、受信タブで選んだ入力装置を確かめてください。';
+  RsFtNoScore = '採点できませんでした。'#10'%s';
+  RsFtNoScoreStatus = '採点できませんでした。';
+  RsFtScoring = '採点しています…';
+  RsFtOverallLine = '総合 %0:.0f 点（%1:s の基準）';
+  RsFtParts = '  速度の安定 %0:3.0f ／ 短長の明瞭 %1:3.0f ／ 区切りの明瞭 %2:3.0f ／ 間隔の正確 %3:3.0f';
+  RsFtReadable = '  写しやすさ %0:3.0f（文字誤り率 %1:.1f%%）';
+  RsFtNoReadable = '  写しやすさ —（課題文と読み合わせていません）';
+  RsFtWpm = '実効 %0:.1f WPM ／ 短点 %1:.1f ms（ばらつき %2:.1f%%）／ 長短比 %3:.2f';
+  RsFtGaps = '間隔の比: 符号内 %0:.2f ／ 文字間 %1:.2f ／ 語間 %2:.2f';
+  RsFtSeparation = '分離度: 短点と長点 %0:.1f ／ 符号内と文字間 %1:.1f ／ 速度の変化 %2:.0f%%';
+  RsFtNoteFreeText = '※ 課題文なしで測りました。間隔の種別はしきい値で分けています（参考値）。';
+  RsFtNoteTrimmed = '※ 10 分を超えた分は保持から落ちました。最後の 10 分だけを採点しています。';
+  RsFtAdvice = '直すとよい点: %s';
+  RsFtScored = '採点しました。総合 %.0f 点。';
+  RsFtNoRecords = 'まだ記録はありません。記録は %s に CSV で残ります。';
+  RsFtRecords = '%0:d 件 ／ 自己ベスト 総合 %1:.0f 点 ／ %2:s';
+  RsFtStreak = '%d 日続いています';
+  RsDecodeDone = 'デコード完了: %d 文字';
+
 
 
 { 訳せる文字列の改行（`#10`）を、この OS の改行へ直します（要件 NFR-7.6）。
@@ -2265,13 +2331,12 @@ begin
     FPrHistory.Caption := '';
     Exit;
   end;
-  Line := Format('これまで %0:d 回 ／ 直近 10 回の平均 %1:.0f%%',
-    [Length(Items), AveragePercent(Items, 10)]);
+  Line := Format(RsPrHistory, [Length(Items), AveragePercent(Items, 10)]);
   if Length(Items) >= COPYLOG_MIN_SESSIONS then
   begin
     Found := TallyConfusions(Items, 3);
     if Length(Found) > 0 then
-      Line := Line + ' ／ 続けて間違えている符号: ' + ConfusionCaption(Found);
+      Line := Format(RsPrConfusions, [Line, ConfusionCaption(Found)]);
   end;
   FPrHistory.Caption := Line;
 end;
@@ -2314,7 +2379,7 @@ begin
       (lesson 10.3). }
     FPrRevealTimes := RevealTimes(FPrText, Timing, Options.LeadInSeconds,
       FPrDelaySeconds.Value);
-    FPrSummary.Caption := Format('%0:d 文字 / %1:.1f 秒',
+    FPrSummary.Caption := Format(RsPrSummary,
       [Length(FPrText), Length(FPrSamples) / FTxSampleRate]);
   except
     on E: Exception do
@@ -2396,10 +2461,10 @@ begin
     FPrRevealFrom := Now;
     if FPrRevealing then
       FPrAnswer.Clear;
-    SetStatus('', '', '出題を鳴らしています。');
+    SetStatus('', '', RsPrPlaying);
   except
     on E: Exception do
-      ReportError('練習', E);
+      ReportError(RsCtxPractice, E);
   end;
 end;
 
@@ -2430,7 +2495,7 @@ var
 begin
   if FPrText = '' then
   begin
-    SetStatus('', '', '先に「出題して鳴らす」を押してください。');
+    SetStatus('', '', RsPrNeedExercise);
     Exit;
   end;
   { 答え合わせが済めば、遅らせて出す意味はもうありません。全部を出します。
@@ -2439,15 +2504,14 @@ begin
   FPrRevealing := False;
   Score := ScoreCopy(FPrText, FPrCopy.Text);
   FPrAnswer.Text := FPrText;
-  FPrResult.Caption := Format(
-    '正答率 %0:.0f%%（%1:d 文字中 %2:d 文字）／ 違い %3:d ・ 落とし %4:d ・ 足し %5:d',
+  FPrResult.Caption := Format(RsPrResult,
     [Score.Percent, Score.Total, Score.Same, Score.Wrong, Score.Missed,
      Score.Extra]);
   Mistakes := MistakeSummary(Score);
   if Mistakes = '' then
-    FPrMistakes.Caption := '間違いはありません。'
+    FPrMistakes.Caption := RsPrNoMistakes
   else
-    FPrMistakes.Caption := '間違えやすかった符号: ' + Mistakes;
+    FPrMistakes.Caption := Format(RsPrMistakes, [Mistakes]);
 
   { 1 回ぶんを残します（要件 FR-F.5）。**残すのは出題と写しそのもの**で、
     傾向はそこから数え直します（`DeepCW.CopyLog` の頭書き）。
@@ -2482,7 +2546,7 @@ begin
     AppendCopyRecord(CopyLogFileName, Item);
   except
     on E: Exception do
-      LogDiagnostic('受信練習の記録', E.Message);
+      LogDiagnostic(RsCtxPracticeLog, E.Message);
   end;
   PrShowHistory;
 end;
@@ -2514,7 +2578,7 @@ begin
   if FPlayback.LastError <> '' then
   begin
     FPrRevealing := False;
-    SetStatus('', '', '音を鳴らせませんでした。正解は「答え合わせ」で出せます。');
+    SetStatus('', '', RsPrNoSound);
     Exit;
   end;
   Elapsed := (Now - FPrRevealFrom) * SecsPerDay;
@@ -2827,7 +2891,7 @@ begin
     FFtKind.Enabled := not FFtFree.Checked;
     FFtGroups.Enabled := not FFtFree.Checked;
     if FFtFree.Checked then
-      FFtText.Text := '課題文なしで送ります。採点は参考値です。';
+      FFtText.Text := RsFtFreeText;
   end;
 end;
 
@@ -2844,7 +2908,7 @@ begin
   FFtText.Text := FFtExercise;
   FFtResult.Clear;
   FFtAdvice.Caption := '';
-  SetStatus('', '', '課題文を出しました。準備ができたら「訓練開始」を押してください。');
+  SetStatus('', '', RsFtNewDone);
 end;
 
 { 訓練を始めます。**受信と同じ入力を使うので、受信中には始められません。**
@@ -2859,12 +2923,12 @@ begin
     Exit;
   if FCapture <> nil then
   begin
-    SetStatus('', '', '受信中は訓練を始められません。先に「受信停止」を押してください。');
+    SetStatus('', '', RsFtBusyReceiving);
     Exit;
   end;
   if (not FFtFree.Checked) and (Trim(FFtText.Text) = '') then
   begin
-    SetStatus('', '', '先に「課題文を出す」を押すか、送る文を書いてください。');
+    SetStatus('', '', RsFtNeedText);
     Exit;
   end;
   try
@@ -2885,15 +2949,14 @@ begin
     FFtStop.Enabled := True;
     FFtResult.Clear;
     FFtAdvice.Caption := '';
-    SetStatus('', Format('訓練中 %d Hz', [FFtRate]),
-      '送ってください。終わったら「終了して採点」を押してください。');
+    SetStatus('', Format(RsFtRunning, [FFtRate]), RsFtSendNow);
   except
     on E: Exception do
     begin
       FreeAndNil(FFtCapture);
       FFtStart.Enabled := True;
       FFtStop.Enabled := False;
-      ReportError('送信訓練の開始', E);
+      ReportError(RsCtxFistStart, E);
     end;
   end;
 end;
@@ -2929,12 +2992,12 @@ var
 begin
   if FFtCapture <> nil then
   begin
-    SetStatus('', '', '訓練中です。先に「終了して採点」を押してください。');
+    SetStatus('', '', RsFtBusyDrill);
     Exit;
   end;
   if FRxFile.Text = '' then
   begin
-    SetStatus('', '', '受信タブの「WAV ファイルから受信」に、採点したい録音を選んでください。');
+    SetStatus('', '', RsFtWavHint);
     Exit;
   end;
   try
@@ -2942,7 +3005,7 @@ begin
   except
     on E: Exception do
     begin
-      ReportError('WAV の読み込み', E);
+      ReportError(RsCtxWavRead, E);
       Exit;
     end;
   end;
@@ -2965,14 +3028,13 @@ begin
   FFtMeasured := Default(TFistMeasurement);
   if Length(Samples) = 0 then
   begin
-    FFtResult.Text := '音が取り込めませんでした。入力装置と音量を確かめてください。';
+    FFtResult.Text := RsFtNoAudio;
     Exit;
   end;
   ToneHz := DetectToneHz(Samples, SampleRate);
   if ToneHz <= 0 then
   begin
-    FFtResult.Text := 'モニター音が見つかりませんでした。' + LineEnding +
-      '無線機のモニター音量と、受信タブで選んだ入力装置を確かめてください。';
+    FFtResult.Text := AsLines(RsFtNoMonitor);
     Exit;
   end;
 
@@ -2988,9 +3050,9 @@ begin
   FFtMeasured.Seconds := Seconds;
   if not FFtMeasured.Ok then
   begin
-    FFtResult.Text := '採点できませんでした。' + LineEnding + FFtMeasured.Note;
+    FFtResult.Text := AsLines(Format(RsFtNoScore, [FFtMeasured.Note]));
     FFtAdvice.Caption := '';
-    SetStatus('', '', '採点できませんでした。');
+    SetStatus('', '', RsFtNoScoreStatus);
     Exit;
   end;
 
@@ -3002,7 +3064,7 @@ begin
   if (not FFtFree.Checked) and (FDecoder <> nil) and (not DecoderBusy) then
   begin
     FFtSamples := Samples;
-    SetStatus('', '', '採点しています…');
+    SetStatus('', '', RsFtScoring);
     FDecodeThread := TDecodeThread.CreateFist(FDecoder, Samples, SampleRate,
       @DecodeFinished);
   end
@@ -3024,28 +3086,28 @@ begin
 
   Lines := TStringList.Create;
   try
-    Lines.Add(Format('総合 %0:.0f 点（%1:s の基準）', [Score.Overall,
+    Lines.Add(Format(RsFtOverallLine, [Score.Overall,
       FIST_STANDARD_NAMES[FistBasis]]));
-    Lines.Add(Format('  速度の安定 %0:3.0f ／ 短長の明瞭 %1:3.0f ／ 区切りの明瞭 %2:3.0f ／ 間隔の正確 %3:3.0f',
+    Lines.Add(Format(RsFtParts,
       [Score.Speed, Score.Clarity, Score.Separation, Score.Spacing]));
     if Score.HasCopyability then
-      Lines.Add(Format('  写しやすさ %0:3.0f（文字誤り率 %1:.1f%%）',
+      Lines.Add(Format(RsFtReadable,
         [Score.Copyability, 100 * Cer]))
     else
-      Lines.Add('  写しやすさ —（課題文と読み合わせていません）');
+      Lines.Add(RsFtNoReadable);
     Lines.Add('');
-    Lines.Add(Format('実効 %0:.1f WPM ／ 短点 %1:.1f ms（ばらつき %2:.1f%%）／ 長短比 %3:.2f',
+    Lines.Add(Format(RsFtWpm,
       [FFtMeasured.EffectiveWpm, FFtMeasured.DitSeconds * 1000,
        100 * FFtMeasured.Stats[ekDit].Cv, FFtMeasured.Ratio]));
-    Lines.Add(Format('間隔の比: 符号内 %0:.2f ／ 文字間 %1:.2f ／ 語間 %2:.2f',
+    Lines.Add(Format(RsFtGaps,
       [FFtMeasured.IntraRatio, FFtMeasured.CharRatio, FFtMeasured.WordRatio]));
-    Lines.Add(Format('分離度: 短点と長点 %0:.1f ／ 符号内と文字間 %1:.1f ／ 速度の変化 %2:.0f%%',
+    Lines.Add(Format(RsFtSeparation,
       [FFtMeasured.ToneSeparation, FFtMeasured.GapSeparation,
        100 * FFtMeasured.Drift]));
     if FFtMeasured.Reference then
-      Lines.Add('※ 課題文なしで測りました。間隔の種別はしきい値で分けています（参考値）。');
+      Lines.Add(RsFtNoteFreeText);
     if FFtLost then
-      Lines.Add('※ 10 分を超えた分は保持から落ちました。最後の 10 分だけを採点しています。');
+      Lines.Add(RsFtNoteTrimmed);
     FFtResult.Text := Lines.Text;
   finally
     Lines.Free;
@@ -3053,7 +3115,7 @@ begin
   { **点数の低さは、余地であって誤りではありません。**助言はそのように書きます。
     **A low score is room to grow, not a fault**, and the advice is written to
     say so. }
-  FFtAdvice.Caption := '直すとよい点: ' + Score.Advice;
+  FFtAdvice.Caption := Format(RsFtAdvice, [Score.Advice]);
 
   Item := Default(TFistRecord);
   Item.When_ := Now;
@@ -3076,7 +3138,7 @@ begin
     AppendFistRecord(FistLogFileName, Item);
   except
     on E: Exception do
-      LogDiagnostic('送信訓練の記録', E.Message);
+      LogDiagnostic(RsCtxFistLog, E.Message);
   end;
   { 分布は、いま採点した回のものを出します（要件 FR-H.9）。**記録には要素まで
     残していない**ので、出せるのはこの 1 回だけです。
@@ -3086,7 +3148,7 @@ begin
   if FFtHistogram <> nil then
     FFtHistogram.SetMeasurement(FFtMeasured);
   FtShowHistory;
-  SetStatus('', '', Format('採点しました。総合 %.0f 点。', [Score.Overall]));
+  SetStatus('', '', Format(RsFtScored, [Score.Overall]));
 end;
 
 { これまでの記録を新しい順に出します（要件 FR-H.10 の入口）。
@@ -3106,14 +3168,14 @@ begin
   Lines := TStringList.Create;
   try
     if Length(Records_) = 0 then
-      Lines.Add('まだ記録はありません。記録は ' + FistLogFileName + ' に CSV で残ります。')
+      Lines.Add(Format(RsFtNoRecords, [FistLogFileName]))
     else
     begin
       Best := 0;
       for I := 0 to High(Records_) do
         if Records_[I].Score.Overall > Best then
           Best := Records_[I].Score.Overall;
-      Lines.Add(Format('%0:d 件 ／ 自己ベスト 総合 %1:.0f 点 ／ %2:s',
+      Lines.Add(Format(RsFtRecords,
         [Length(Records_), Best, FistLogFileName]));
       Shown := 0;
       I := High(Records_);
@@ -3197,7 +3259,7 @@ begin
     as writing nought for something not counted. }
   Days := ConsecutiveDays(Items, Now);
   if Days > 0 then
-    FFtStreak.Caption := Format('%d 日続いています', [Days])
+    FFtStreak.Caption := Format(RsFtStreak, [Days])
   else
     FFtStreak.Caption := '';
 end;
@@ -4186,7 +4248,7 @@ begin
   begin
     if Thread.Error <> '' then
     begin
-      LogDiagnostic('送信訓練の採点', Thread.Error);
+      LogDiagnostic(RsCtxFistScore, Thread.Error);
       FtFinish(-1);
     end
     else
@@ -4200,7 +4262,7 @@ begin
   begin
     if Thread.Error <> '' then
     begin
-      LogDiagnostic('語の読み直し', Thread.Error);
+      LogDiagnostic(RsCtxRecheck, Thread.Error);
       SetStatus('', '', StatusLine(Thread.Error));
     end
     else
@@ -4211,7 +4273,7 @@ begin
 
   if Thread.Error <> '' then
   begin
-    LogDiagnostic('デコード', Thread.Error);
+    LogDiagnostic(RsCtxDecode, Thread.Error);
     SetStatus('', '', StatusLine(Thread.Error));
   end
   else if BandMode then
@@ -4230,7 +4292,7 @@ begin
       FRxTranscript.PendingFrom := MaxInt;
       FRxTranscript.SetChars(FLiveChars);
       ReadTranscript;
-      SetStatus('', '', Format('デコード完了: %d 文字', [Length(Thread.Chars)]));
+      SetStatus('', '', Format(RsDecodeDone, [Length(Thread.Chars)]));
     end;
   end;
 
@@ -4283,7 +4345,7 @@ begin
         FJournal.Flush;
     except
       on E: Exception do
-        LogDiagnostic('受信の終了', E.Message);
+        LogDiagnostic(RsCtxReceiveStop, E.Message);
     end;
   end;
 
@@ -4514,7 +4576,7 @@ begin
   except
     on E: Exception do
     begin
-      ReportError('WAV の読み込み', E);
+      ReportError(RsCtxWavRead, E);
       Exit;
     end;
   end;
@@ -4795,7 +4857,7 @@ begin
         ShowStreamText;
       except
         on E: Exception do
-          LogDiagnostic('受信の終了', E.Message);
+          LogDiagnostic(RsCtxReceiveStop, E.Message);
       end;
   end;
   { 書き残しの行を出します。交信の最後の語は、たいてい語間で終わらないため、
@@ -4815,7 +4877,7 @@ begin
       RefreshBandMap;
     except
       on E: Exception do
-        LogDiagnostic('受信の終了', E.Message);
+        LogDiagnostic(RsCtxReceiveStop, E.Message);
     end;
   if FJournal <> nil then
     FJournal.Flush;
@@ -7391,8 +7453,12 @@ var
 begin
   Friendly := UserMessageFor(E.Message);
   LogDiagnostic(Context, E.Message);
-  SetStatus('', '', Context + ': ' + StatusLine(E.Message));
-  MessageDlg(Context + 'できませんでした', Friendly, mtError, [mbOK], 0);
+  SetStatus('', '', Format(RsErrStatusLine, [Context, StatusLine(E.Message)]));
+  { `Friendly` は `UserMessageFor` が `AsLines` を通したあとのものです。
+    **ここでもう一度通してはいけません**（Windows で `#13#13#10` になります）。
+    `Friendly` has already been through `AsLines` in `UserMessageFor`; **it must
+    not go through twice** (that yields `#13#13#10` on Windows). }
+  MessageDlg(Format(RsErrFailedTitle, [Context]), Friendly, mtError, [mbOK], 0);
 end;
 
 end.

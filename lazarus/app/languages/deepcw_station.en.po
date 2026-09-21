@@ -1,55 +1,126 @@
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8"
 
+#: frmmain.rsctxdecode
+msgctxt "frmmain.rsctxdecode"
+msgid "デコード"
+msgstr "Decoding"
+
+#: frmmain.rsctxfistlog
+msgid "送信訓練の記録"
+msgstr "Drill record"
+
+#: frmmain.rsctxfistscore
+msgid "送信訓練の採点"
+msgstr "Drill scoring"
+
+#: frmmain.rsctxfiststart
+msgid "送信訓練の開始"
+msgstr "Drill start"
+
+#: frmmain.rsctxpractice
+msgctxt "frmmain.rsctxpractice"
+msgid "練習"
+msgstr "Practice"
+
+#: frmmain.rsctxpracticelog
+msgid "受信練習の記録"
+msgstr "Copy record"
+
+#: frmmain.rsctxreceivestop
+msgid "受信の終了"
+msgstr "Receive stop"
+
+#: frmmain.rsctxrecheck
+msgid "語の読み直し"
+msgstr "Word re-read"
+
+#: frmmain.rsctxwavread
+msgid "WAV の読み込み"
+msgstr "WAV read"
+
+#: frmmain.rsdecodedone
+#, object-pascal-format
+msgid "デコード完了: %d 文字"
+msgstr "Decoded: %d chars"
+
+#: frmmain.rserrfailedtitle
+#, object-pascal-format
+msgid "%sできませんでした"
+msgstr "%s failed"
+
 #: frmmain.rserrinputstream
 msgid ""
 "マイク（ライン入力）を開けませんでした。\n"
 "別の入力装置を選ぶか、他のアプリが装置を使用していないか確認してください。"
-msgstr "The microphone (line in) could not be opened.\nChoose another input, or check no other app is holding it."
+msgstr ""
+"The microphone (line in) could not be opened.\n"
+"Choose another input, or check no other app is holding it."
 
 #: frmmain.rserrmetadatamissing
 msgid ""
 "設定ファイル model.onnx.json が見つかりません。\n"
 "設定タブで場所を指定してください。"
-msgstr "The settings file model.onnx.json was not found.\nSet its location on the Settings tab."
+msgstr ""
+"The settings file model.onnx.json was not found.\n"
+"Set its location on the Settings tab."
 
 #: frmmain.rserrmismatch
 msgid ""
 "モデルと設定ファイルの組み合わせが正しくありません。\n"
 "同じ配布物に入っている model.onnx と model.onnx.json を指定してください。"
-msgstr "The model and its settings file do not go together.\nUse the model.onnx and model.onnx.json from one distribution."
+msgstr ""
+"The model and its settings file do not go together.\n"
+"Use the model.onnx and model.onnx.json from one distribution."
 
 #: frmmain.rserrmodelmissing
 msgid ""
 "モデルファイル model.onnx が見つかりません。\n"
 "設定タブで場所を指定してください。"
-msgstr "The model file model.onnx was not found.\nSet its location on the Settings tab."
+msgstr ""
+"The model file model.onnx was not found.\n"
+"Set its location on the Settings tab."
 
 #: frmmain.rserrother
 msgid ""
 "問題が起きたため、処理を中止しました。\n"
 "詳しい内容は設定タブの診断情報に記録しています。"
-msgstr "Something went wrong; the work stopped.\nDetails are in the diagnostics, Settings tab."
+msgstr ""
+"Something went wrong; the work stopped.\n"
+"Details are in the diagnostics, Settings tab."
 
 #: frmmain.rserroutputstream
 msgid ""
 "再生装置を開けませんでした。\n"
 "別の出力装置を選ぶか、他のアプリが装置を使用していないか確認してください。"
-msgstr "The playback device could not be opened.\nChoose another output, or check no other app is holding it."
+msgstr ""
+"The playback device could not be opened.\n"
+"Choose another output, or check no other app is holding it."
 
 #: frmmain.rserrportaudio
 msgid ""
 "音声ライブラリ PortAudio を利用できません。\n"
 "同梱されていない場合は、設定タブでライブラリの場所を指定してください。\n"
 "WAV ファイルの読み書きは、この状態でも利用できます。"
-msgstr "The PortAudio sound library is not available.\nIf it was not bundled, set its location on the Settings tab.\nReading and writing WAV files still works."
+msgstr ""
+"The PortAudio sound library is not available.\n"
+"If it was not bundled, set its location on the Settings tab.\n"
+"Reading and writing WAV files still works."
 
 #: frmmain.rserrruntime
 msgid ""
 "推論ライブラリ ONNX Runtime を読み込めませんでした。\n"
 "設定タブでライブラリの場所を指定してください。\n"
 "送信音の生成と WAV への保存は、この状態でも利用できます。"
-msgstr "The ONNX Runtime inference library could not be loaded.\nSet its location on the Settings tab.\nSending tones and saving WAV files still works."
+msgstr ""
+"The ONNX Runtime inference library could not be loaded.\n"
+"Set its location on the Settings tab.\n"
+"Sending tones and saving WAV files still works."
+
+#: frmmain.rserrstatusline
+#, object-pascal-format
+msgid "%0:s: %1:s"
+msgstr "%0:s: %1:s"
 
 #: frmmain.rserrtooshort
 msgid "音声が短すぎます。もう少し長い録音でお試しください。"
@@ -59,7 +130,14 @@ msgstr "The audio is too short. Try a longer recording."
 msgid ""
 "この音声ファイルを読み取れませんでした。\n"
 "PCM 形式のモノラルまたはステレオの WAV ファイルをお使いください。"
-msgstr "This sound file could not be read.\nUse a PCM WAV file, mono or stereo."
+msgstr ""
+"This sound file could not be read.\n"
+"Use a PCM WAV file, mono or stereo."
+
+#: frmmain.rsftadvice
+#, object-pascal-format
+msgid "直すとよい点: %s"
+msgstr "Worth fixing: %s"
 
 #: frmmain.rsftallitems
 msgid "5 項目すべて"
@@ -81,6 +159,14 @@ msgstr "Not a standard of correctness: a bug key is measured against the bug-key
 msgid "下に出すもの"
 msgstr "Show below"
 
+#: frmmain.rsftbusydrill
+msgid "訓練中です。先に「終了して採点」を押してください。"
+msgstr "A drill is running. Press \"Stop, score\" first."
+
+#: frmmain.rsftbusyreceiving
+msgid "受信中は訓練を始められません。先に「受信停止」を押してください。"
+msgstr "Cannot drill while receiving. Press \"Stop\" first."
+
 #: frmmain.rsftfinish
 msgid "終了して採点"
 msgstr "Stop, score"
@@ -89,9 +175,18 @@ msgstr "Stop, score"
 msgid "課題文なしで送る（採点は参考値）"
 msgstr "Send freely (score is indicative)"
 
+#: frmmain.rsftfreetext
+msgid "課題文なしで送ります。採点は参考値です。"
+msgstr "No set text: the score is indicative."
+
 #: frmmain.rsftfromwav
 msgid "WAV から採点"
 msgstr "Score a WAV"
+
+#: frmmain.rsftgaps
+#, object-pascal-format
+msgid "間隔の比: 符号内 %0:.2f ／ 文字間 %1:.2f ／ 語間 %2:.2f"
+msgstr "Gaps: in-symbol %0:.2f / letter %1:.2f / word %2:.2f"
 
 #: frmmain.rsftgroups
 msgctxt "frmmain.rsftgroups"
@@ -114,17 +209,110 @@ msgstr "Key"
 msgid "課題文の内容"
 msgstr "Text kind"
 
+#: frmmain.rsftneedtext
+msgid "先に「課題文を出す」を押すか、送る文を書いてください。"
+msgstr "Press \"New text\" first, or write what you will send."
+
 #: frmmain.rsftnew
 msgid "課題文を出す"
 msgstr "New text"
+
+#: frmmain.rsftnewdone
+msgid "課題文を出しました。準備ができたら「訓練開始」を押してください。"
+msgstr "A text is ready. Press \"Start\" when you are."
+
+#: frmmain.rsftnoaudio
+msgid "音が取り込めませんでした。入力装置と音量を確かめてください。"
+msgstr "No audio came in. Check the input device and the volume."
+
+#: frmmain.rsftnomonitor
+msgid ""
+"モニター音が見つかりませんでした。\n"
+"無線機のモニター音量と、受信タブで選んだ入力装置を確かめてください。"
+msgstr ""
+"No monitor tone was found.\n"
+"Check the rig's monitor volume and the input device on the Receive tab."
+
+#: frmmain.rsftnoreadable
+msgid "  写しやすさ —（課題文と読み合わせていません）"
+msgstr "  Readable — (not compared with a set text)"
+
+#: frmmain.rsftnorecords
+#, object-pascal-format
+msgid "まだ記録はありません。記録は %s に CSV で残ります。"
+msgstr "No sessions yet. They are kept as CSV in %s."
+
+#: frmmain.rsftnoscore
+#, object-pascal-format
+msgid ""
+"採点できませんでした。\n"
+"%s"
+msgstr ""
+"Could not score it.\n"
+"%s"
+
+#: frmmain.rsftnoscorestatus
+msgid "採点できませんでした。"
+msgstr "Could not score it."
+
+#: frmmain.rsftnotefreetext
+msgid "※ 課題文なしで測りました。間隔の種別はしきい値で分けています（参考値）。"
+msgstr "* Measured without a set text; gaps sorted by threshold (indicative)."
+
+#: frmmain.rsftnotetrimmed
+msgid "※ 10 分を超えた分は保持から落ちました。最後の 10 分だけを採点しています。"
+msgstr "* Anything past 10 minutes was dropped; only the last 10 is scored."
 
 #: frmmain.rsftoverall
 msgid "総合"
 msgstr "Overall"
 
+#: frmmain.rsftoverallline
+#, object-pascal-format
+msgid "総合 %0:.0f 点（%1:s の基準）"
+msgstr "%0:.0f overall (%1:s standard)"
+
+#: frmmain.rsftparts
+#, object-pascal-format
+msgid "  速度の安定 %0:3.0f ／ 短長の明瞭 %1:3.0f ／ 区切りの明瞭 %2:3.0f ／ 間隔の正確 %3:3.0f"
+msgstr "  Steady %0:3.0f / Dot-dash %1:3.0f / Spacing %2:3.0f / Ratios %3:3.0f"
+
+#: frmmain.rsftreadable
+#, object-pascal-format
+msgid "  写しやすさ %0:3.0f（文字誤り率 %1:.1f%%）"
+msgstr "  Readable %0:3.0f (character error %1:.1f%%)"
+
+#: frmmain.rsftrecords
+#, object-pascal-format
+msgid "%0:d 件 ／ 自己ベスト 総合 %1:.0f 点 ／ %2:s"
+msgstr "%0:d sessions / best %1:.0f overall / %2:s"
+
+#: frmmain.rsftrunning
+#, object-pascal-format
+msgid "訓練中 %d Hz"
+msgstr "Drilling %d Hz"
+
 #: frmmain.rsftscore
 msgid "採点"
 msgstr "Score"
+
+#: frmmain.rsftscored
+#, object-pascal-format
+msgid "採点しました。総合 %.0f 点。"
+msgstr "Scored: %.0f overall."
+
+#: frmmain.rsftscoring
+msgid "採点しています…"
+msgstr "Scoring…"
+
+#: frmmain.rsftsendnow
+msgid "送ってください。終わったら「終了して採点」を押してください。"
+msgstr "Send now. Press \"Stop, score\" when you are done."
+
+#: frmmain.rsftseparation
+#, object-pascal-format
+msgid "分離度: 短点と長点 %0:.1f ／ 符号内と文字間 %1:.1f ／ 速度の変化 %2:.0f%%"
+msgstr "Separation: dot/dash %0:.1f / symbol/letter %1:.1f / drift %2:.0f%%"
 
 #: frmmain.rsftstart
 msgid "訓練開始"
@@ -133,6 +321,11 @@ msgstr "Start"
 #: frmmain.rsftstarthint
 msgid "「課題文を出す」を押し、無線機のモニター音が届く状態で「訓練開始」を押してください。"
 msgstr "Press New text, then Start with the rig's monitor tone reaching the input."
+
+#: frmmain.rsftstreak
+#, object-pascal-format
+msgid "%d 日続いています"
+msgstr "%d days in a row"
 
 #: frmmain.rsfttab
 msgid "送信訓練"
@@ -153,6 +346,15 @@ msgstr "Trend"
 #: frmmain.rsfttrenditemlabel
 msgid "推移に出す項目"
 msgstr "Trend shows"
+
+#: frmmain.rsftwavhint
+msgid "受信タブの「WAV ファイルから受信」に、採点したい録音を選んでください。"
+msgstr "Choose the recording under \"Receive from WAV file\" on the Receive tab."
+
+#: frmmain.rsftwpm
+#, object-pascal-format
+msgid "実効 %0:.1f WPM ／ 短点 %1:.1f ms（ばらつき %2:.1f%%）／ 長短比 %3:.2f"
+msgstr "%0:.1f WPM / dot %1:.1f ms (spread %2:.1f%%) / dash ratio %3:.2f"
 
 #: frmmain.rsinfoalphabet
 #, object-pascal-format
@@ -279,6 +481,11 @@ msgstr "Play again"
 msgid "正解"
 msgstr "Answer"
 
+#: frmmain.rsprconfusions
+#, object-pascal-format
+msgid "%0:s ／ 続けて間違えている符号: %1:s"
+msgstr "%0:s / kept missing: %1:s"
+
 #: frmmain.rsprcopylabel
 msgid "写した文字を書いてください"
 msgstr "Type what you copied"
@@ -304,6 +511,11 @@ msgctxt "frmmain.rsprgroups"
 msgid "出す数"
 msgstr "Units"
 
+#: frmmain.rsprhistory
+#, object-pascal-format
+msgid "これまで %0:d 回 ／ 直近 10 回の平均 %1:.0f%%"
+msgstr "Sessions %0:d / last 10 average %1:.0f%%"
+
 #: frmmain.rsprkind
 msgid "出す内容"
 msgstr "Material"
@@ -312,13 +524,39 @@ msgstr "Material"
 msgid "答え合わせ"
 msgstr "Mark it"
 
+#: frmmain.rsprmistakes
+#, object-pascal-format
+msgid "間違えやすかった符号: %s"
+msgstr "Most often missed: %s"
+
+#: frmmain.rsprneedexercise
+msgid "先に「出題して鳴らす」を押してください。"
+msgstr "Press \"New and play\" first."
+
 #: frmmain.rsprnoise
 msgid "雑音"
 msgstr "Noise"
 
+#: frmmain.rsprnomistakes
+msgid "間違いはありません。"
+msgstr "No mistakes."
+
+#: frmmain.rsprnosound
+msgid "音を鳴らせませんでした。正解は「答え合わせ」で出せます。"
+msgstr "The sound would not play. \"Mark it\" still shows the answer."
+
 #: frmmain.rsprplay
 msgid "出題して鳴らす"
 msgstr "New and play"
+
+#: frmmain.rsprplaying
+msgid "出題を鳴らしています。"
+msgstr "Playing the exercise."
+
+#: frmmain.rsprresult
+#, object-pascal-format
+msgid "正答率 %0:.0f%%（%1:d 文字中 %2:d 文字）／ 違い %3:d ・ 落とし %4:d ・ 足し %5:d"
+msgstr "Correct %0:.0f%% (%1:d chars, %2:d right) / wrong %3:d, missed %4:d, extra %5:d"
 
 #: frmmain.rsprstarthint
 msgid "「出題して鳴らす」を押すと始まります。"
@@ -328,7 +566,13 @@ msgstr "Press New and play to begin."
 msgid "止める"
 msgstr "Stop"
 
+#: frmmain.rsprsummary
+#, object-pascal-format
+msgid "%0:d 文字 / %1:.1f 秒"
+msgstr "%0:d chars / %1:.1f s"
+
 #: frmmain.rsprtab
+msgctxt "frmmain.rsprtab"
 msgid "練習"
 msgstr "Practice"
 
@@ -365,6 +609,7 @@ msgid "コピー"
 msgstr "Copy"
 
 #: frmmain.rsrxdecode
+msgctxt "frmmain.rsrxdecode"
 msgid "デコード"
 msgstr "Decode"
 
