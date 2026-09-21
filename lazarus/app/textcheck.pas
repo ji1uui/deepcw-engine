@@ -139,6 +139,19 @@ function TooWide(const Items: TTextWidthList): TTextWidthList;
 { 1 行の報告。 / One line of report. }
 function DescribeWidths(const Item: TTextWidths): string;
 
+{ 見出しに使えない字が入っている訳を返します（要件 NFR-7.6）。
+
+  **`&` は LCL では「次の字に下線を引く」印**として食われます。`Text & score` は
+  画面に `Text_score` と出ます（付録 BE.6 で実際に出ました）。訳す人が知っている
+  べき事情ではないので、**機械で見つけます。**
+
+  Returns translations holding a character a caption cannot carry (NFR-7.6).
+
+  **In the LCL an `&` is eaten as "underline the next letter"**: `Text & score`
+  reaches the screen as `Text_score` (it did; appendix BE.6). That is not
+  something a translator should have to know, so **it is found by machine.** }
+function BadForCaption(const Items: TTextWidthList): TTextWidthList;
+
 { 置いてある `.po` をすべて読み、幅を報告します。広すぎるものが 1 件でもあれば
   0 以外を返します（呼ぶ側はそれを終了コードにします）。
 
@@ -200,6 +213,7 @@ var
   Lines: TStringList;
   I, Count: Integer;
   Name_, Source, Target, Text_: string;
+  Fuzzy: Boolean;
   Reading: (rNothing, rSource, rTarget);
 
   procedure Keep;
@@ -208,6 +222,18 @@ var
       An empty translation means **not translated yet**, which is not an
       error. }
     if (Source = '') or (Target = '') then
+      Exit;
+    { **`#, fuzzy` の付いた行は、訳があっても実行時には使われません。**
+      `updatepofiles` は同じ日本語の訳を新しい行へ写しますが、確認を求める印を
+      付けます。ここで数えてしまうと、**幅の検査は「訳した」と言い、画面には
+      日本語が出る**という食い違いが起きます（付録 BE.5）。
+
+      **An entry marked `#, fuzzy` is not used at run time even though it holds
+      a translation.** `updatepofiles` copies a translation across to a new
+      entry with the same Japanese but marks it for review. Counted here, **the
+      width check would say "translated" while the screen showed Japanese**
+      (appendix BE.5). }
+    if Fuzzy then
       Exit;
     if Count > High(Result) then
       SetLength(Result, Count + 32);
@@ -233,6 +259,7 @@ begin
     Name_ := '';
     Source := '';
     Target := '';
+    Fuzzy := False;
     Reading := rNothing;
     for I := 0 to Lines.Count - 1 do
     begin
@@ -243,8 +270,13 @@ begin
         Name_ := Trim(Copy(Text_, 4, Length(Text_)));
         Source := '';
         Target := '';
+        Fuzzy := False;
         Reading := rNothing;
       end
+      else if Copy(Text_, 1, 2) = '#,' then
+        { 印の行。`fuzzy` 以外の印（`c-format` など）もここに並びます。
+          The flags line; other flags such as `c-format` appear here too. }
+        Fuzzy := Fuzzy or (Pos('fuzzy', Text_) > 0)
       else if Copy(Text_, 1, 6) = 'msgid ' then
       begin
         Source := Quoted(Text_);
@@ -286,6 +318,41 @@ begin
   end;
 end;
 
+function BadForCaption(const Items: TTextWidthList): TTextWidthList;
+var
+  I, Count, At_: Integer;
+  Text_: string;
+  Lone: Boolean;
+begin
+  SetLength(Result, Length(Items));
+  Count := 0;
+  for I := 0 to High(Items) do
+  begin
+    Text_ := Items[I].Target;
+    { `&&` と書けば字として出ますが、1 つだけの `&` は食われます。
+      Written `&&` it shows as itself; a lone `&` is eaten. }
+    Lone := False;
+    At_ := 1;
+    while At_ <= Length(Text_) do
+    begin
+      if Text_[At_] = '&' then
+      begin
+        if (At_ < Length(Text_)) and (Text_[At_ + 1] = '&') then
+          Inc(At_)
+        else
+          Lone := True;
+      end;
+      Inc(At_);
+    end;
+    if Lone then
+    begin
+      Result[Count] := Items[I];
+      Inc(Count);
+    end;
+  end;
+  SetLength(Result, Count);
+end;
+
 function TooWide(const Items: TTextWidthList): TTextWidthList;
 var
   I, Count: Integer;
@@ -319,7 +386,7 @@ end;
 function ReportTextWidths(Canvas_: TCanvas): Integer;
 var
   Found: TStringList;
-  Items, Wide: TTextWidthList;
+  Items, Wide, Bad: TTextWidthList;
   I, J, Total: Integer;
   Dir: string;
 begin
@@ -340,11 +407,15 @@ begin
       Items := LoadPoPairs(Found[I]);
       MeasureWidths(Items, Canvas_);
       Wide := TooWide(Items);
-      Inc(Total, Length(Wide));
-      WriteLn(Format('%s: 訳 %d 件 / 広すぎるもの %d 件',
-        [ExtractFileName(Found[I]), Length(Items), Length(Wide)]));
+      Bad := BadForCaption(Items);
+      Inc(Total, Length(Wide) + Length(Bad));
+      WriteLn(Format('%s: 訳 %d 件 / 広すぎるもの %d 件 / 見出しに使えない字 %d 件',
+        [ExtractFileName(Found[I]), Length(Items), Length(Wide), Length(Bad)]));
       for J := 0 to High(Wide) do
         WriteLn('  ', DescribeWidths(Wide[J]));
+      for J := 0 to High(Bad) do
+        WriteLn(Format('  %s: 「%s」に & があります。LCL は下線の印として食います',
+          [Bad[J].Name_, Bad[J].Target]));
     end;
     WriteLn(Format('許す広がりは %.0f%% まで。%d 画素より狭い文言は LayoutCheck に任せる',
       [100 * TEXT_WIDTH_ALLOWANCE, TEXT_WIDTH_SHORT_PIXELS]));

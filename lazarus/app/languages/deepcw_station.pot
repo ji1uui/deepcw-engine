@@ -1,6 +1,168 @@
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8"
 
+#: frmmain.rsftallitems
+msgid "5 項目すべて"
+msgstr ""
+
+#: frmmain.rsftanykey
+msgid "すべて"
+msgstr ""
+
+#: frmmain.rsftbasis
+msgid "採点の基準"
+msgstr ""
+
+#: frmmain.rsftbasisnote
+msgid "基準は「正しさ」ではありません。バグキーの符号は、バグキーの基準で測ります。"
+msgstr ""
+
+#: frmmain.rsftbottomlabel
+msgid "下に出すもの"
+msgstr ""
+
+#: frmmain.rsftfinish
+msgid "終了して採点"
+msgstr ""
+
+#: frmmain.rsftfree
+msgid "課題文なしで送る（採点は参考値）"
+msgstr ""
+
+#: frmmain.rsftfromwav
+msgid "WAV から採点"
+msgstr ""
+
+#: frmmain.rsftgroups
+msgctxt "frmmain.rsftgroups"
+msgid "出す数"
+msgstr ""
+
+#: frmmain.rsfthistogram
+msgid "分布"
+msgstr ""
+
+#: frmmain.rsfthistory
+msgid "これまでの記録"
+msgstr ""
+
+#: frmmain.rsftkeykind
+msgid "鍵の種類"
+msgstr ""
+
+#: frmmain.rsftkind
+msgid "課題文の内容"
+msgstr ""
+
+#: frmmain.rsftnew
+msgid "課題文を出す"
+msgstr ""
+
+#: frmmain.rsftoverall
+msgid "総合"
+msgstr ""
+
+#: frmmain.rsftscore
+msgid "採点"
+msgstr ""
+
+#: frmmain.rsftstart
+msgid "訓練開始"
+msgstr ""
+
+#: frmmain.rsftstarthint
+msgid "「課題文を出す」を押し、無線機のモニター音が届く状態で「訓練開始」を押してください。"
+msgstr ""
+
+#: frmmain.rsfttab
+msgid "送信訓練"
+msgstr ""
+
+#: frmmain.rsfttextandscore
+msgid "課題文と採点"
+msgstr ""
+
+#: frmmain.rsfttextlabel
+msgid "課題文（この文を自分の鍵で送ってください。書き換えられます）"
+msgstr ""
+
+#: frmmain.rsfttrend
+msgid "推移"
+msgstr ""
+
+#: frmmain.rsfttrenditemlabel
+msgid "推移に出す項目"
+msgstr ""
+
+#: frmmain.rspragain
+msgid "もう一度鳴らす"
+msgstr ""
+
+#: frmmain.rspranswer
+msgid "正解"
+msgstr ""
+
+#: frmmain.rsprcopylabel
+msgid "写した文字を書いてください"
+msgstr ""
+
+#: frmmain.rsprdelay
+msgid "遅らせて正解を出す"
+msgstr ""
+
+#: frmmain.rsprdelaynote
+msgid "鳴った文字が、この秒数だけ遅れて「正解」に出ます。"
+msgstr ""
+
+#: frmmain.rsprdelayseconds
+msgid "遅らせる秒数"
+msgstr ""
+
+#: frmmain.rsprexercise
+msgid "出題"
+msgstr ""
+
+#: frmmain.rsprgroups
+msgctxt "frmmain.rsprgroups"
+msgid "出す数"
+msgstr ""
+
+#: frmmain.rsprkind
+msgid "出す内容"
+msgstr ""
+
+#: frmmain.rsprmark
+msgid "答え合わせ"
+msgstr ""
+
+#: frmmain.rsprnoise
+msgid "雑音"
+msgstr ""
+
+#: frmmain.rsprplay
+msgid "出題して鳴らす"
+msgstr ""
+
+#: frmmain.rsprstarthint
+msgid "「出題して鳴らす」を押すと始まります。"
+msgstr ""
+
+#: frmmain.rsprstop
+msgid "止める"
+msgstr ""
+
+#: frmmain.rsprtab
+msgid "練習"
+msgstr ""
+
+#: frmmain.rsprtonenote
+msgid "音程と音量は送信タブの設定を使います。"
+msgstr ""
+
+#: frmmain.rsprwpm
+msgid "速度 (WPM)"
+msgstr ""
+
 #: frmmain.rsrxbandany
 msgid "指定なし"
 msgstr ""
@@ -106,6 +268,7 @@ msgid "文字を押すと、その音を聴き直せます。"
 msgstr ""
 
 #: frmmain.rsrxreplaystop
+msgctxt "frmmain.rsrxreplaystop"
 msgid "停止"
 msgstr ""
 
@@ -163,5 +326,212 @@ msgstr ""
 
 #: frmmain.rsrxwatchlabel
 msgid "待つ符号"
+msgstr ""
+
+#: frmmain.rssetadifexport
+msgid "ADIF を書き出す"
+msgstr ""
+
+#: frmmain.rssetadifimport
+msgid "ADIF を取り込む"
+msgstr ""
+
+#: frmmain.rssetadvanced
+msgid "詳細・診断"
+msgstr ""
+
+#: frmmain.rssetapply
+msgid "設定を適用してエンジンを読み込み直す"
+msgstr ""
+
+#: frmmain.rssetauto
+msgid "自動"
+msgstr ""
+
+#: frmmain.rssetbandwidth
+msgid "同調時の帯域幅"
+msgstr ""
+
+#: frmmain.rssetcapturenote
+msgid "受信機の音を取り込む細かさです。うまく取り込めないときだけ変えてください。"
+msgstr ""
+
+#: frmmain.rssetcapturerate
+msgid "音の細かさ"
+msgstr ""
+
+#: frmmain.rssetchoosefile
+msgid "ファイルを選ぶ"
+msgstr ""
+
+#: frmmain.rssetcopydiag
+msgid "診断情報をコピー"
+msgstr ""
+
+#: frmmain.rssetdiagnostics
+msgid "診断情報"
+msgstr ""
+
+#: frmmain.rssetdiagnote1
+msgid "受信した文章・交信記録の中身・待っている符号は入りません。"
+msgstr ""
+
+#: frmmain.rssetdiagnote2
+msgid "ファイルの場所の利用者名は ~ に置き換えます。"
+msgstr ""
+
+#: frmmain.rssetdontuse
+msgid "使わない"
+msgstr ""
+
+#: frmmain.rssethighcontrast
+msgid "高コントラスト表示（薄い文字を濃くする）"
+msgstr ""
+
+#: frmmain.rssethighcontrastnote
+msgid "確からしさの濃淡は残りますが、幅は狭くなります"
+msgstr ""
+
+#: frmmain.rssetjournal
+msgid "受信テキストを時刻付きで記録する"
+msgstr ""
+
+#: frmmain.rssetjournalnote
+msgid "確定するそばからファイルへ書き足します。異常終了しても直前まで残ります。"
+msgstr ""
+
+#: frmmain.rssetlanguage
+msgid "画面の言葉 / Language"
+msgstr ""
+
+#: frmmain.rssetlog
+msgid "交信記録"
+msgstr ""
+
+#: frmmain.rssetmetadata
+msgid "メタデータ (model.onnx.json)"
+msgstr ""
+
+#: frmmain.rssetmodel
+msgid "モデル (model.onnx)"
+msgstr ""
+
+#: frmmain.rssetoperating
+msgid "運用設定"
+msgstr ""
+
+#: frmmain.rssetportaudio
+msgid "PortAudio ライブラリ（空欄なら自動検索）"
+msgstr ""
+
+#: frmmain.rssetprefixes
+msgid "国別前置符字表"
+msgstr ""
+
+#: frmmain.rssetrate8000
+msgid "8000 Hz（推奨）"
+msgstr ""
+
+#: frmmain.rssetrecord
+msgid "受信した音を WAV で録音する"
+msgstr ""
+
+#: frmmain.rssetretention
+msgid "聴き直せる長さ"
+msgstr ""
+
+#: frmmain.rssetretention10
+msgid "10 分（推奨）"
+msgstr ""
+
+#: frmmain.rssetretention20
+msgid "20 分"
+msgstr ""
+
+#: frmmain.rssetretention30
+msgid "30 分"
+msgstr ""
+
+#: frmmain.rssetretention5
+msgid "5 分"
+msgstr ""
+
+#: frmmain.rssetretentionnote
+msgid "受信テキストの文字を押して音を聴き直せる範囲です。長くするほど記憶を使います。"
+msgstr ""
+
+#: frmmain.rssetroster
+msgid "呼出符号の一覧"
+msgstr ""
+
+#: frmmain.rssetruntime
+msgid "ONNX Runtime ライブラリ（空欄なら自動検索）"
+msgstr ""
+
+#: frmmain.rssettab
+msgid "設定"
+msgstr ""
+
+#: frmmain.rssetthreads
+msgid "推論スレッド"
+msgstr ""
+
+#: frmmain.rstxcharwpm
+msgid "文字速度 (WPM)"
+msgstr ""
+
+#: frmmain.rstxmorse
+msgid "モールス符号"
+msgstr ""
+
+#: frmmain.rstxnoise
+msgid "受信練習用ノイズ"
+msgstr ""
+
+#: frmmain.rstxsavewav
+msgid "WAV に保存"
+msgstr ""
+
+#: frmmain.rstxsend
+msgctxt "frmmain.rstxsend"
+msgid "送信"
+msgstr ""
+
+#: frmmain.rstxsending
+msgid "送信中の文字"
+msgstr ""
+
+#: frmmain.rstxsettings
+msgid "送信設定"
+msgstr ""
+
+#: frmmain.rstxstop
+msgctxt "frmmain.rstxstop"
+msgid "停止"
+msgstr ""
+
+#: frmmain.rstxtab
+msgctxt "frmmain.rstxtab"
+msgid "送信"
+msgstr ""
+
+#: frmmain.rstxtextlabel
+msgid "送信する文（A-Z 0-9 . , ? / と空白）"
+msgstr ""
+
+#: frmmain.rstxtextwpm
+msgid "実効速度 (WPM)"
+msgstr ""
+
+#: frmmain.rstxtonehz
+msgid "音程 (Hz)"
+msgstr ""
+
+#: frmmain.rstxverify
+msgid "自己デコード確認"
+msgstr ""
+
+#: frmmain.rstxvolume
+msgid "音量"
 msgstr ""
 

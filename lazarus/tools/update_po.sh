@@ -67,6 +67,10 @@ for PO in app/languages/deepcw_station.*.po; do
   [ -e "$PO" ] || continue
   # 先頭の `Content-Type:` の行は文言ではないので数えません。
   # The leading `Content-Type:` line is not one of the words.
-  DONE=$(grep '^msgstr "..*"' "$PO" | grep -vc 'Content-Type' || true)
-  echo "  $(basename "$PO"): 訳済み $DONE / $TOTAL"
+  DONE=$(awk '/^#, / { if ($0 ~ /fuzzy/) f=1; next }
+      /^#: / { f=0; next }
+      /^msgstr "..*"/ { if (!f && $0 !~ /Content-Type/) n++ }
+      END { print n+0 }' "$PO")
+    FUZZY=$(grep -c '^#, .*fuzzy' "$PO" || true)
+  echo "  $(basename "$PO"): 訳済み $DONE / $TOTAL（要確認 $FUZZY 件は画面に出ないので未訳に数える）"
 done

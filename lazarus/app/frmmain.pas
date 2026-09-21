@@ -846,6 +846,115 @@ resourcestring
   RsRxBandAny = '指定なし';
   RsRxHideWorked = '交信済みを隠す';
 
+  { 送信タブ / the transmit tab }
+  RsTxTab = '送信';
+  RsTxTextLabel = '送信する文（A-Z 0-9 . , ? / と空白）';
+  RsTxMorse = 'モールス符号';
+  RsTxSettings = '送信設定';
+  RsTxCharWpm = '文字速度 (WPM)';
+  RsTxTextWpm = '実効速度 (WPM)';
+  RsTxToneHz = '音程 (Hz)';
+  RsTxVolume = '音量';
+  RsTxNoise = '受信練習用ノイズ';
+  RsTxSend = '送信';
+  RsTxStop = '停止';
+  RsTxSaveWav = 'WAV に保存';
+  RsTxVerify = '自己デコード確認';
+  RsTxSending = '送信中の文字';
+
+  { 受信練習タブ / the copy-practice tab }
+  RsPrTab = '練習';
+  RsPrExercise = '出題';
+  RsPrKind = '出す内容';
+  RsPrGroups = '出す数';
+  RsPrWpm = '速度 (WPM)';
+  RsPrNoise = '雑音';
+  RsPrToneNote = '音程と音量は送信タブの設定を使います。';
+  RsPrDelay = '遅らせて正解を出す';
+  RsPrDelaySeconds = '遅らせる秒数';
+  RsPrDelayNote = '鳴った文字が、この秒数だけ遅れて「正解」に出ます。';
+  RsPrPlay = '出題して鳴らす';
+  RsPrAgain = 'もう一度鳴らす';
+  RsPrStop = '止める';
+  RsPrStartHint = '「出題して鳴らす」を押すと始まります。';
+  RsPrCopyLabel = '写した文字を書いてください';
+  RsPrMark = '答え合わせ';
+  RsPrAnswer = '正解';
+
+  { 送信訓練タブ / the send-practice tab }
+  RsFtTab = '送信訓練';
+  RsFtTextAndScore = '課題文と採点';
+  RsFtKind = '課題文の内容';
+  RsFtGroups = '出す数';
+  RsFtKeyKind = '鍵の種類';
+  RsFtBasis = '採点の基準';
+  RsFtBasisNote = '基準は「正しさ」ではありません。バグキーの符号は、バグキーの基準で測ります。';
+  RsFtFree = '課題文なしで送る（採点は参考値）';
+  RsFtNew = '課題文を出す';
+  RsFtStart = '訓練開始';
+  RsFtFinish = '終了して採点';
+  RsFtFromWav = 'WAV から採点';
+  RsFtStartHint = '「課題文を出す」を押し、無線機のモニター音が届く状態で「訓練開始」を押してください。';
+  RsFtTextLabel = '課題文（この文を自分の鍵で送ってください。書き換えられます）';
+  RsFtScore = '採点';
+  RsFtHistory = 'これまでの記録';
+  RsFtBottomLabel = '下に出すもの';
+  RsFtTrend = '推移';
+  RsFtHistogram = '分布';
+  RsFtTrendItemLabel = '推移に出す項目';
+  RsFtOverall = '総合';
+  RsFtAllItems = '5 項目すべて';
+  { **この「すべて」は控えに載せません。**推移の絞り込みは記録から組み直される
+    ので、組み直す側（`FtShowTrend`）が入れ直します（付録 BE.2）。
+    **This `すべて` is not noted down**: the trend's filter is rebuilt from the
+    records, so whatever rebuilds it puts it back (`FtShowTrend`, appendix
+    BE.2). }
+  RsFtAnyKey = 'すべて';
+
+  { 設定タブ / the settings tab }
+  RsSetTab = '設定';
+  RsSetOperating = '運用設定';
+  RsSetCaptureRate = '音の細かさ';
+  RsSetRate8000 = '8000 Hz（推奨）';
+  RsSetCaptureNote = '受信機の音を取り込む細かさです。うまく取り込めないときだけ変えてください。';
+  RsSetRetention = '聴き直せる長さ';
+  RsSetRetention5 = '5 分';
+  RsSetRetention10 = '10 分（推奨）';
+  RsSetRetention20 = '20 分';
+  RsSetRetention30 = '30 分';
+  RsSetRetentionNote = '受信テキストの文字を押して音を聴き直せる範囲です。長くするほど記憶を使います。';
+  RsSetJournal = '受信テキストを時刻付きで記録する';
+  RsSetJournalNote = '確定するそばからファイルへ書き足します。異常終了しても直前まで残ります。';
+  RsSetRecord = '受信した音を WAV で録音する';
+  RsSetLog = '交信記録';
+  RsSetAdifImport = 'ADIF を取り込む';
+  RsSetAdifExport = 'ADIF を書き出す';
+  RsSetRoster = '呼出符号の一覧';
+  RsSetChooseFile = 'ファイルを選ぶ';
+  RsSetDontUse = '使わない';
+  RsSetPrefixes = '国別前置符字表';
+  RsSetHighContrast = '高コントラスト表示（薄い文字を濃くする）';
+  RsSetHighContrastNote = '確からしさの濃淡は残りますが、幅は狭くなります';
+  { **この行だけは訳しません。**読める言語を探している人が、読めない言語で
+    書かれた見出しを探すことになります（付録 BD.2）。
+    **This one line is not translated**: someone hunting for a language they can
+    read would be hunting under a heading in one they cannot (appendix BD.2). }
+  RsSetLanguage = '画面の言葉 / Language';
+  RsSetAdvanced = '詳細・診断';
+  RsSetApply = '設定を適用してエンジンを読み込み直す';
+  RsSetThreads = '推論スレッド';
+  RsSetAuto = '自動';
+  RsSetBandwidth = '同調時の帯域幅';
+  RsSetModel = 'モデル (model.onnx)';
+  RsSetMetadata = 'メタデータ (model.onnx.json)';
+  RsSetRuntime = 'ONNX Runtime ライブラリ（空欄なら自動検索）';
+  RsSetPortAudio = 'PortAudio ライブラリ（空欄なら自動検索）';
+  RsSetCopyDiag = '診断情報をコピー';
+  RsSetDiagNote1 = '受信した文章・交信記録の中身・待っている符号は入りません。';
+  RsSetDiagNote2 = 'ファイルの場所の利用者名は ~ に置き換えます。';
+  RsSetDiagnostics = '診断情報';
+
+
 { 実装の後方で定義します。/ Defined further down. }
 function UserMessageFor(const Raw: string): string; forward;
 function StatusLine(const Raw: string): string; forward;
@@ -1004,7 +1113,14 @@ begin
     if FSetLanguage.ItemIndex = UI_LANG_DEFAULT then
       FSetLanguage.ItemIndex := StartingUiLang('');
     UseUiLang(FSetLanguage.ItemIndex);
-    UiText.ApplyTexts;
+    { **部品側だけでなく、こちらの `ApplyTexts` を呼びます。**実行中に組み直される
+      もの（推移の絞り込みなど）は控えに載らないので、組み直す側を通さないと
+      組み立てたときの言語のまま残ります（付録 BE.6）。
+      **The form's `ApplyTexts`, not just the unit's**: what is rebuilt while
+      running -- the trend's filter, for one -- is not in the notes, so without
+      going through whatever rebuilds it, it stays in the language it was built
+      in (appendix BE.6). }
+    ApplyTexts;
   end;
   { ステータスバーと設定タブに有用な情報を出すため、モデルは起動時に読み込み
     ます。ただしランタイムが無くても起動は妨げません。
@@ -1331,10 +1447,10 @@ var
   Buttons, Current: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
-  Sheet.Caption := '送信';
+  RegisterCaption(Sheet, @RsTxTab);
   Result := Sheet;
 
-  AddTopLabel(Sheet, '送信する文（A-Z 0-9 . , ? / と空白）');
+  AddTopLabel(Sheet, @RsTxTextLabel);
   FTxText := TMemo.Create(Sheet);
   FTxText.Parent := Sheet;
   FTxText.Height := 90;
@@ -1343,7 +1459,7 @@ begin
   FTxText.OnChange := @TxTextChanged;
   Stretch(FTxText, alTop);
 
-  AddTopLabel(Sheet, 'モールス符号');
+  AddTopLabel(Sheet, @RsTxMorse);
   FTxCode := TMemo.Create(Sheet);
   FTxCode.Parent := Sheet;
   FTxCode.Height := 70;
@@ -1355,17 +1471,17 @@ begin
   Options := TGroupBox.Create(Sheet);
   Options.Parent := Sheet;
   Options.Height := 110;
-  Options.Caption := '送信設定';
+  RegisterCaption(Options, @RsTxSettings);
   Stretch(Options, alTop);
 
-  AddLabel(Options, '文字速度 (WPM)', 14, 6);
+  AddLabel(Options, @RsTxCharWpm, 14, 6);
   FTxCharWpm := AddSpin(Options, 14, 26, 5, 60, 20, @TxOptionsChanged);
-  AddLabel(Options, '実効速度 (WPM)', 134, 6);
+  AddLabel(Options, @RsTxTextWpm, 134, 6);
   FTxTextWpm := AddSpin(Options, 134, 26, 5, 60, 20, @TxOptionsChanged);
-  AddLabel(Options, '音程 (Hz)', 254, 6);
+  AddLabel(Options, @RsTxToneHz, 254, 6);
   FTxToneHz := AddSpin(Options, 254, 26, 300, 1500, 700, @TxOptionsChanged);
 
-  AddLabel(Options, '音量', 360, 6);
+  AddLabel(Options, @RsTxVolume, 360, 6);
   FTxVolume := TTrackBar.Create(Options);
   FTxVolume.Parent := Options;
   FTxVolume.SetBounds(360, 24, 160, 36);
@@ -1374,7 +1490,7 @@ begin
   FTxVolume.Position := 60;
   FTxVolume.OnChange := @TxOptionsChanged;
 
-  AddLabel(Options, '受信練習用ノイズ', 540, 6);
+  AddLabel(Options, @RsTxNoise, 540, 6);
   FTxNoise := TTrackBar.Create(Options);
   FTxNoise.Parent := Options;
   FTxNoise.SetBounds(540, 24, 160, 36);
@@ -1386,17 +1502,17 @@ begin
   FTxSummary := AddLabel(Options, '', 726, 30);
 
   Buttons := AddTopPanel(Sheet, 40);
-  FTxSend := AddButton(Buttons, '送信', 12, 4, 110, @TxSendClick);
-  FTxStop := AddButton(Buttons, '停止', 130, 4, 110, @TxStopClick);
-  FTxSave := AddButton(Buttons, 'WAV に保存', 248, 4, 130, @TxSaveClick);
-  FTxVerify := AddButton(Buttons, '自己デコード確認', 386, 4, 160, @TxVerifyClick);
+  FTxSend := AddButton(Buttons, @RsTxSend, 12, 4, 110, @TxSendClick);
+  FTxStop := AddButton(Buttons, @RsTxStop, 130, 4, 110, @TxStopClick);
+  FTxSave := AddButton(Buttons, @RsTxSaveWav, 248, 4, 130, @TxSaveClick);
+  FTxVerify := AddButton(Buttons, @RsTxVerify, 386, 4, 160, @TxVerifyClick);
 
   FTxProgress := TProgressBar.Create(Sheet);
   FTxProgress.Parent := Sheet;
   FTxProgress.Height := 18;
   Stretch(FTxProgress, alTop);
 
-  AddTopLabel(Sheet, '送信中の文字');
+  AddTopLabel(Sheet, @RsTxSending);
   Current := AddTopPanel(Sheet, 90);
   FTxCurrentChar := AddLabel(Current, '-', 12, 0);
   FTxCurrentChar.Font.Size := 28;
@@ -1931,16 +2047,16 @@ var
   Kind: TExerciseKind;
 begin
   Sheet := FPages.AddTabSheet;
-  Sheet.Caption := '練習';
+  RegisterCaption(Sheet, @RsPrTab);
   Result := Sheet;
 
   Options := TGroupBox.Create(Sheet);
   Options.Parent := Sheet;
   Options.Height := 124;
-  Options.Caption := '出題';
+  RegisterCaption(Options, @RsPrExercise);
   Stretch(Options, alTop);
 
-  AddLabel(Options, '出す内容', 14, 8);
+  AddLabel(Options, @RsPrKind, 14, 8);
   FPrKind := TComboBox.Create(Options);
   FPrKind.Parent := Options;
   FPrKind.SetBounds(14, 28, 200, 28);
@@ -1950,12 +2066,12 @@ begin
   FPrKind.ItemIndex := 0;
   FPrKind.OnChange := @PrOptionsChanged;
 
-  AddLabel(Options, '出す数', 230, 8);
+  AddLabel(Options, @RsPrGroups, 230, 8);
   FPrGroups := AddSpin(Options, 230, 30, 1, 50, 10, @PrOptionsChanged);
-  AddLabel(Options, '速度 (WPM)', 330, 8);
+  AddLabel(Options, @RsPrWpm, 330, 8);
   FPrWpm := AddSpin(Options, 330, 30, 5, 40, 20, @PrOptionsChanged);
 
-  AddLabel(Options, '雑音', 440, 8);
+  AddLabel(Options, @RsPrNoise, 440, 8);
   FPrNoise := TTrackBar.Create(Options);
   FPrNoise.Parent := Options;
   FPrNoise.SetBounds(440, 26, 160, 36);
@@ -1964,8 +2080,7 @@ begin
   FPrNoise.Position := 10;
   FPrNoise.OnChange := @PrOptionsChanged;
 
-  AddLabel(Options,
-    '音程と音量は送信タブの設定を使います。', 620, 34);
+  AddLabel(Options, @RsPrToneNote, 620, 34);
 
   { 遅延表示（要件 FR-F.4）。**既定は入れておきます。**「先に自分で写し、後から
     正解を出す」がこのタブの狙いで、押さないと何も出ないより、遅れて出るほうが
@@ -1977,25 +2092,24 @@ begin
   FPrDelay := TCheckBox.Create(Options);
   FPrDelay.Parent := Options;
   FPrDelay.SetBounds(14, 74, 210, 24);
-  FPrDelay.Caption := '遅らせて正解を出す';
+  RegisterCaption(FPrDelay, @RsPrDelay);
   FPrDelay.Checked := True;
   FPrDelay.OnChange := @PrOptionsChanged;
 
-  AddLabel(Options, '遅らせる秒数', 230, 78);
+  AddLabel(Options, @RsPrDelaySeconds, 230, 78);
   FPrDelaySeconds := AddSpin(Options, 330, 74, 0, REVEAL_DELAY_MAX_SECONDS,
     REVEAL_DELAY_DEFAULT_SECONDS, @PrOptionsChanged);
-  AddLabel(Options,
-    '鳴った文字が、この秒数だけ遅れて「正解」に出ます。', 440, 78);
+  AddLabel(Options, @RsPrDelayNote, 440, 78);
 
   Buttons := AddTopPanel(Sheet, 40);
-  FPrPlay := AddButton(Buttons, '出題して鳴らす', 12, 4, 150, @PrPlayClick);
-  FPrAgain := AddButton(Buttons, 'もう一度鳴らす', 170, 4, 150, @PrAgainClick);
+  FPrPlay := AddButton(Buttons, @RsPrPlay, 12, 4, 150, @PrPlayClick);
+  FPrAgain := AddButton(Buttons, @RsPrAgain, 170, 4, 150, @PrAgainClick);
   FPrAgain.Enabled := False;
-  FPrStop := AddButton(Buttons, '止める', 328, 4, 100, @PrStopClick);
+  FPrStop := AddButton(Buttons, @RsPrStop, 328, 4, 100, @PrStopClick);
   FPrStop.Enabled := False;
-  FPrSummary := AddLabel(Buttons, '「出題して鳴らす」を押すと始まります。', 440, 12);
+  FPrSummary := AddLabel(Buttons, @RsPrStartHint, 440, 12);
 
-  AddTopLabel(Sheet, '写した文字を書いてください');
+  AddTopLabel(Sheet, @RsPrCopyLabel);
   FPrCopy := TMemo.Create(Sheet);
   FPrCopy.Parent := Sheet;
   FPrCopy.Height := 90;
@@ -2004,11 +2118,11 @@ begin
   Stretch(FPrCopy, alTop);
 
   Buttons := AddTopPanel(Sheet, 40);
-  FPrMark := AddButton(Buttons, '答え合わせ', 12, 4, 130, @PrMarkClick);
+  FPrMark := AddButton(Buttons, @RsPrMark, 12, 4, 130, @PrMarkClick);
   FPrMark.Enabled := False;
   FPrResult := AddLabel(Buttons, '', 156, 12);
 
-  AddTopLabel(Sheet, '正解');
+  AddTopLabel(Sheet, @RsPrAnswer);
   FPrAnswer := TMemo.Create(Sheet);
   FPrAnswer.Parent := Sheet;
   FPrAnswer.Height := 70;
@@ -2370,16 +2484,16 @@ var
   Bottom: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
-  Sheet.Caption := '送信訓練';
+  RegisterCaption(Sheet, @RsFtTab);
   Result := Sheet;
 
   Options := TGroupBox.Create(Sheet);
   Options.Parent := Sheet;
   Options.Height := 124;
-  Options.Caption := '課題文と採点';
+  RegisterCaption(Options, @RsFtTextAndScore);
   Stretch(Options, alTop);
 
-  AddLabel(Options, '課題文の内容', 14, 8);
+  AddLabel(Options, @RsFtKind, 14, 8);
   FFtKind := TComboBox.Create(Options);
   FFtKind.Parent := Options;
   FFtKind.SetBounds(14, 28, 200, 28);
@@ -2389,10 +2503,10 @@ begin
   FFtKind.ItemIndex := Ord(ekQso);
   FFtKind.OnChange := @FtOptionsChanged;
 
-  AddLabel(Options, '出す数', 230, 8);
+  AddLabel(Options, @RsFtGroups, 230, 8);
   FFtGroups := AddSpin(Options, 230, 30, 1, 20, 3, @FtOptionsChanged);
 
-  AddLabel(Options, '鍵の種類', 330, 8);
+  AddLabel(Options, @RsFtKeyKind, 330, 8);
   FFtKey := TComboBox.Create(Options);
   FFtKey.Parent := Options;
   FFtKey.SetBounds(330, 28, 150, 28);
@@ -2406,7 +2520,7 @@ begin
   FFtKey.ItemIndex := 0;
   FFtKey.OnChange := @FtOptionsChanged;
 
-  AddLabel(Options, '採点の基準', 496, 8);
+  AddLabel(Options, @RsFtBasis, 496, 8);
   FFtBasis := TComboBox.Create(Options);
   FFtBasis.Parent := Options;
   FFtBasis.SetBounds(496, 28, 180, 28);
@@ -2417,9 +2531,7 @@ begin
   FFtBasis.OnChange := @FtOptionsChanged;
   { 採点の基準のすぐ下に置きます。右隣に置くと行に収まりませんでした。
     Directly under the basis; to its right it did not fit on the row. }
-  AddLabel(Options,
-    '基準は「正しさ」ではありません。バグキーの符号は、バグキーの基準で測ります。',
-    496, 60);
+  AddLabel(Options, @RsFtBasisNote, 496, 60);
 
   { 課題文なしでも測れますが、間隔の種別をしきい値で分けるため**参考値**に
     なります（要件 FR-H.3）。画面でそう分かるようにします。
@@ -2429,21 +2541,19 @@ begin
   FFtFree := TCheckBox.Create(Options);
   FFtFree.Parent := Options;
   FFtFree.SetBounds(14, 74, 300, 24);
-  FFtFree.Caption := '課題文なしで送る（採点は参考値）';
+  RegisterCaption(FFtFree, @RsFtFree);
   FFtFree.OnChange := @FtOptionsChanged;
 
-  FFtNew := AddButton(Options, '課題文を出す', 330, 70, 150, @FtNewClick);
+  FFtNew := AddButton(Options, @RsFtNew, 330, 70, 150, @FtNewClick);
 
   Buttons := AddTopPanel(Sheet, 40);
-  FFtStart := AddButton(Buttons, '訓練開始', 12, 4, 120, @FtStartClick);
-  FFtStop := AddButton(Buttons, '終了して採点', 140, 4, 150, @FtStopClick);
+  FFtStart := AddButton(Buttons, @RsFtStart, 12, 4, 120, @FtStartClick);
+  FFtStop := AddButton(Buttons, @RsFtFinish, 140, 4, 150, @FtStopClick);
   FFtStop.Enabled := False;
-  FFtWav := AddButton(Buttons, 'WAV から採点', 298, 4, 150, @FtWavClick);
-  FFtStatus := AddLabel(Buttons,
-    '「課題文を出す」を押し、無線機のモニター音が届く状態で「訓練開始」を押してください。',
-    460, 12);
+  FFtWav := AddButton(Buttons, @RsFtFromWav, 298, 4, 150, @FtWavClick);
+  FFtStatus := AddLabel(Buttons, @RsFtStartHint, 460, 12);
 
-  AddTopLabel(Sheet, '課題文（この文を自分の鍵で送ってください。書き換えられます）');
+  AddTopLabel(Sheet, @RsFtTextLabel);
   FFtText := TMemo.Create(Sheet);
   FFtText.Parent := Sheet;
   { **推移（要件 FR-H.10）に高さを残すため、上の欄は詰めます。**窓の既定の
@@ -2460,7 +2570,7 @@ begin
   FFtText.Font.Size := 14;
   Stretch(FFtText, alTop);
 
-  AddTopLabel(Sheet, '採点');
+  AddTopLabel(Sheet, @RsFtScore);
   { 採点の欄は、余った高さを受け取ります。**下端の推移と、上の課題文は
     読める高さを先に取り、伸び縮みはここが引き受けます。**中身は巻き取れます。
     The score takes what height is left: **the trend at the foot and the text
@@ -2500,7 +2610,7 @@ begin
     The list of records sits in the same block as the trend: **both are for
     looking back**, so a shrinking window does not take one and leave the
     other. }
-  AddTopLabel(Bottom, 'これまでの記録');
+  AddTopLabel(Bottom, @RsFtHistory);
   FFtHistory := TMemo.Create(Bottom);
   FFtHistory.Parent := Bottom;
   FFtHistory.ReadOnly := True;
@@ -2526,34 +2636,40 @@ begin
     What the panel below shows (FR-H.9, FR-H.10): **the trend looks across
     sessions, the distributions inside one.** There is not room for both, and
     choosing beats shrinking each to half. }
-  AddLabel(Buttons, '下に出すもの', 12, 12);
+  AddLabel(Buttons, @RsFtBottomLabel, 12, 12);
   FFtBottomKind := TComboBox.Create(Buttons);
   FFtBottomKind.Parent := Buttons;
   FFtBottomKind.SetBounds(104, 6, 130, 28);
   FFtBottomKind.Style := csDropDownList;
-  FFtBottomKind.Items.Add('推移');
-  FFtBottomKind.Items.Add('分布');
+  RegisterItem(FFtBottomKind, 0, @RsFtTrend);
+  RegisterItem(FFtBottomKind, 1, @RsFtHistogram);
   FFtBottomKind.ItemIndex := 0;
   FFtBottomKind.OnChange := @FtBottomChanged;
 
-  AddLabel(Buttons, '推移に出す項目', 252, 12);
+  AddLabel(Buttons, @RsFtTrendItemLabel, 252, 12);
   FFtTrendItem := TComboBox.Create(Buttons);
   FFtTrendItem.Parent := Buttons;
   FFtTrendItem.SetBounds(360, 6, 150, 28);
   FFtTrendItem.Style := csDropDownList;
-  FFtTrendItem.Items.Add('総合');
-  FFtTrendItem.Items.Add('5 項目すべて');
+  RegisterItem(FFtTrendItem, 0, @RsFtOverall);
+  RegisterItem(FFtTrendItem, 1, @RsFtAllItems);
   for Item := Succ(Low(TFistItem)) to High(TFistItem) do
     FFtTrendItem.Items.Add(FIST_ITEM_NAMES[Item]);
   FFtTrendItem.ItemIndex := 0;
   FFtTrendItem.OnChange := @FtTrendChanged;
 
-  AddLabel(Buttons, '鍵の種類', 526, 12);
+  AddLabel(Buttons, @RsFtKeyKind, 526, 12);
   FFtTrendKey := TComboBox.Create(Buttons);
   FFtTrendKey.Parent := Buttons;
   FFtTrendKey.SetBounds(596, 6, 140, 28);
   FFtTrendKey.Style := csDropDownList;
-  FFtTrendKey.Items.Add('すべて');
+  { **控えに載せません。**この選択肢は記録から組み直されるので、組み直す側
+    （`FtShowTrend`）が入れ直します（付録 BE.2）。載せると、組み直したあとの
+    0 番目を上書きすることになります。
+    **Not noted down**: this list is rebuilt from the records, so whatever
+    rebuilds it puts the word back (`FtShowTrend`, appendix BE.2). Noted, it
+    would overwrite whatever stood first after a rebuild. }
+  FFtTrendKey.Items.Add(RsFtAnyKey);
   FFtTrendKey.ItemIndex := 0;
   FFtTrendKey.OnChange := @FtTrendChanged;
 
@@ -2950,7 +3066,7 @@ begin
   FFtTrendKey.Items.BeginUpdate;
   try
     FFtTrendKey.Items.Clear;
-    FFtTrendKey.Items.Add('すべて');
+    FFtTrendKey.Items.Add(RsFtAnyKey);
     for I := 0 to High(Keys) do
       FFtTrendKey.Items.Add(FistKeyCaption(Keys[I]));
   finally
@@ -3026,7 +3142,12 @@ var
 
   { 技術的な設定は「詳細・診断」側にだけ置きます（要件 FR-G.1）。
     Technical settings live only under the advanced group (FR-G.1). }
-  function AddPathEdit(Parent: TWinControl; const Caption, Value: string): TEdit;
+  { 見出しも控えに載せます（要件 NFR-7.6）。**載せないと、この 4 行だけが
+    前の言語のまま残ります。**
+    The heading is noted down too (NFR-7.6): **without it these four rows alone
+    would stay in the old language.** }
+  function AddPathEdit(Parent: TWinControl; Caption: PResString;
+    const Value: string): TEdit;
   begin
     AddTopLabel(Parent, Caption);
     Result := TEdit.Create(Parent);
@@ -3037,7 +3158,7 @@ var
 
 begin
   Sheet := FPages.AddTabSheet;
-  Sheet.Caption := '設定';
+  RegisterCaption(Sheet, @RsSetTab);
   Result := Sheet;
 
   { 設定は**巻き取れる欄**に載せます（要件 FR-G.3・教訓 10.36）。
@@ -3083,48 +3204,44 @@ begin
   { 画面の言語の行（要件 NFR-7.6）を足したので 40 画素ぶん高くします。
     The language row (requirement NFR-7.6) adds another 40. }
   Operating.Height := 340;
-  Operating.Caption := '運用設定';
+  RegisterCaption(Operating, @RsSetOperating);
   Stretch(Operating, alTop);
 
-  AddLabel(Operating, '音の細かさ', 14, 8);
+  AddLabel(Operating, @RsSetCaptureRate, 14, 8);
   FSetCaptureRate := TComboBox.Create(Operating);
   FSetCaptureRate.Parent := Operating;
   FSetCaptureRate.SetBounds(14, 30, 200, 28);
   FSetCaptureRate.Style := csDropDownList;
-  FSetCaptureRate.Items.Add('8000 Hz（推奨）');
+  RegisterItem(FSetCaptureRate, 0, @RsSetRate8000);
   FSetCaptureRate.Items.Add('11025 Hz');
   FSetCaptureRate.Items.Add('16000 Hz');
   FSetCaptureRate.Items.Add('22050 Hz');
   FSetCaptureRate.Items.Add('44100 Hz');
   FSetCaptureRate.Items.Add('48000 Hz');
   FSetCaptureRate.ItemIndex := 0;
-  AddLabel(Operating, '受信機の音を取り込む細かさです。うまく取り込めないときだけ変えてください。',
+  AddLabel(Operating, @RsSetCaptureNote,
     232, 36);
 
-  AddLabel(Operating, '聴き直せる長さ', 14, 62);
+  AddLabel(Operating, @RsSetRetention, 14, 62);
   FSetRetention := TComboBox.Create(Operating);
   FSetRetention.Parent := Operating;
   FSetRetention.SetBounds(120, 58, 110, 28);
   FSetRetention.Style := csDropDownList;
-  FSetRetention.Items.Add('5 分');
-  FSetRetention.Items.Add('10 分（推奨）');
-  FSetRetention.Items.Add('20 分');
-  FSetRetention.Items.Add('30 分');
+  RegisterItem(FSetRetention, 0, @RsSetRetention5);
+  RegisterItem(FSetRetention, 1, @RsSetRetention10);
+  RegisterItem(FSetRetention, 2, @RsSetRetention20);
+  RegisterItem(FSetRetention, 3, @RsSetRetention30);
   FSetRetention.ItemIndex := 1;
   FSetRetention.OnChange := @RxRetentionChanged;
-  AddLabel(Operating,
-    '受信テキストの文字を押して音を聴き直せる範囲です。長くするほど記憶を使います。',
-    248, 62);
+  AddLabel(Operating, @RsSetRetentionNote, 248, 62);
 
   FSetJournal := TCheckBox.Create(Operating);
   FSetJournal.Parent := Operating;
   FSetJournal.SetBounds(14, 90, 300, 22);
-  FSetJournal.Caption := '受信テキストを時刻付きで記録する';
+  RegisterCaption(FSetJournal, @RsSetJournal);
   FSetJournal.Checked := True;
   FSetJournal.OnChange := @RxJournalChanged;
-  AddLabel(Operating,
-    '確定するそばからファイルへ書き足します。異常終了しても直前まで残ります。',
-    330, 92);
+  AddLabel(Operating, @RsSetJournalNote, 330, 92);
 
   { 受信音の録音（要件 FR-E.8）。受信テキストの記録のすぐ下に置きます。**同じ
     運用の、同じ「残す」という選択**であり、片方が設定タブで片方が受信タブに
@@ -3143,7 +3260,7 @@ begin
   FSetRecord := TCheckBox.Create(Operating);
   FSetRecord.Parent := Operating;
   FSetRecord.SetBounds(14, 118, 300, 22);
-  FSetRecord.Caption := '受信した音を WAV で録音する';
+  RegisterCaption(FSetRecord, @RsSetRecord);
   FSetRecord.Checked := False;
   FSetRecord.OnChange := @RxRecordChanged;
   FSetRecordInfo := AddLabel(Operating, '', 330, 120);
@@ -3153,10 +3270,10 @@ begin
     Taking the contact log in and out. Importing a log an operator built in
     another program makes the worked marks work at once (requirements FR-E.3 and
     FR-J.4). }
-  AddLabel(Operating, '交信記録', 14, 150);
-  FSetLogImport := AddButton(Operating, 'ADIF を取り込む', 120, 146, 150,
+  AddLabel(Operating, @RsSetLog, 14, 150);
+  FSetLogImport := AddButton(Operating, @RsSetAdifImport, 120, 146, 150,
     @SetLogImportClick);
-  FSetLogExport := AddButton(Operating, 'ADIF を書き出す', 278, 146, 150,
+  FSetLogExport := AddButton(Operating, @RsSetAdifExport, 278, 146, 150,
     @SetLogExportClick);
   FSetLogInfo := AddLabel(Operating, '', 440, 150);
 
@@ -3168,10 +3285,10 @@ begin
     bundled**: whether the distributed rosters may be redistributed is not known
     (open question #15). Only a file the operator put there is read, and
     **nothing is ever sent.** }
-  AddLabel(Operating, '呼出符号の一覧', 14, 182);
-  FSetRoster := AddButton(Operating, 'ファイルを選ぶ', 120, 178, 150,
+  AddLabel(Operating, @RsSetRoster, 14, 182);
+  FSetRoster := AddButton(Operating, @RsSetChooseFile, 120, 178, 150,
     @SetRosterClick);
-  FSetRosterClear := AddButton(Operating, '使わない', 278, 178, 150,
+  FSetRosterClear := AddButton(Operating, @RsSetDontUse, 278, 178, 150,
     @SetRosterClearClick);
   FSetRosterInfo := AddLabel(Operating, '', 440, 182);
 
@@ -3180,10 +3297,10 @@ begin
     The country prefix table (requirement FR-K.12). **Smaller than the call sign
     roster and rarely updated**, so it is a file of its own; not bundled
     either. }
-  AddLabel(Operating, '国別前置符字表', 14, 214);
-  FSetPrefixes := AddButton(Operating, 'ファイルを選ぶ', 120, 210, 150,
+  AddLabel(Operating, @RsSetPrefixes, 14, 214);
+  FSetPrefixes := AddButton(Operating, @RsSetChooseFile, 120, 210, 150,
     @SetPrefixesClick);
-  FSetPrefixesClear := AddButton(Operating, '使わない', 278, 210, 150,
+  FSetPrefixesClear := AddButton(Operating, @RsSetDontUse, 278, 210, 150,
     @SetPrefixesClearClick);
   FSetPrefixesInfo := AddLabel(Operating, '', 440, 214);
 
@@ -3194,10 +3311,10 @@ begin
   FSetHighContrast := TCheckBox.Create(Operating);
   FSetHighContrast.Parent := Operating;
   FSetHighContrast.SetBounds(14, 244, 420, 22);
-  FSetHighContrast.Caption := '高コントラスト表示（薄い文字を濃くする）';
+  RegisterCaption(FSetHighContrast, @RsSetHighContrast);
   FSetHighContrast.Checked := False;
   FSetHighContrast.OnChange := @HighContrastChanged;
-  AddLabel(Operating, '確からしさの濃淡は残りますが、幅は狭くなります',
+  AddLabel(Operating, @RsSetHighContrastNote,
     440, 246);
 
   { 画面の言語（要件 NFR-7.6）。**再起動を求めません。**押したその場で変わります。
@@ -3216,7 +3333,7 @@ begin
 
     **These choices are not translated**, or the operator would be hunting for a
     language they can read among names written in one they cannot. }
-  AddLabel(Operating, '画面の言葉 / Language', 14, 278);
+  AddLabel(Operating, @RsSetLanguage, 14, 278);
   FSetLanguage := TComboBox.Create(Operating);
   FSetLanguage.Parent := Operating;
   FSetLanguage.SetBounds(200, 274, 160, 28);
@@ -3231,7 +3348,7 @@ begin
     Advanced and diagnostics: only looked at when something is wrong. }
   Advanced := TGroupBox.Create(Scroller);
   Advanced.Parent := Scroller;
-  Advanced.Caption := '詳細・診断';
+  RegisterCaption(Advanced, @RsSetAdvanced);
   { 巻き取れる欄の中では、`alClient` は「残り全部」ではなく「見えている分だけ」に
     なります。**それでは診断情報が見えなくなった元の状態に戻ります。**必要な
     高さを持たせて積みます。
@@ -3242,13 +3359,13 @@ begin
   Stretch(Advanced, alTop);
 
   Row := AddTopPanel(Advanced, 40);
-  FSetApply := AddButton(Row, '設定を適用してエンジンを読み込み直す', 8, 4, 300, @ApplySettings);
-  AddLabel(Row, '推論スレッド', 328, 12);
+  FSetApply := AddButton(Row, @RsSetApply, 8, 4, 300, @ApplySettings);
+  AddLabel(Row, @RsSetThreads, 328, 12);
   FSetThreads := TComboBox.Create(Row);
   FSetThreads.Parent := Row;
   FSetThreads.SetBounds(416, 8, 110, 28);
   FSetThreads.Style := csDropDownList;
-  FSetThreads.Items.Add('自動');
+  RegisterItem(FSetThreads, 0, @RsSetAuto);
   FSetThreads.Items.Add('1');
   FSetThreads.Items.Add('2');
   FSetThreads.Items.Add('4');
@@ -3258,7 +3375,7 @@ begin
     （要件 FR-D.3）。
     Automatic is good enough in practice; the manual choice exists only for
     those who want it (requirement FR-D.3). }
-  AddLabel(Row, '同調時の帯域幅', 536, 12);
+  AddLabel(Row, @RsSetBandwidth, 536, 12);
   FSetBandwidth := TComboBox.Create(Row);
   FSetBandwidth.Parent := Row;
   FSetBandwidth.SetBounds(648, 8, 160, 28);
@@ -3268,24 +3385,33 @@ begin
   FSetBandwidth.ItemIndex := 0;
   FSetBandwidth.OnChange := @RxConfirmSpeedChanged;
 
-  FSetModel := AddPathEdit(Advanced, 'モデル (model.onnx)', LocateDataFile('model.onnx'));
-  FSetMetadata := AddPathEdit(Advanced, 'メタデータ (model.onnx.json)',
+  FSetModel := AddPathEdit(Advanced, @RsSetModel, LocateDataFile('model.onnx'));
+  FSetMetadata := AddPathEdit(Advanced, @RsSetMetadata,
     LocateDataFile('model.onnx.json'));
-  FSetRuntime := AddPathEdit(Advanced, 'ONNX Runtime ライブラリ（空欄なら自動検索）', '');
-  FSetPortAudio := AddPathEdit(Advanced, 'PortAudio ライブラリ（空欄なら自動検索）', '');
+  FSetRuntime := AddPathEdit(Advanced, @RsSetRuntime, '');
+  FSetPortAudio := AddPathEdit(Advanced, @RsSetPortAudio, '');
 
   { 不具合報告に添えられるように、まとめて写せるようにします（要件 FR-G.5）。
     **画面を撮って送るより、貼れるほうが正確です。**
     So that it can be attached to a bug report (requirement FR-G.5): **pasting
     is more accurate than sending a picture of the screen.** }
-  Row := AddTopPanel(Advanced, 40);
-  FSetCopyInfo := AddButton(Row, '診断情報をコピー', 12, 4, 180,
+  { 2 行ぶんの注記が入るので 44。**40 では 1〜2 画素重なりました**（付録 BE.4）。
+    文字の高さは 96 dpi で 17〜18 画素あり、192 dpi では倍になります。
+    44 to fit two lines of note: **at 40 they overlapped by a pixel or two**
+    (appendix BE.4). The text is 17 to 18 pixels tall at 96 dpi and twice that
+    at 192. }
+  Row := AddTopPanel(Advanced, 44);
+  FSetCopyInfo := AddButton(Row, @RsSetCopyDiag, 12, 4, 180,
     @SetCopyInfoClick);
-  AddLabel(Row,
-    '受信した文章・交信記録の中身・待っている符号は入りません。' +
-    'ファイルの場所の利用者名は ~ に置き換えます。', 200, 12);
+  { 2 文に分けて置きます。**1 つに繋いで渡すと、控えに載せられません**——控えるのは
+    文言のありかなので、繋いだ結果には「ありか」がありません（付録 BE.2）。
+    Two labels rather than one joined string: **a joined string cannot be noted
+    down**, because what is noted is where the words live and a joined result
+    lives nowhere (appendix BE.2). }
+  AddLabel(Row, @RsSetDiagNote1, 200, 3);
+  AddLabel(Row, @RsSetDiagNote2, 200, 23);
 
-  AddTopLabel(Advanced, '診断情報');
+  AddTopLabel(Advanced, @RsSetDiagnostics);
   FSetInfo := TMemo.Create(Advanced);
   FSetInfo.Parent := Advanced;
   FSetInfo.ReadOnly := True;
@@ -3583,6 +3709,8 @@ function TMainForm.ReportLanguage: TStringList;
 var
   Before, After, Back: TStringList;
   Pairs: TTextWidthList;
+  Started: TDateTime;
+  Spent: Int64;
   I, J, Moved, Wrong: Integer;
 begin
   Result := TStringList.Create;
@@ -3594,8 +3722,16 @@ begin
     ApplyTexts;
     UiText.CollectTexts(Before);
 
+    { 切替にどれだけ掛かるかを測ります（要件 NFR-1）。**利用者が押す操作**なので、
+      掛かるなら掛かると言えなければなりません。画面を作り直す方式との差も、
+      ここに出ます。
+      How long the switch takes is measured (requirement NFR-1). **It is
+      something the operator presses**, so if it costs, that has to be sayable.
+      The difference from rebuilding the screen shows here too. }
+    Started := Now;
     UseUiLang(UiLangIndexOf('en'));
     ApplyTexts;
+    Spent := MilliSecondsBetween(Now, Started);
     UiText.CollectTexts(After);
 
     UseUiLang(UI_LANG_DEFAULT);
@@ -3643,8 +3779,8 @@ begin
       end;
     end;
 
-    Result.Insert(0, Format('控え %d 件 / 英語で変わった %d 件 / 戻らなかった %d 件',
-      [UiText.TextCount, Moved, Wrong]));
+    Result.Insert(0, Format('控え %d 件 / 英語で変わった %d 件 / 戻らなかった %d 件 / 切替 %d ms',
+      [UiText.TextCount, Moved, Wrong, Spent]));
     { **1 つも変わらないのは、切替が効いていないということです。**訳が
       見つからなくても静かに通ってしまうので、ここで落とします。
       **Nothing changing means the switch is not working.** A translation that

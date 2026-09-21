@@ -23,7 +23,7 @@ uses
   DeepCW.Platform,
   DeepCW.FistLog, DeepCW.Fist,
   WaterfallView, TranscriptView, BandMapView, TrendView, HistogramView,
-  ViewColors, LayoutCheck, UiText, UiLang, StdCtrls, ExtCtrls;
+  ViewColors, LayoutCheck, TextCheck, UiText, UiLang, StdCtrls, ExtCtrls;
 
 type
   { 部品の保護された入力処理は、そのままでは外から呼べません。派生させて
@@ -450,6 +450,129 @@ var
 { わざと壊した画面を組み、破綻が数えられることを確かめます（要件 NFR-5.1）。
   Builds a deliberately broken screen and checks that the breakage is counted
   (requirement NFR-5.1). }
+{ `.po` の読み取り（要件 NFR-7.6、付録 BE.3）。
+
+  **折り返した行と逃がし字は、まだ 1 度も通っていない道です。**いまの `.po` は
+  短い文言ばかりで 1 行に収まっていますが、第 3 段で長い案内文を訳せば
+  `updatepofiles` が折り返します。**そのとき初めて通る道を、通る前に確かめます。**
+
+  `\n` を字のまま数えると幅が 2 文字ぶん増え、幅の検査が嘘をつきます。
+
+  Reading a `.po` (requirement NFR-7.6, appendix BE.3).
+
+  **Wrapped lines and escapes are a path nothing has taken yet.** The `.po`
+  holds only short words today, each on one line, but translating the long
+  sentences in the third stage will make `updatepofiles` wrap them. **The path
+  is checked before anything takes it.**
+
+  Counted literally, `\n` would add two characters' worth of width and the
+  width check would lie. }
+procedure CheckPoReading;
+var
+  Path: string;
+  Lines: TStringList;
+  Items: TTextWidthList;
+
+  function Found(const Name_: string; out Item: TTextWidths): Boolean;
+  var
+    I: Integer;
+  begin
+    Result := False;
+    Item := Default(TTextWidths);
+    for I := 0 to High(Items) do
+      if Items[I].Name_ = Name_ then
+      begin
+        Item := Items[I];
+        Exit(True);
+      end;
+  end;
+
+  function Target(const Name_: string): string;
+  var
+    Item: TTextWidths;
+  begin
+    if Found(Name_, Item) then
+      Result := Item.Target
+    else
+      Result := '(無い)';
+  end;
+
+  function Source_(const Name_: string): string;
+  var
+    Item: TTextWidths;
+  begin
+    if Found(Name_, Item) then
+      Result := Item.Source
+    else
+      Result := '(無い)';
+  end;
+
+begin
+  WriteLn;
+  WriteLn('訳の一覧の読み取り（要件 NFR-7.6）');
+  Path := GetTempDir + 'deepcw_probe_' + IntToStr(Random(1000000)) + '.po';
+  Lines := TStringList.Create;
+  try
+    Lines.Add('msgid ""');
+    Lines.Add('msgstr "Content-Type: text/plain; charset=UTF-8"');
+    Lines.Add('');
+    Lines.Add('#: a.one');
+    Lines.Add('msgid "短い"');
+    Lines.Add('msgstr "Short"');
+    Lines.Add('');
+    Lines.Add('#: a.wrapped');
+    Lines.Add('msgid ""');
+    Lines.Add('"受信を開始すると、"');
+    Lines.Add('"ここに読めた文字が出ます。"');
+    Lines.Add('msgstr ""');
+    Lines.Add('"Text read from the signal "');
+    Lines.Add('"appears here."');
+    Lines.Add('');
+    Lines.Add('#: a.escaped');
+    Lines.Add('msgid "改行\nと引用符\"の入った文"');
+    Lines.Add('msgstr "A line\nbreak and a quote\" inside"');
+    Lines.Add('');
+    Lines.Add('#: a.untranslated');
+    Lines.Add('msgid "まだ訳していない"');
+    Lines.Add('msgstr ""');
+    Lines.SaveToFile(Path);
+    Items := LoadPoPairs(Path);
+
+    { **訳していない行は返しません。**返すと「訳が空」を「訳が空文字」として
+      幅 0 で数えてしまいます。
+      **Untranslated entries are not returned**: returned, an empty translation
+      would be measured as a width of zero. }
+    Check('訳のある行だけを返す（頭書きと未訳を除く）', Length(Items) = 3,
+      Format('(%d 件)', [Length(Items)]));
+
+    Check('1 行の行が読める',
+      (Source_('a.one') = '短い') and (Target('a.one') = 'Short'),
+      Source_('a.one') + ' / ' + Target('a.one'));
+
+    { **折り返しは continue して 1 つの文にします。**別々に数えると、どちらも
+      短いので幅の検査を通ってしまいます。
+      **Wrapped lines join into one sentence**: counted separately, each half
+      would be short enough to pass the width check. }
+    Check('折り返した行がつながる',
+      (Source_('a.wrapped') = '受信を開始すると、ここに読めた文字が出ます。') and
+      (Target('a.wrapped') = 'Text read from the signal appears here.'),
+      Source_('a.wrapped') + ' / ' + Target('a.wrapped'));
+
+    Check('逃がし字が字に戻る',
+      (Source_('a.escaped') = '改行 と引用符"の入った文') and
+      (Target('a.escaped') = 'A line break and a quote" inside'),
+      Source_('a.escaped') + ' / ' + Target('a.escaped'));
+
+    { 無いファイルで落ちないこと。**訳が無いのは異常ではありません。**
+      A missing file does not raise: **having no translation is not a fault.** }
+    Check('無いファイルからは空が返る',
+      Length(LoadPoPairs(Path + '.none')) = 0, '');
+  finally
+    DeleteFile(Path);
+    Lines.Free;
+  end;
+end;
+
 { 部品と文言の対応表（要件 NFR-7.6、付録 BD）。
 
   **この画面はコードで組んであるので、言語を変えても `Caption` は追随しません。**
@@ -2737,6 +2860,7 @@ begin
   CheckTabOrderChecker;
   CheckUiText;
   CheckUiLang;
+  CheckPoReading;
 
   WriteLn;
   if Failures = 0 then
