@@ -751,6 +751,80 @@ var
 
 implementation
 
+{ 画面に出す文言です（要件 NFR-7.6）。
+
+  **ソースから分け、`.po` で見直せるようにします。**訳を足すのに再ビルドは
+  要りません。`.po` が無ければ、ここに書いた日本語のまま動きます（fail-soft）。
+
+  識別子の頭は、その文言が出るタブに合わせてあります——`Rx` 受信、`Tx` 送信、
+  `Pr` 受信練習、`Ft` 送信訓練、`Set` 設定。**部品の名前と同じ並びにしてあるので、
+  訳す人は画面と突き合わせられます。**
+
+  **訳すときの制約は幅です。**部品の大きさは日本語に合わせて決めてあり、訳が
+  広ければ入りません。日本語の全角は 14 画素、英字は 7 画素なので、目安は
+  **英字の文字数を日本語の 2 倍まで**。`TextCheck` が `.po` を読んで数え、
+  `LayoutCheck` が実物で入るかどうかを数えます（付録 BC）。
+
+  The words shown on screen (requirement NFR-7.6).
+
+  **They are kept out of the source and revised through a `.po`**, so a
+  translation needs no rebuild. With no `.po` the application runs in the
+  Japanese written here (fail-soft).
+
+  The identifiers are prefixed by the tab the words appear on -- `Rx` receive,
+  `Tx` transmit, `Pr` copy practice, `Ft` send practice, `Set` settings --
+  matching the names of the controls themselves, **so a translator can follow
+  them against the screen.**
+
+  **The constraint when translating is width.** The controls were sized for the
+  Japanese and a wider translation does not fit. A full-width Japanese character
+  is 14 pixels and a Latin one is 7, so the rule of thumb is **up to twice the
+  Japanese character count**. `TextCheck` counts this from the `.po` and
+  `LayoutCheck` counts, on the real screen, whether it fits (appendix BC). }
+resourcestring
+  { 受信タブ / the receive tab }
+  RsRxTab = '受信';
+  RsRxFromWav = 'WAV ファイルから受信';
+  RsRxDecode = 'デコード';
+  RsRxBrowse = '参照...';
+  RsRxFromInput = 'マイク / ライン入力から受信';
+  RsRxInputLevel = '入力レベル';
+  RsRxStart = '受信開始';
+  RsRxStop = '受信停止';
+  RsRxClear = '表示をクリア';
+  RsRxDevice = '入力装置';
+  RsRxRescan = '再検出';
+  RsRxSettleLabel = '文字が決まるまで';
+  RsRxSettleFast = '速さ優先';
+  RsRxSettleNormal = '標準';
+  RsRxSettleSure = '確実さ優先';
+  RsRxModeLabel = '受信のしかた';
+  RsRxModeContact = '交信モード';
+  RsRxModeWatch = '待機モード';
+  RsRxModeContest = 'コンテスト';
+  RsRxDenoise = '帯域外の雑音を抑える';
+  RsRxTuneHint = '読みたい信号をクリック。ホイールで微調整。';
+  RsRxUntune = '同調を解除';
+  RsRxMonitor = '復調音を聴く';
+  RsRxFollow = '信号を自動で追う';
+  RsRxText = '受信テキスト';
+  RsRxShade = '確からしさを濃淡で示す';
+  RsRxShadeAmount = '濃淡';
+  RsRxFontSize = '文字の大きさ';
+  RsRxCopy = 'コピー';
+  RsRxCallAndRst = '符号と RST';
+  RsRxOverlay = '文字を波形に重ねる';
+  RsRxFind = '検索';
+  RsRxLogContact = '交信を記録';
+  RsRxReplay = 'もう一度聴く';
+  RsRxReplayStop = '停止';
+  RsRxReplayHint = '文字を押すと、その音を聴き直せます。';
+  RsRxEmpty = '受信を開始すると、ここに読めた文字が出ます。';
+  RsRxWatchLabel = '待つ符号';
+  RsRxBandLabel = '運用バンド';
+  RsRxBandAny = '指定なし';
+  RsRxHideWorked = '交信済みを隠す';
+
 { 実装の後方で定義します。/ Defined further down. }
 function UserMessageFor(const Raw: string): string; forward;
 function StatusLine(const Raw: string): string; forward;
@@ -1268,13 +1342,13 @@ var
   TextTools, FindTools: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
-  Sheet.Caption := '受信';
+  Sheet.Caption := RsRxTab;
   Result := Sheet;
 
   FileBox := TGroupBox.Create(Sheet);
   FileBox.Parent := Sheet;
   FileBox.Height := 76;
-  FileBox.Caption := 'WAV ファイルから受信';
+  FileBox.Caption := RsRxFromWav;
   Stretch(FileBox, alTop);
 
   { alRight は生成順に右から詰めるため、デコードボタンを先に作って最も右へ
@@ -1282,9 +1356,9 @@ begin
 
     alRight fills from the right in creation order, so the decode button is
     created first and ends up furthest right. }
-  FRxDecodeFile := AddButton(FileBox, 'デコード', 0, 0, 120, @RxDecodeFileClick);
+  FRxDecodeFile := AddButton(FileBox, RsRxDecode, 0, 0, 120, @RxDecodeFileClick);
   Stretch(FRxDecodeFile, alRight);
-  FRxBrowse := AddButton(FileBox, '参照...', 0, 0, 90, @RxBrowseClick);
+  FRxBrowse := AddButton(FileBox, RsRxBrowse, 0, 0, 90, @RxBrowseClick);
   Stretch(FRxBrowse, alRight);
   FRxFile := TEdit.Create(FileBox);
   FRxFile.Parent := FileBox;
@@ -1294,7 +1368,7 @@ begin
   LiveBox := TGroupBox.Create(Sheet);
   LiveBox.Parent := Sheet;
   LiveBox.Height := 120;
-  LiveBox.Caption := 'マイク / ライン入力から受信';
+  LiveBox.Caption := RsRxFromInput;
   Stretch(LiveBox, alTop);
 
   LevelPanel := TPanel.Create(LiveBox);
@@ -1302,7 +1376,7 @@ begin
   LevelPanel.Align := alRight;
   LevelPanel.Width := 190;
   LevelPanel.BevelOuter := bvNone;
-  AddLabel(LevelPanel, '入力レベル', 6, 4);
+  AddLabel(LevelPanel, RsRxInputLevel, 6, 4);
   FRxLevel := TProgressBar.Create(LevelPanel);
   FRxLevel.Parent := LevelPanel;
   FRxLevel.SetBounds(6, 24, 178, 20);
@@ -1319,27 +1393,27 @@ begin
   LiveControls.Align := alClient;
   LiveControls.BevelOuter := bvNone;
 
-  FRxStart := AddButton(LiveControls, '受信開始', 8, 22, 110, @RxStartClick);
-  FRxStop := AddButton(LiveControls, '受信停止', 126, 22, 110, @RxStopClick);
-  FRxClear := AddButton(LiveControls, '表示をクリア', 244, 22, 130, @RxClearClick);
+  FRxStart := AddButton(LiveControls, RsRxStart, 8, 22, 110, @RxStartClick);
+  FRxStop := AddButton(LiveControls, RsRxStop, 126, 22, 110, @RxStopClick);
+  FRxClear := AddButton(LiveControls, RsRxClear, 244, 22, 130, @RxClearClick);
 
-  AddLabel(LiveControls, '入力装置', 8, 56);
+  AddLabel(LiveControls, RsRxDevice, 8, 56);
   FRxDevice := TComboBox.Create(LiveControls);
   FRxDevice.Parent := LiveControls;
   FRxDevice.SetBounds(78, 52, 380, 28);
   FRxDevice.Style := csDropDownList;
   FRxDevice.OnChange := @RxConfirmSpeedChanged;
-  FRxDeviceRefresh := AddButton(LiveControls, '再検出', 466, 52, 80,
+  FRxDeviceRefresh := AddButton(LiveControls, RsRxRescan, 466, 52, 80,
     @RxDeviceRefreshClick);
 
-  AddLabel(LiveControls, '文字が決まるまで', 390, 4);
+  AddLabel(LiveControls, RsRxSettleLabel, 390, 4);
   FRxConfirmSpeed := TComboBox.Create(LiveControls);
   FRxConfirmSpeed.Parent := LiveControls;
   FRxConfirmSpeed.SetBounds(390, 22, 150, 28);
   FRxConfirmSpeed.Style := csDropDownList;
-  FRxConfirmSpeed.Items.Add('速さ優先');
-  FRxConfirmSpeed.Items.Add('標準');
-  FRxConfirmSpeed.Items.Add('確実さ優先');
+  FRxConfirmSpeed.Items.Add(RsRxSettleFast);
+  FRxConfirmSpeed.Items.Add(RsRxSettleNormal);
+  FRxConfirmSpeed.Items.Add(RsRxSettleSure);
   FRxConfirmSpeed.ItemIndex := 1;
   FRxConfirmSpeed.OnChange := @RxConfirmSpeedChanged;
 
@@ -1348,7 +1422,7 @@ begin
     How reception is used. The requirement is that the mode **is always visible**
     (FR-I.6), so the choice itself sits in the control row with a word of
     explanation beside it. }
-  AddLabel(LiveControls, '受信のしかた', 556, 56);
+  AddLabel(LiveControls, RsRxModeLabel, 556, 56);
   FRxMode := TComboBox.Create(LiveControls);
   FRxMode.Parent := LiveControls;
   FRxMode.SetBounds(646, 52, 150, 28);
@@ -1360,9 +1434,9 @@ begin
     narrow window and **then which mode is set cannot be read** — and the
     requirement is that it always can (FR-I.6). The explanation goes to the status
     line instead. }
-  FRxMode.Items.Add('交信モード');
-  FRxMode.Items.Add('待機モード');
-  FRxMode.Items.Add('コンテスト');
+  FRxMode.Items.Add(RsRxModeContact);
+  FRxMode.Items.Add(RsRxModeWatch);
+  FRxMode.Items.Add(RsRxModeContest);
   FRxMode.ItemIndex := 0;
   { 通知は設定を読み終えてから繋ぎます。読み込みの代入で通知が走ると、起動した
     だけで「モードにしました」という身に覚えのない案内が出ます。
@@ -1372,7 +1446,7 @@ begin
   FRxAntiAlias := TCheckBox.Create(LiveControls);
   FRxAntiAlias.Parent := LiveControls;
   FRxAntiAlias.SetBounds(556, 26, 190, 24);
-  FRxAntiAlias.Caption := '帯域外の雑音を抑える';
+  FRxAntiAlias.Caption := RsRxDenoise;
   FRxAntiAlias.Checked := True;
   FRxAntiAlias.OnChange := @RxConfirmSpeedChanged;
 
@@ -1424,8 +1498,8 @@ begin
   TuneTools.Height := 30;
   TuneTools.Align := alTop;
   TuneTools.BevelOuter := bvNone;
-  AddLabel(TuneTools, '読みたい信号をクリック。ホイールで微調整。', 6, 7);
-  FRxTuneClear := AddButton(TuneTools, '同調を解除', 0, 2, 110, @RxTuneClearClick);
+  AddLabel(TuneTools, RsRxTuneHint, 6, 7);
+  FRxTuneClear := AddButton(TuneTools, RsRxUntune, 0, 2, 110, @RxTuneClearClick);
   Stretch(FRxTuneClear, alRight);
   { **デコーダが聴いている音**を、そのまま鳴らします（要件 FR-A.6）。生の受信音
     ではありません。同調して帯域を絞ったあとの音なので、**機械が読み違えたとき
@@ -1433,7 +1507,7 @@ begin
     Plays **what the decoder is listening to** (requirement FR-A.6), not the raw
     input: the audio after tuning and band limiting, so that when the machine
     reads something wrongly, **what reached the machine can be heard.** }
-  FRxMonitor := AddButton(TuneTools, '復調音を聴く', 0, 2, 120, @RxMonitorClick);
+  FRxMonitor := AddButton(TuneTools, RsRxMonitor, 0, 2, 120, @RxMonitorClick);
   Stretch(FRxMonitor, alRight);
   { 動いていく信号を追いかけるかどうか。既定は有効です。周波数を決め打ちで
     見張りたい場合のために、切れるようにしてあります（要件 FR-D.7）。
@@ -1442,7 +1516,7 @@ begin
     for an operator deliberately watching one frequency (FR-D.7). }
   FRxTrack := TCheckBox.Create(TuneTools);
   FRxTrack.Parent := TuneTools;
-  FRxTrack.Caption := '信号を自動で追う';
+  FRxTrack.Caption := RsRxFollow;
   FRxTrack.Checked := True;
   FRxTrack.Align := alRight;
   FRxTrack.BorderSpacing.Right := 12;
@@ -1465,7 +1539,7 @@ begin
   TextPanel.Parent := Sheet;
   TextPanel.Align := alClient;
   TextPanel.BevelOuter := bvNone;
-  AddTopLabel(TextPanel, '受信テキスト');
+  AddTopLabel(TextPanel, RsRxText);
 
   TextTools := TPanel.Create(TextPanel);
   TextTools.Parent := TextPanel;
@@ -1480,18 +1554,28 @@ begin
 
   FRxShowDoubt := TCheckBox.Create(TextTools);
   FRxShowDoubt.Parent := TextTools;
-  FRxShowDoubt.SetBounds(6, 7, 240, 22);
+  { 幅は 200。**訳した文言のために詰めてあります**（要件 NFR-7.6）。中の文字は
+    日本語 154 画素・英語 149 画素で、印の分を足しても 200 に収まります。空けた
+    40 画素は隣の「濃淡」に回っています。
+    200 wide: **tightened to make room for the translations** (NFR-7.6). The
+    text inside is 154 pixels in Japanese and 149 in English, which fits 200
+    with the box itself; the 40 pixels freed go to the label beside it. }
+  FRxShowDoubt.SetBounds(6, 7, 200, 22);
   { **「正しさ」とは言いません**（要件 FR-C.5）。この値は「モデルがどれだけ
     迷わなかったか」であって、当たっているかどうかではありません。断定する語を
     使えば、利用者は確かめる手立て（読み直し・聴き直し）を使わなくなります。
     **Never "correctness"** (requirement FR-C.5): the value is how little the
     model wavered, not whether it was right. Words that assert would stop the
     operator reaching for the ways of checking -- re-reading and replaying. }
-  FRxShowDoubt.Caption := '確からしさを濃淡で示す';
+  FRxShowDoubt.Caption := RsRxShade;
   FRxShowDoubt.Checked := True;
   FRxShowDoubt.OnChange := @RxDisplayChanged;
 
-  AddLabel(TextTools, '濃淡', 254, 9);
+  { 「濃淡」は 28 画素ですが `Shade` は 45 画素あり、254 に置くとスライダーに
+    6 画素食い込みます（付録 BC.4 で検査が見つけました）。210 へ寄せます。
+    `濃淡` is 28 pixels and `Shade` is 45: at 254 it ran 6 pixels into the
+    slider, which the check found (appendix BC.4). It moves to 210. }
+  AddLabel(TextTools, RsRxShadeAmount, 210, 9);
   FRxDoubtStrength := TTrackBar.Create(TextTools);
   FRxDoubtStrength.Parent := TextTools;
   FRxDoubtStrength.SetBounds(288, 2, 120, 30);
@@ -1501,14 +1585,14 @@ begin
   FRxDoubtStrength.ShowSelRange := False;
   FRxDoubtStrength.OnChange := @RxDisplayChanged;
 
-  AddLabel(TextTools, '文字の大きさ', 424, 9);
+  AddLabel(TextTools, RsRxFontSize, 424, 9);
   FRxFontSize := AddSpin(TextTools, 512, 5, 9, 32, 14, @RxDisplayChanged);
-  FRxCopy := AddButton(TextTools, 'コピー', 604, 2, 90, @RxCopyClick);
+  FRxCopy := AddButton(TextTools, RsRxCopy, 604, 2, 90, @RxCopyClick);
   { 呼出符号と信号報告だけを送る口です（要件 FR-E.2）。全文をコピーしてから
     目で探して切り出すのでは「操作 1 回」になりません。
     Sends just the call sign and the report (requirement FR-E.2). Copying the
     whole transcript and then hunting through it by eye is not "one press". }
-  FRxCopyCall := AddButton(TextTools, '符号と RST', 700, 2, 130,
+  FRxCopyCall := AddButton(TextTools, RsRxCallAndRst, 700, 2, 130,
     @RxCopyCallClick);
   FRxCopyCall.Enabled := False;
 
@@ -1519,7 +1603,7 @@ begin
   FRxAlign := TCheckBox.Create(TextTools);
   FRxAlign.Parent := TextTools;
   FRxAlign.SetBounds(840, 6, 200, 24);
-  FRxAlign.Caption := '文字を波形に重ねる';
+  FRxAlign.Caption := RsRxOverlay;
   FRxAlign.Checked := True;
   FRxAlign.OnChange := @RxDisplayChanged;
 
@@ -1546,7 +1630,7 @@ begin
     ものです。入力しながら探し、Enter で次へ進みます。
     Search (requirement FR-B.5), for finding a call sign or an abbreviation in
     what has accumulated. It searches as you type; Enter moves to the next hit. }
-  AddLabel(FindTools, '検索', 6, 9);
+  AddLabel(FindTools, RsRxFind, 6, 9);
   FRxFind := TEdit.Create(FindTools);
   FRxFind.Parent := FindTools;
   FRxFind.SetBounds(42, 4, 150, 26);
@@ -1566,15 +1650,15 @@ begin
     残す、という一連の動作が 1 か所にまとまります（要件 FR-E.3）。
     Recording a contact sits directly under the transcript, so that reading a call
     sign and keeping it is one gesture in one place (requirement FR-E.3). }
-  FRxWorked := AddButton(FindTools, '交信を記録', 396, 2, 100, @RxWorkedClick);
+  FRxWorked := AddButton(FindTools, RsRxLogContact, 396, 2, 100, @RxWorkedClick);
   FRxWorked.Enabled := False;
   FRxLogInfo := TLabel.Create(FindTools);
   FRxLogInfo.Parent := FindTools;
   FRxLogInfo.SetBounds(504, 9, 250, 20);
 
-  FRxReplay := AddButton(FindTools, 'もう一度聴く', 760, 2, 110, @RxReplayClick);
+  FRxReplay := AddButton(FindTools, RsRxReplay, 760, 2, 110, @RxReplayClick);
   FRxReplay.Enabled := False;
-  FRxReplayStop := AddButton(FindTools, '停止', 874, 2, 60, @RxReplayStopClick);
+  FRxReplayStop := AddButton(FindTools, RsRxReplayStop, 874, 2, 60, @RxReplayStopClick);
   FRxReplayStop.Enabled := False;
   FRxReplayInfo := TLabel.Create(FindTools);
   FRxReplayInfo.Parent := FindTools;
@@ -1623,7 +1707,7 @@ begin
     honouring a right edge measured from its first position even after being
     moved left, reaching past its parent. Left to the text it grows by exactly
     as much as the sentence does (appendix AW.3). }
-  FRxReplayInfo.Caption := '文字を押すと、その音を聴き直せます。';
+  FRxReplayInfo.Caption := RsRxReplayHint;
 
   FRxTranscript := TTranscriptView.Create(TextPanel);
   FRxTranscript.Parent := TextPanel;
@@ -1634,7 +1718,7 @@ begin
     The words for the not-started state go in as the control is made
     (requirement FR-B.1): **a blank area just after launch reads as a program
     that did not start.** }
-  FRxTranscript.Message_ := '受信を開始すると、ここに読めた文字が出ます。';
+  FRxTranscript.Message_ := RsRxEmpty;
   Stretch(FRxTranscript, alClient);
 
   { バンドマップは受信テキストと同じ場所に置き、モードで入れ替えます。並べて
@@ -1653,7 +1737,7 @@ begin
   StackBelow(FWatchTools);
   FWatchTools.Align := alTop;
   FWatchTools.BevelOuter := bvNone;
-  AddLabel(FWatchTools, '待つ符号', 6, 9);
+  AddLabel(FWatchTools, RsRxWatchLabel, 6, 9);
   FRxWatch := TEdit.Create(FWatchTools);
   FRxWatch.Parent := FWatchTools;
   FRxWatch.SetBounds(80, 4, 260, 26);
@@ -1682,14 +1766,14 @@ begin
   StackBelow(FContestTools);
   FContestTools.Align := alTop;
   FContestTools.BevelOuter := bvNone;
-  AddLabel(FContestTools, '運用バンド', 6, 9);
+  AddLabel(FContestTools, RsRxBandLabel, 6, 9);
   FRxBand := TComboBox.Create(FContestTools);
   FRxBand.Parent := FContestTools;
   FRxBand.SetBounds(96, 4, 130, 26);
   FRxBand.Style := csDropDownList;
   { 表記は運用者の言葉（MHz）で、記録には ADIF の名前で残します。
     Shown in the operator's terms (MHz) and recorded under the ADIF name. }
-  FRxBand.Items.Add('指定なし');
+  FRxBand.Items.Add(RsRxBandAny);
   FRxBand.Items.Add('1.9 MHz');
   FRxBand.Items.Add('3.5 MHz');
   FRxBand.Items.Add('7 MHz');
@@ -1705,7 +1789,7 @@ begin
   FRxHideWorked := TCheckBox.Create(FContestTools);
   FRxHideWorked.Parent := FContestTools;
   FRxHideWorked.SetBounds(240, 6, 190, 24);
-  FRxHideWorked.Caption := '交信済みを隠す';
+  FRxHideWorked.Caption := RsRxHideWorked;
   FRxHideWorked.Checked := True;
   FRxHideWorked.OnChange := @RxContestChanged;
 

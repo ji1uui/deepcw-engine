@@ -1,0 +1,167 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8"
+
+#: frmmain.rsrxbandany
+msgid "指定なし"
+msgstr "Any"
+
+#: frmmain.rsrxbandlabel
+msgid "運用バンド"
+msgstr "Band"
+
+#: frmmain.rsrxbrowse
+msgid "参照..."
+msgstr "Browse..."
+
+#: frmmain.rsrxcallandrst
+msgid "符号と RST"
+msgstr "Call + RST"
+
+#: frmmain.rsrxclear
+msgid "表示をクリア"
+msgstr "Clear"
+
+#: frmmain.rsrxcopy
+msgid "コピー"
+msgstr "Copy"
+
+#: frmmain.rsrxdecode
+msgid "デコード"
+msgstr "Decode"
+
+#: frmmain.rsrxdenoise
+msgid "帯域外の雑音を抑える"
+msgstr "Cut out-of-band noise"
+
+#: frmmain.rsrxdevice
+msgid "入力装置"
+msgstr "Device"
+
+#: frmmain.rsrxempty
+msgid "受信を開始すると、ここに読めた文字が出ます。"
+msgstr "Text read from the signal appears here."
+
+#: frmmain.rsrxfind
+msgid "検索"
+msgstr "Find"
+
+#: frmmain.rsrxfollow
+msgid "信号を自動で追う"
+msgstr "Follow the signal"
+
+#: frmmain.rsrxfontsize
+msgid "文字の大きさ"
+msgstr "Text size"
+
+#: frmmain.rsrxfrominput
+msgid "マイク / ライン入力から受信"
+msgstr "Receive from mic / line in"
+
+#: frmmain.rsrxfromwav
+msgid "WAV ファイルから受信"
+msgstr "Receive from WAV file"
+
+#: frmmain.rsrxhideworked
+msgid "交信済みを隠す"
+msgstr "Hide worked"
+
+#: frmmain.rsrxinputlevel
+msgid "入力レベル"
+msgstr "Input level"
+
+#: frmmain.rsrxlogcontact
+msgid "交信を記録"
+msgstr "Log contact"
+
+#: frmmain.rsrxmodecontact
+msgid "交信モード"
+msgstr "Contact"
+
+#: frmmain.rsrxmodecontest
+msgid "コンテスト"
+msgstr "Contest"
+
+#: frmmain.rsrxmodelabel
+msgid "受信のしかた"
+msgstr "Mode"
+
+#: frmmain.rsrxmodewatch
+msgid "待機モード"
+msgstr "Standby"
+
+#: frmmain.rsrxmonitor
+msgid "復調音を聴く"
+msgstr "Monitor"
+
+#: frmmain.rsrxoverlay
+msgid "文字を波形に重ねる"
+msgstr "Text on waterfall"
+
+#: frmmain.rsrxreplay
+msgid "もう一度聴く"
+msgstr "Hear again"
+
+#: frmmain.rsrxreplayhint
+msgid "文字を押すと、その音を聴き直せます。"
+msgstr "Press a character to hear it again."
+
+#: frmmain.rsrxreplaystop
+msgid "停止"
+msgstr "Stop"
+
+#: frmmain.rsrxrescan
+msgid "再検出"
+msgstr "Rescan"
+
+#: frmmain.rsrxsettlefast
+msgid "速さ優先"
+msgstr "Fast"
+
+#: frmmain.rsrxsettlelabel
+msgid "文字が決まるまで"
+msgstr "Settling time"
+
+#: frmmain.rsrxsettlenormal
+msgid "標準"
+msgstr "Normal"
+
+#: frmmain.rsrxsettlesure
+msgid "確実さ優先"
+msgstr "Sure"
+
+#: frmmain.rsrxshade
+msgid "確からしさを濃淡で示す"
+msgstr "Shade by confidence"
+
+#: frmmain.rsrxshadeamount
+msgid "濃淡"
+msgstr "Shade"
+
+#: frmmain.rsrxstart
+msgid "受信開始"
+msgstr "Receive"
+
+#: frmmain.rsrxstop
+msgid "受信停止"
+msgstr "Stop"
+
+#: frmmain.rsrxtab
+msgid "受信"
+msgstr "Receive"
+
+#: frmmain.rsrxtext
+msgid "受信テキスト"
+msgstr "Received"
+
+#: frmmain.rsrxtunehint
+msgid "読みたい信号をクリック。ホイールで微調整。"
+msgstr "Click a signal to read it; wheel to fine-tune."
+
+#: frmmain.rsrxuntune
+msgid "同調を解除"
+msgstr "Untune"
+
+#: frmmain.rsrxwatchlabel
+msgid "待つ符号"
+msgstr "Watch for"
+

@@ -87,7 +87,24 @@ step "配布物に許諾条項が入る" ./tools/bundle_licence_test.sh
 # **1 つの画面で見て回るだけでは、高 DPI の破綻は見つからない。**
 # The layout holds on screens of different pixel density (requirement NFR-5.1).
 # **Looking around one screen never finds the breakage on another.**
-step "画素密度を変えても組み方が崩れない" ./tools/layout_dpi_test.sh
+step "画素密度と言語を変えても組み方が崩れない" ./tools/layout_dpi_test.sh
+# 訳した文言が元の日本語より目立って広くなっていないこと（要件 NFR-7.6）。
+# **部品の大きさは日本語に合わせて決めてある。**訳が広ければ同じ枠には入らない。
+# A translation has not grown noticeably wider than the Japanese it replaces
+# (requirement NFR-7.6). **The controls were sized for the Japanese.**
+if command -v xvfb-run >/dev/null 2>&1; then
+  step "訳した文言が元より広くなっていない" \
+    env DEEPCW_TEXT_CHECK=1 xvfb-run -a ./app/deepcw_station
+else
+  skip "訳した文言が元より広くなっていない" "xvfb-run がありません"
+fi
+# `.po` が今のソースと合っていること（要件 NFR-7.6）。
+# **足した文言が `.po` に無ければ、その文言だけが訳されずに残る。**しかも
+# 画面を開くまで分からない。
+# The `.po` matches the source (requirement NFR-7.6). **A string missing from
+# it is simply left untranslated**, and that does not show until the screen is
+# opened.
+step "訳の一覧がソースと合っている" ./tools/po_sync_test.sh
 echo
 
 # ---- エンジンを使う検証 ----

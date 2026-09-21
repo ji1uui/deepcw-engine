@@ -206,6 +206,21 @@ DEEPCW_PORTAUDIO_LICENCE でファイルを指してください。\
   fi
 fi
 
+# 訳した文言（要件 NFR-7.6）。**入れ忘れると、配った先では日本語のままになります。**
+# 実行ファイルの隣の `languages/` を、`LCLTranslator` が探します。
+# The translations (requirement NFR-7.6). **Left out, the distribution runs in
+# Japanese**: `LCLTranslator` looks for `languages/` beside the executable.
+if [ -d "$here/app/languages" ]; then
+  mkdir -p "$stage/languages"
+  for po in "$here/app/languages"/*.po; do
+    [ -e "$po" ] || continue
+    cp "$po" "$stage/languages/"
+  done
+  say "  訳: $(ls -1 "$stage/languages" | wc -l) 言語ぶん"
+else
+  say "  訳: ありません（日本語のまま動きます）"
+fi
+
 cp "$root/LICENSE" "$stage/LICENSE"
 cp "$here/dist-notes/THIRD-PARTY-NOTICES.md" "$stage/THIRD-PARTY-NOTICES.md"
 cp "$here/dist-notes/はじめに.txt" "$stage/はじめに.txt"

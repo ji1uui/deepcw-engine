@@ -1,0 +1,167 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8"
+
+#: frmmain.rsrxbandany
+msgid "指定なし"
+msgstr ""
+
+#: frmmain.rsrxbandlabel
+msgid "運用バンド"
+msgstr ""
+
+#: frmmain.rsrxbrowse
+msgid "参照..."
+msgstr ""
+
+#: frmmain.rsrxcallandrst
+msgid "符号と RST"
+msgstr ""
+
+#: frmmain.rsrxclear
+msgid "表示をクリア"
+msgstr ""
+
+#: frmmain.rsrxcopy
+msgid "コピー"
+msgstr ""
+
+#: frmmain.rsrxdecode
+msgid "デコード"
+msgstr ""
+
+#: frmmain.rsrxdenoise
+msgid "帯域外の雑音を抑える"
+msgstr ""
+
+#: frmmain.rsrxdevice
+msgid "入力装置"
+msgstr ""
+
+#: frmmain.rsrxempty
+msgid "受信を開始すると、ここに読めた文字が出ます。"
+msgstr ""
+
+#: frmmain.rsrxfind
+msgid "検索"
+msgstr ""
+
+#: frmmain.rsrxfollow
+msgid "信号を自動で追う"
+msgstr ""
+
+#: frmmain.rsrxfontsize
+msgid "文字の大きさ"
+msgstr ""
+
+#: frmmain.rsrxfrominput
+msgid "マイク / ライン入力から受信"
+msgstr ""
+
+#: frmmain.rsrxfromwav
+msgid "WAV ファイルから受信"
+msgstr ""
+
+#: frmmain.rsrxhideworked
+msgid "交信済みを隠す"
+msgstr ""
+
+#: frmmain.rsrxinputlevel
+msgid "入力レベル"
+msgstr ""
+
+#: frmmain.rsrxlogcontact
+msgid "交信を記録"
+msgstr ""
+
+#: frmmain.rsrxmodecontact
+msgid "交信モード"
+msgstr ""
+
+#: frmmain.rsrxmodecontest
+msgid "コンテスト"
+msgstr ""
+
+#: frmmain.rsrxmodelabel
+msgid "受信のしかた"
+msgstr ""
+
+#: frmmain.rsrxmodewatch
+msgid "待機モード"
+msgstr ""
+
+#: frmmain.rsrxmonitor
+msgid "復調音を聴く"
+msgstr ""
+
+#: frmmain.rsrxoverlay
+msgid "文字を波形に重ねる"
+msgstr ""
+
+#: frmmain.rsrxreplay
+msgid "もう一度聴く"
+msgstr ""
+
+#: frmmain.rsrxreplayhint
+msgid "文字を押すと、その音を聴き直せます。"
+msgstr ""
+
+#: frmmain.rsrxreplaystop
+msgid "停止"
+msgstr ""
+
+#: frmmain.rsrxrescan
+msgid "再検出"
+msgstr ""
+
+#: frmmain.rsrxsettlefast
+msgid "速さ優先"
+msgstr ""
+
+#: frmmain.rsrxsettlelabel
+msgid "文字が決まるまで"
+msgstr ""
+
+#: frmmain.rsrxsettlenormal
+msgid "標準"
+msgstr ""
+
+#: frmmain.rsrxsettlesure
+msgid "確実さ優先"
+msgstr ""
+
+#: frmmain.rsrxshade
+msgid "確からしさを濃淡で示す"
+msgstr ""
+
+#: frmmain.rsrxshadeamount
+msgid "濃淡"
+msgstr ""
+
+#: frmmain.rsrxstart
+msgid "受信開始"
+msgstr ""
+
+#: frmmain.rsrxstop
+msgid "受信停止"
+msgstr ""
+
+#: frmmain.rsrxtab
+msgid "受信"
+msgstr ""
+
+#: frmmain.rsrxtext
+msgid "受信テキスト"
+msgstr ""
+
+#: frmmain.rsrxtunehint
+msgid "読みたい信号をクリック。ホイールで微調整。"
+msgstr ""
+
+#: frmmain.rsrxuntune
+msgid "同調を解除"
+msgstr ""
+
+#: frmmain.rsrxwatchlabel
+msgid "待つ符号"
+msgstr ""
+
