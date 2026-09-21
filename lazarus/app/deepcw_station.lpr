@@ -13,7 +13,7 @@ uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  SysUtils, Classes, Interfaces, Forms, Graphics, LCLTranslator,
+  SysUtils, Classes, Interfaces, Forms, Graphics,
   FrmMain, TextCheck;
 
 {$R *.res}
@@ -27,25 +27,16 @@ begin
   Application.Scaled := True;
   Application.Initialize;
 
-  { 文言を選びます（要件 NFR-7.6）。**画面に切替は置いていません。**
+  { 文言は画面自身が選びます（要件 NFR-7.6）。
 
-    言語の切替そのものは「将来」の要件であり、こちらはその前提となる分離だけを
-    担います。いまは `--lang en` と、OS の地域設定から決まります。`.po` が
-    無ければ、ソースに書いた日本語のまま動きます。
+    設定タブの選択、命令行の `--lang`、OS の地域設定の順に見て、`TMainForm` が
+    決めます（`UiLang.StartingUiLang`）。**ここで決めてしまうと、覚えてある
+    選択と食い違います。**
 
-    **画面を組む前に呼びます。**部品の文言は組むときに入るので、あとから
-    呼んでも組み上がった画面は日本語のままです。
-
-    Chooses the words (requirement NFR-7.6). **There is no switch on screen**:
-    switching languages is a future requirement, and this change carries only
-    the separation it rests on. For now the language comes from `--lang en` or
-    the operating system's locale, and with no `.po` the application runs in the
-    Japanese written in the source.
-
-    **Called before the screen is built**, because the words go into the
-    controls as they are built; called later, a built screen stays Japanese. }
-  SetDefaultLang('', 'languages');
-
+    The screen chooses its own words (requirement NFR-7.6): `TMainForm` looks at
+    the settings tab's choice, the command line's `--lang`, and the locale, in
+    that order (`UiLang.StartingUiLang`). **Deciding it here would disagree with
+    the remembered choice.** }
   Application.CreateForm(TMainForm, MainForm);
   { 訳の幅だけを調べて終える道です（要件 NFR-7.6）。回帰試験が走らせます。
     A path that inspects the width of the translations and exits (NFR-7.6);
@@ -53,6 +44,35 @@ begin
   if GetEnvironmentVariable('DEEPCW_TEXT_CHECK') <> '' then
   begin
     Halt(ReportTextWidths(MainForm.Canvas));
+  end;
+  { 言語を往復させて、戻ってくるかを調べて終える道です（要件 NFR-7.6）。
+
+    **日本語へ戻す道は、英語へ行く道と違います**（`UiLang` の頭書き）。取り違えると
+    「一度英語にしたら戻れない」が起こり、しかも**画面を開いて押してみるまで
+    分かりません。**回帰試験が毎回押します。
+
+    A path that takes the language out and back, checks that it returned, and
+    exits (NFR-7.6).
+
+    **The way back to Japanese is not the way out to English** (see the head of
+    `UiLang`). Mistake it and the application cannot return once it has gone,
+    and **that shows only when someone opens the screen and tries it.** The
+    regression tries it every time. }
+  if GetEnvironmentVariable('DEEPCW_LANG_CHECK') <> '' then
+  begin
+    MainForm.Show;
+    Application.ProcessMessages;
+    Problems := MainForm.ReportLanguage;
+    try
+      for Line := 0 to Problems.Count - 1 do
+        WriteLn('  ', Problems[Line]);
+      Flush(Output);
+      { 1 行目は数の報告です。**2 行目から先があれば異常です。**
+        The first line is the counts; **anything past it is a fault.** }
+      Halt(Ord(Problems.Count > 1));
+    finally
+      Problems.Free;
+    end;
   end;
   { 画面の組み方だけを調べて終える道です（要件 NFR-5.1）。回帰試験が、
     画素密度の違う画面で 2 度走らせます。**普段の起動では通りません。**

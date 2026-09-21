@@ -105,6 +105,14 @@ fi
 # it is simply left untranslated**, and that does not show until the screen is
 # opened.
 step "訳の一覧がソースと合っている" ./tools/po_sync_test.sh
+# 稼働中に言語を切り替えて、戻れること（要件 NFR-7.6）。
+# **日本語へ戻す道は、英語へ行く道と違う。**取り違えると一度英語にしたら戻れず、
+# 画面を開いて押してみるまで分からない。配布物と同じ並びで押す。
+# The language can be changed while running, and come back (requirement
+# NFR-7.6). **The way back is not the way out**; mistake it and the application
+# cannot return, which shows only when someone tries. Tried in the layout the
+# operator gets.
+step "稼働中に言語を切り替えて戻れる" ./tools/lang_roundtrip_test.sh
 echo
 
 # ---- エンジンを使う検証 ----

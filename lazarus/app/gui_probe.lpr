@@ -23,7 +23,7 @@ uses
   DeepCW.Platform,
   DeepCW.FistLog, DeepCW.Fist,
   WaterfallView, TranscriptView, BandMapView, TrendView, HistogramView,
-  ViewColors, LayoutCheck, StdCtrls, ExtCtrls;
+  ViewColors, LayoutCheck, UiText, UiLang, StdCtrls, ExtCtrls;
 
 type
   { 部品の保護された入力処理は、そのままでは外から呼べません。派生させて
@@ -450,6 +450,158 @@ var
 { わざと壊した画面を組み、破綻が数えられることを確かめます（要件 NFR-5.1）。
   Builds a deliberately broken screen and checks that the breakage is counted
   (requirement NFR-5.1). }
+{ 部品と文言の対応表（要件 NFR-7.6、付録 BD）。
+
+  **この画面はコードで組んであるので、言語を変えても `Caption` は追随しません。**
+  対応表に控えておいて入れ直す、という作りが効いているかを、ここで確かめます。
+
+  実際の `resourcestring` の代わりに、ただの文字列変数を使います。**切替のときに
+  中身が入れ替わる**という点では同じもので、`.po` も言語も要らずに、対応表の
+  働きだけを取り出して見られます。
+
+  The table that ties controls to their words (requirement NFR-7.6, appendix
+  BD).
+
+  **The screen is built in code, so a `Caption` does not follow a language
+  change.** What is checked here is that noting it down and assigning it again
+  works.
+
+  Plain string variables stand in for the real resourcestrings: **their contents
+  are replaced on a switch** in just the same way, so the table's own behaviour
+  can be seen without a `.po` or a language. }
+procedure CheckUiText;
+var
+  Host: TForm;
+  Button_: TButton;
+  Box: TComboBox;
+  Mark: TCheckBox;
+  Collected: TStringList;
+  First_, Second_, Third_: string;
+begin
+  WriteLn;
+  WriteLn('部品と文言の対応表（要件 NFR-7.6）');
+  ForgetTexts;
+  First_ := '受信開始';
+  Second_ := '標準';
+  Third_ := '帯域外の雑音を抑える';
+
+  Host := TForm.CreateNew(nil);
+  Collected := TStringList.Create;
+  try
+    Host.SetBounds(0, 0, 400, 200);
+    Button_ := TButton.Create(Host);
+    Button_.Parent := Host;
+    Box := TComboBox.Create(Host);
+    Box.Parent := Host;
+    Box.Style := csDropDownList;
+    Mark := TCheckBox.Create(Host);
+    Mark.Parent := Host;
+
+    RegisterCaption(Button_, @First_);
+    RegisterItem(Box, 0, @Second_);
+    Box.Items.Add('確実さ優先');
+    RegisterCaption(Mark, @Third_);
+
+    { 控えた時点で入っていること。**控えるだけで入らないなら、組み立て側が
+      2 度書くことになります。**
+      Assigned as it is noted: **noting without assigning would make the
+      builder write it twice.** }
+    Check('控えると、その場で文言が入る',
+      (Button_.Caption = '受信開始') and (Box.Items[0] = '標準') and
+      (Mark.Caption = '帯域外の雑音を抑える'),
+      Button_.Caption + ' / ' + Box.Items[0]);
+    Check('控えの数は控えた数', TextCount = 3, Format('(%d)', [TextCount]));
+
+    { 選んでいたものを覚えておきます。**`Items.Clear` して入れ直す作りだと、
+      ここで選択が消えます**（付録 BD.1 で実測）。
+      The choice is made before the switch: **a design that cleared and refilled
+      the list would lose it here** (measured, appendix BD.1). }
+    Box.ItemIndex := 1;
+
+    { 言語が変わったことにします。/ Stand in for a language change. }
+    First_ := 'Receive';
+    Second_ := 'Normal';
+    Third_ := 'Cut out-of-band noise';
+
+    Check('入れ直す前は、前の言語のまま',
+      (Button_.Caption = '受信開始') and (Box.Items[0] = '標準'),
+      Button_.Caption);
+
+    ApplyTexts;
+    Check('入れ直すと、新しい言語になる',
+      (Button_.Caption = 'Receive') and (Box.Items[0] = 'Normal') and
+      (Mark.Caption = 'Cut out-of-band noise'),
+      Button_.Caption + ' / ' + Box.Items[0] + ' / ' + Mark.Caption);
+    Check('**選んでいたものは消えない**', Box.ItemIndex = 1,
+      Format('(ItemIndex=%d)', [Box.ItemIndex]));
+    Check('控えに無い行は触らない', Box.Items[1] = '確実さ優先', Box.Items[1]);
+
+    { 戻れること。**片道だけ効く作りだと、一度英語にしたら戻れません。**
+      It comes back: **a one-way design could not return from English.** }
+    First_ := '受信開始';
+    Second_ := '標準';
+    Third_ := '帯域外の雑音を抑える';
+    ApplyTexts;
+    Check('元の言語へも戻せる',
+      (Button_.Caption = '受信開始') and (Box.Items[0] = '標準'),
+      Button_.Caption);
+
+    CollectTexts(Collected);
+    Check('いま出ている文言を拾える',
+      (Collected.Count = 3) and (Collected[0] = '受信開始') and
+      (Collected[1] = '標準') and (Collected[2] = '帯域外の雑音を抑える'),
+      Format('(%d 件)', [Collected.Count]));
+
+    { 空を渡しても落ちないこと。**受信は fail-soft。**
+      Nothing given, nothing raised: **receive is fail-soft.** }
+    RegisterCaption(nil, @First_);
+    RegisterItem(nil, 0, @First_);
+    RegisterCaption(Button_, nil);
+    Check('空を渡しても控えは増えない', TextCount = 3, Format('(%d)', [TextCount]));
+  finally
+    Collected.Free;
+    Host.Free;
+    ForgetTexts;
+  end;
+end;
+
+{ 言語の鍵（要件 NFR-7.6、付録 BD.2）。
+  **設定に書くのは鍵で、画面に出すのは名前です**（版 2.54 と同じ話）。
+  The language keys (NFR-7.6, appendix BD.2). **The key is what is written into
+  the settings and the name is what is shown** (the same story as version
+  2.54). }
+procedure CheckUiLang;
+begin
+  WriteLn;
+  WriteLn('画面の言語の鍵（要件 NFR-7.6）');
+  Check('鍵は ja と en', (UI_LANG_KEYS[0] = 'ja') and (UI_LANG_KEYS[1] = 'en'), '');
+  Check('既定は日本語', UI_LANG_DEFAULT = 0, '');
+  Check('鍵から番号が戻る',
+    (UiLangIndexOf('ja') = 0) and (UiLangIndexOf('en') = 1), '');
+  { 読めない鍵で落とさないこと。**設定ファイルは人が書き換えられます。**
+    An unreadable key does not fail: **the settings file can be edited by
+    hand.** }
+  Check('読めない鍵は既定に倒す',
+    (UiLangIndexOf('') = UI_LANG_DEFAULT) and
+    (UiLangIndexOf('fr') = UI_LANG_DEFAULT) and
+    (UiLangIndexOf('JA') = UI_LANG_DEFAULT), '');
+  { 名前はその言語で書いてあること。**「英語」と出すと、英語しか読めない人には
+    選べません。**
+    Each name is in its own language: **shown as `英語`, it could not be found
+    by someone who reads only English.** }
+  Check('名前はそれぞれの言語で書いてある',
+    (UiLangCaption(0) = '日本語') and (UiLangCaption(1) = 'English'),
+    UiLangCaption(0) + ' / ' + UiLangCaption(1));
+  Check('名前と鍵は別のもの',
+    (UiLangCaption(0) <> UI_LANG_KEYS[0]) and
+    (UiLangCaption(1) <> UI_LANG_KEYS[1]), '');
+  { 覚えてあるものが命令行より弱いこと。**試験が `--lang` で言語を選べます。**
+    What is remembered yields to the command line: **the tests choose with
+    `--lang`.** }
+  Check('覚えてある鍵から始まる言語が決まる',
+    (StartingUiLang('en') = 1) and (StartingUiLang('ja') = 0), '');
+end;
+
 procedure CheckLayoutChecker;
 var
   Host: TForm;
@@ -2583,6 +2735,8 @@ begin
   WriteLn;
   WriteLn('タブ順序を見つける道具 / the Tab order checker');
   CheckTabOrderChecker;
+  CheckUiText;
+  CheckUiLang;
 
   WriteLn;
   if Failures = 0 then

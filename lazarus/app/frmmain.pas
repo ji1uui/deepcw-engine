@@ -38,7 +38,7 @@ uses
   DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster, DeepCW.CopyLog,
   DeepCW.Platform,
   TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView,
-  ViewColors, LayoutCheck;
+  ViewColors, LayoutCheck, TextCheck, UiText, UiLang;
 
 type
   { 受信のしかた（要件 FR-I.6）。
@@ -410,6 +410,8 @@ type
     FSetThreads: TComboBox;
     FSetBandwidth: TComboBox;
     FSetRetention: TComboBox;
+    FSetLanguage: TComboBox;
+    FSetLanguageInfo: TLabel;
     FSetJournal: TCheckBox;
     { 受信練習（要件 FR-F.3）。**出題は隠しておき、答え合わせのときだけ見せます。**
       Receive practice (requirement FR-F.3). **The exercise is kept out of sight
@@ -614,6 +616,15 @@ type
     function WorkedBefore(const Callsign: string): Boolean;
     procedure RxWorkedClick(Sender: TObject);
     procedure RxSubdivisionChanged(Sender: TObject);
+    { 画面の言語を変えます（要件 NFR-7.6）。**押したその場で入れ直します。**
+      Changes the language of the screen (NFR-7.6), **putting the words back in
+      place as it is chosen.** }
+    procedure SetLanguageChanged(Sender: TObject);
+    { 控えてある文言を、いまの言語で入れ直します。控えに載らないもの
+      （実行中に組み立てる文）は、ここで出し直します。
+      Puts the noted words back in the current language. What the notes do not
+      cover -- sentences built while running -- is re-rendered here. }
+    procedure ApplyTexts;
     procedure SetLogImportClick(Sender: TObject);
     procedure SetLogExportClick(Sender: TObject);
     procedure UpdateLogInfo;
@@ -744,6 +755,16 @@ type
 
       One line per problem; empty means none. }
     function ReportLayout: TStringList;
+    { 言語を往復させて、戻ってくるかを報告します（要件 NFR-7.6）。
+      **日本語へ戻す道は、英語へ行く道と違います**（`UiLang` の頭書き）。
+      取り違えると「一度英語にしたら戻れない」が起こり、**画面を開いて押して
+      みるまで分かりません。**回帰試験が毎回押します。呼ぶ側が解放します。
+      Takes the language out and back and reports (NFR-7.6). **The way back to
+      Japanese is not the way out to English** (see the head of `UiLang`);
+      mistake it and the application cannot return once it has gone, which
+      shows only when someone opens the screen and tries. The regression tries
+      it every time. The caller frees the list. }
+    function ReportLanguage: TStringList;
   end;
 
 var
@@ -968,6 +989,23 @@ begin
 
   BuildUI;
   LoadSettings;
+  { 覚えていた言語を入れ直します（要件 NFR-7.6）。**覚えていても、渡さなければ
+    効きません**——高コントラストと同じ話です。`LoadSettings` は選択肢を合わせる
+    だけなので、文言そのものはここで切り替えます。
+    The remembered language is put back in (requirement NFR-7.6). **Remembered
+    but not handed over, it does nothing** -- the same story as high contrast.
+    `LoadSettings` only sets the choice; the words themselves change here. }
+  if FSetLanguage <> nil then
+  begin
+    { 設定ファイルが無い（初回）ときも通ります。**命令行と OS の地域設定から
+      決まるので、選択肢と画面が食い違いません。**
+      Taken on a first run too, with no settings file: **the command line and
+      the locale decide, so the list and the screen agree.** }
+    if FSetLanguage.ItemIndex = UI_LANG_DEFAULT then
+      FSetLanguage.ItemIndex := StartingUiLang('');
+    UseUiLang(FSetLanguage.ItemIndex);
+    UiText.ApplyTexts;
+  end;
   { ステータスバーと設定タブに有用な情報を出すため、モデルは起動時に読み込み
     ます。ただしランタイムが無くても起動は妨げません。
 
@@ -1157,6 +1195,20 @@ end;
   sends right-anchored controls off screen once the window is resized; alTop
   and alClient are computed from the live parent size instead. }
 
+{ 作るときに、文言のありかを控えます（要件 NFR-7.6）。**控えておかないと、
+  稼働中に言語を変えたときこの部品だけ前の言語のまま残ります。**控えるのは
+  文字列ではなくありかなので、入れ直すのは `UiText.ApplyTexts` の仕事です。
+
+  文字列をそのまま渡す形も残してあります。**訳さないもの**——実行中に組み立てる
+  文、記録から取った値、利用者が打った文字——はそちらを通ります。
+
+  The words' address is noted as the control is built (requirement NFR-7.6).
+  **Without the note this one control would stay in the old language** when the
+  language changes while running. What is noted is the address, not the string,
+  so putting it back is `UiText.ApplyTexts`'s work.
+
+  The plain-string form is kept for **what is not translated**: sentences built
+  while running, values taken from records, and text the operator typed. }
 function AddLabel(Parent: TWinControl; const Text: string; Left, Top: Integer): TLabel;
 begin
   Result := TLabel.Create(Parent);
@@ -1164,6 +1216,12 @@ begin
   Result.Caption := Text;
   Result.Left := Left;
   Result.Top := Top;
+end;
+
+function AddLabel(Parent: TWinControl; Text: PResString; Left, Top: Integer): TLabel; overload;
+begin
+  Result := AddLabel(Parent, '', Left, Top);
+  RegisterCaption(Result, Text);
 end;
 
 function AddSpin(Parent: TWinControl; Left, Top, Min, Max, Value: Integer;
@@ -1191,6 +1249,13 @@ begin
   Result.Width := Width;
   Result.Height := 30;
   Result.OnClick := OnClick;
+end;
+
+function AddButton(Parent: TWinControl; Caption: PResString; Left, Top, Width: Integer;
+  OnClick: TNotifyEvent): TButton; overload;
+begin
+  Result := AddButton(Parent, '', Left, Top, Width, OnClick);
+  RegisterCaption(Result, Caption);
 end;
 
 var
@@ -1233,6 +1298,12 @@ begin
   Result.Align := alTop;
   Result.BorderSpacing.Left := 6;
   Result.BorderSpacing.Top := 8;
+end;
+
+function AddTopLabel(Parent: TWinControl; Text: PResString): TLabel; overload;
+begin
+  Result := AddTopLabel(Parent, '');
+  RegisterCaption(Result, Text);
 end;
 
 function AddTopPanel(Parent: TWinControl; Height: Integer): TPanel;
@@ -1342,13 +1413,13 @@ var
   TextTools, FindTools: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
-  Sheet.Caption := RsRxTab;
+  RegisterCaption(Sheet, @RsRxTab);
   Result := Sheet;
 
   FileBox := TGroupBox.Create(Sheet);
   FileBox.Parent := Sheet;
   FileBox.Height := 76;
-  FileBox.Caption := RsRxFromWav;
+  RegisterCaption(FileBox, @RsRxFromWav);
   Stretch(FileBox, alTop);
 
   { alRight は生成順に右から詰めるため、デコードボタンを先に作って最も右へ
@@ -1356,9 +1427,9 @@ begin
 
     alRight fills from the right in creation order, so the decode button is
     created first and ends up furthest right. }
-  FRxDecodeFile := AddButton(FileBox, RsRxDecode, 0, 0, 120, @RxDecodeFileClick);
+  FRxDecodeFile := AddButton(FileBox, @RsRxDecode, 0, 0, 120, @RxDecodeFileClick);
   Stretch(FRxDecodeFile, alRight);
-  FRxBrowse := AddButton(FileBox, RsRxBrowse, 0, 0, 90, @RxBrowseClick);
+  FRxBrowse := AddButton(FileBox, @RsRxBrowse, 0, 0, 90, @RxBrowseClick);
   Stretch(FRxBrowse, alRight);
   FRxFile := TEdit.Create(FileBox);
   FRxFile.Parent := FileBox;
@@ -1368,7 +1439,7 @@ begin
   LiveBox := TGroupBox.Create(Sheet);
   LiveBox.Parent := Sheet;
   LiveBox.Height := 120;
-  LiveBox.Caption := RsRxFromInput;
+  RegisterCaption(LiveBox, @RsRxFromInput);
   Stretch(LiveBox, alTop);
 
   LevelPanel := TPanel.Create(LiveBox);
@@ -1376,7 +1447,7 @@ begin
   LevelPanel.Align := alRight;
   LevelPanel.Width := 190;
   LevelPanel.BevelOuter := bvNone;
-  AddLabel(LevelPanel, RsRxInputLevel, 6, 4);
+  AddLabel(LevelPanel, @RsRxInputLevel, 6, 4);
   FRxLevel := TProgressBar.Create(LevelPanel);
   FRxLevel.Parent := LevelPanel;
   FRxLevel.SetBounds(6, 24, 178, 20);
@@ -1393,27 +1464,27 @@ begin
   LiveControls.Align := alClient;
   LiveControls.BevelOuter := bvNone;
 
-  FRxStart := AddButton(LiveControls, RsRxStart, 8, 22, 110, @RxStartClick);
-  FRxStop := AddButton(LiveControls, RsRxStop, 126, 22, 110, @RxStopClick);
-  FRxClear := AddButton(LiveControls, RsRxClear, 244, 22, 130, @RxClearClick);
+  FRxStart := AddButton(LiveControls, @RsRxStart, 8, 22, 110, @RxStartClick);
+  FRxStop := AddButton(LiveControls, @RsRxStop, 126, 22, 110, @RxStopClick);
+  FRxClear := AddButton(LiveControls, @RsRxClear, 244, 22, 130, @RxClearClick);
 
-  AddLabel(LiveControls, RsRxDevice, 8, 56);
+  AddLabel(LiveControls, @RsRxDevice, 8, 56);
   FRxDevice := TComboBox.Create(LiveControls);
   FRxDevice.Parent := LiveControls;
   FRxDevice.SetBounds(78, 52, 380, 28);
   FRxDevice.Style := csDropDownList;
   FRxDevice.OnChange := @RxConfirmSpeedChanged;
-  FRxDeviceRefresh := AddButton(LiveControls, RsRxRescan, 466, 52, 80,
+  FRxDeviceRefresh := AddButton(LiveControls, @RsRxRescan, 466, 52, 80,
     @RxDeviceRefreshClick);
 
-  AddLabel(LiveControls, RsRxSettleLabel, 390, 4);
+  AddLabel(LiveControls, @RsRxSettleLabel, 390, 4);
   FRxConfirmSpeed := TComboBox.Create(LiveControls);
   FRxConfirmSpeed.Parent := LiveControls;
   FRxConfirmSpeed.SetBounds(390, 22, 150, 28);
   FRxConfirmSpeed.Style := csDropDownList;
-  FRxConfirmSpeed.Items.Add(RsRxSettleFast);
-  FRxConfirmSpeed.Items.Add(RsRxSettleNormal);
-  FRxConfirmSpeed.Items.Add(RsRxSettleSure);
+  RegisterItem(FRxConfirmSpeed, 0, @RsRxSettleFast);
+  RegisterItem(FRxConfirmSpeed, 1, @RsRxSettleNormal);
+  RegisterItem(FRxConfirmSpeed, 2, @RsRxSettleSure);
   FRxConfirmSpeed.ItemIndex := 1;
   FRxConfirmSpeed.OnChange := @RxConfirmSpeedChanged;
 
@@ -1422,7 +1493,7 @@ begin
     How reception is used. The requirement is that the mode **is always visible**
     (FR-I.6), so the choice itself sits in the control row with a word of
     explanation beside it. }
-  AddLabel(LiveControls, RsRxModeLabel, 556, 56);
+  AddLabel(LiveControls, @RsRxModeLabel, 556, 56);
   FRxMode := TComboBox.Create(LiveControls);
   FRxMode.Parent := LiveControls;
   FRxMode.SetBounds(646, 52, 150, 28);
@@ -1434,9 +1505,9 @@ begin
     narrow window and **then which mode is set cannot be read** — and the
     requirement is that it always can (FR-I.6). The explanation goes to the status
     line instead. }
-  FRxMode.Items.Add(RsRxModeContact);
-  FRxMode.Items.Add(RsRxModeWatch);
-  FRxMode.Items.Add(RsRxModeContest);
+  RegisterItem(FRxMode, 0, @RsRxModeContact);
+  RegisterItem(FRxMode, 1, @RsRxModeWatch);
+  RegisterItem(FRxMode, 2, @RsRxModeContest);
   FRxMode.ItemIndex := 0;
   { 通知は設定を読み終えてから繋ぎます。読み込みの代入で通知が走ると、起動した
     だけで「モードにしました」という身に覚えのない案内が出ます。
@@ -1446,7 +1517,7 @@ begin
   FRxAntiAlias := TCheckBox.Create(LiveControls);
   FRxAntiAlias.Parent := LiveControls;
   FRxAntiAlias.SetBounds(556, 26, 190, 24);
-  FRxAntiAlias.Caption := RsRxDenoise;
+  RegisterCaption(FRxAntiAlias, @RsRxDenoise);
   FRxAntiAlias.Checked := True;
   FRxAntiAlias.OnChange := @RxConfirmSpeedChanged;
 
@@ -1498,8 +1569,8 @@ begin
   TuneTools.Height := 30;
   TuneTools.Align := alTop;
   TuneTools.BevelOuter := bvNone;
-  AddLabel(TuneTools, RsRxTuneHint, 6, 7);
-  FRxTuneClear := AddButton(TuneTools, RsRxUntune, 0, 2, 110, @RxTuneClearClick);
+  AddLabel(TuneTools, @RsRxTuneHint, 6, 7);
+  FRxTuneClear := AddButton(TuneTools, @RsRxUntune, 0, 2, 110, @RxTuneClearClick);
   Stretch(FRxTuneClear, alRight);
   { **デコーダが聴いている音**を、そのまま鳴らします（要件 FR-A.6）。生の受信音
     ではありません。同調して帯域を絞ったあとの音なので、**機械が読み違えたとき
@@ -1507,7 +1578,7 @@ begin
     Plays **what the decoder is listening to** (requirement FR-A.6), not the raw
     input: the audio after tuning and band limiting, so that when the machine
     reads something wrongly, **what reached the machine can be heard.** }
-  FRxMonitor := AddButton(TuneTools, RsRxMonitor, 0, 2, 120, @RxMonitorClick);
+  FRxMonitor := AddButton(TuneTools, @RsRxMonitor, 0, 2, 120, @RxMonitorClick);
   Stretch(FRxMonitor, alRight);
   { 動いていく信号を追いかけるかどうか。既定は有効です。周波数を決め打ちで
     見張りたい場合のために、切れるようにしてあります（要件 FR-D.7）。
@@ -1516,7 +1587,7 @@ begin
     for an operator deliberately watching one frequency (FR-D.7). }
   FRxTrack := TCheckBox.Create(TuneTools);
   FRxTrack.Parent := TuneTools;
-  FRxTrack.Caption := RsRxFollow;
+  RegisterCaption(FRxTrack, @RsRxFollow);
   FRxTrack.Checked := True;
   FRxTrack.Align := alRight;
   FRxTrack.BorderSpacing.Right := 12;
@@ -1539,7 +1610,7 @@ begin
   TextPanel.Parent := Sheet;
   TextPanel.Align := alClient;
   TextPanel.BevelOuter := bvNone;
-  AddTopLabel(TextPanel, RsRxText);
+  AddTopLabel(TextPanel, @RsRxText);
 
   TextTools := TPanel.Create(TextPanel);
   TextTools.Parent := TextPanel;
@@ -1567,7 +1638,7 @@ begin
     **Never "correctness"** (requirement FR-C.5): the value is how little the
     model wavered, not whether it was right. Words that assert would stop the
     operator reaching for the ways of checking -- re-reading and replaying. }
-  FRxShowDoubt.Caption := RsRxShade;
+  RegisterCaption(FRxShowDoubt, @RsRxShade);
   FRxShowDoubt.Checked := True;
   FRxShowDoubt.OnChange := @RxDisplayChanged;
 
@@ -1575,7 +1646,7 @@ begin
     6 画素食い込みます（付録 BC.4 で検査が見つけました）。210 へ寄せます。
     `濃淡` is 28 pixels and `Shade` is 45: at 254 it ran 6 pixels into the
     slider, which the check found (appendix BC.4). It moves to 210. }
-  AddLabel(TextTools, RsRxShadeAmount, 210, 9);
+  AddLabel(TextTools, @RsRxShadeAmount, 210, 9);
   FRxDoubtStrength := TTrackBar.Create(TextTools);
   FRxDoubtStrength.Parent := TextTools;
   FRxDoubtStrength.SetBounds(288, 2, 120, 30);
@@ -1585,14 +1656,14 @@ begin
   FRxDoubtStrength.ShowSelRange := False;
   FRxDoubtStrength.OnChange := @RxDisplayChanged;
 
-  AddLabel(TextTools, RsRxFontSize, 424, 9);
+  AddLabel(TextTools, @RsRxFontSize, 424, 9);
   FRxFontSize := AddSpin(TextTools, 512, 5, 9, 32, 14, @RxDisplayChanged);
-  FRxCopy := AddButton(TextTools, RsRxCopy, 604, 2, 90, @RxCopyClick);
+  FRxCopy := AddButton(TextTools, @RsRxCopy, 604, 2, 90, @RxCopyClick);
   { 呼出符号と信号報告だけを送る口です（要件 FR-E.2）。全文をコピーしてから
     目で探して切り出すのでは「操作 1 回」になりません。
     Sends just the call sign and the report (requirement FR-E.2). Copying the
     whole transcript and then hunting through it by eye is not "one press". }
-  FRxCopyCall := AddButton(TextTools, RsRxCallAndRst, 700, 2, 130,
+  FRxCopyCall := AddButton(TextTools, @RsRxCallAndRst, 700, 2, 130,
     @RxCopyCallClick);
   FRxCopyCall.Enabled := False;
 
@@ -1603,7 +1674,7 @@ begin
   FRxAlign := TCheckBox.Create(TextTools);
   FRxAlign.Parent := TextTools;
   FRxAlign.SetBounds(840, 6, 200, 24);
-  FRxAlign.Caption := RsRxOverlay;
+  RegisterCaption(FRxAlign, @RsRxOverlay);
   FRxAlign.Checked := True;
   FRxAlign.OnChange := @RxDisplayChanged;
 
@@ -1630,7 +1701,7 @@ begin
     ものです。入力しながら探し、Enter で次へ進みます。
     Search (requirement FR-B.5), for finding a call sign or an abbreviation in
     what has accumulated. It searches as you type; Enter moves to the next hit. }
-  AddLabel(FindTools, RsRxFind, 6, 9);
+  AddLabel(FindTools, @RsRxFind, 6, 9);
   FRxFind := TEdit.Create(FindTools);
   FRxFind.Parent := FindTools;
   FRxFind.SetBounds(42, 4, 150, 26);
@@ -1650,15 +1721,15 @@ begin
     残す、という一連の動作が 1 か所にまとまります（要件 FR-E.3）。
     Recording a contact sits directly under the transcript, so that reading a call
     sign and keeping it is one gesture in one place (requirement FR-E.3). }
-  FRxWorked := AddButton(FindTools, RsRxLogContact, 396, 2, 100, @RxWorkedClick);
+  FRxWorked := AddButton(FindTools, @RsRxLogContact, 396, 2, 100, @RxWorkedClick);
   FRxWorked.Enabled := False;
   FRxLogInfo := TLabel.Create(FindTools);
   FRxLogInfo.Parent := FindTools;
   FRxLogInfo.SetBounds(504, 9, 250, 20);
 
-  FRxReplay := AddButton(FindTools, RsRxReplay, 760, 2, 110, @RxReplayClick);
+  FRxReplay := AddButton(FindTools, @RsRxReplay, 760, 2, 110, @RxReplayClick);
   FRxReplay.Enabled := False;
-  FRxReplayStop := AddButton(FindTools, RsRxReplayStop, 874, 2, 60, @RxReplayStopClick);
+  FRxReplayStop := AddButton(FindTools, @RsRxReplayStop, 874, 2, 60, @RxReplayStopClick);
   FRxReplayStop.Enabled := False;
   FRxReplayInfo := TLabel.Create(FindTools);
   FRxReplayInfo.Parent := FindTools;
@@ -1707,7 +1778,7 @@ begin
     honouring a right edge measured from its first position even after being
     moved left, reaching past its parent. Left to the text it grows by exactly
     as much as the sentence does (appendix AW.3). }
-  FRxReplayInfo.Caption := RsRxReplayHint;
+  RegisterCaption(FRxReplayInfo, @RsRxReplayHint);
 
   FRxTranscript := TTranscriptView.Create(TextPanel);
   FRxTranscript.Parent := TextPanel;
@@ -1737,7 +1808,7 @@ begin
   StackBelow(FWatchTools);
   FWatchTools.Align := alTop;
   FWatchTools.BevelOuter := bvNone;
-  AddLabel(FWatchTools, RsRxWatchLabel, 6, 9);
+  AddLabel(FWatchTools, @RsRxWatchLabel, 6, 9);
   FRxWatch := TEdit.Create(FWatchTools);
   FRxWatch.Parent := FWatchTools;
   FRxWatch.SetBounds(80, 4, 260, 26);
@@ -1766,14 +1837,14 @@ begin
   StackBelow(FContestTools);
   FContestTools.Align := alTop;
   FContestTools.BevelOuter := bvNone;
-  AddLabel(FContestTools, RsRxBandLabel, 6, 9);
+  AddLabel(FContestTools, @RsRxBandLabel, 6, 9);
   FRxBand := TComboBox.Create(FContestTools);
   FRxBand.Parent := FContestTools;
   FRxBand.SetBounds(96, 4, 130, 26);
   FRxBand.Style := csDropDownList;
   { 表記は運用者の言葉（MHz）で、記録には ADIF の名前で残します。
     Shown in the operator's terms (MHz) and recorded under the ADIF name. }
-  FRxBand.Items.Add(RsRxBandAny);
+  RegisterItem(FRxBand, 0, @RsRxBandAny);
   FRxBand.Items.Add('1.9 MHz');
   FRxBand.Items.Add('3.5 MHz');
   FRxBand.Items.Add('7 MHz');
@@ -1789,7 +1860,7 @@ begin
   FRxHideWorked := TCheckBox.Create(FContestTools);
   FRxHideWorked.Parent := FContestTools;
   FRxHideWorked.SetBounds(240, 6, 190, 24);
-  FRxHideWorked.Caption := RsRxHideWorked;
+  RegisterCaption(FRxHideWorked, @RsRxHideWorked);
   FRxHideWorked.Checked := True;
   FRxHideWorked.OnChange := @RxContestChanged;
 
@@ -2951,6 +3022,7 @@ var
   Operating, Advanced: TGroupBox;
   Row, Apply: TPanel;
   Choice: TTunerBandwidth;
+  Language_: Integer;
 
   { 技術的な設定は「詳細・診断」側にだけ置きます（要件 FR-G.1）。
     Technical settings live only under the advanced group (FR-G.1). }
@@ -3008,7 +3080,9 @@ begin
     10.42, 10.36). The last row sits at 178 and is 22 tall, so 210 is not
     enough. 前置符字表（要件 FR-K.12）を足したので、さらに 32 画素。
     The prefix table row (requirement FR-K.12) adds another 32. }
-  Operating.Height := 300;
+  { 画面の言語の行（要件 NFR-7.6）を足したので 40 画素ぶん高くします。
+    The language row (requirement NFR-7.6) adds another 40. }
+  Operating.Height := 340;
   Operating.Caption := '運用設定';
   Stretch(Operating, alTop);
 
@@ -3125,6 +3199,33 @@ begin
   FSetHighContrast.OnChange := @HighContrastChanged;
   AddLabel(Operating, '確からしさの濃淡は残りますが、幅は狭くなります',
     440, 246);
+
+  { 画面の言語（要件 NFR-7.6）。**再起動を求めません。**押したその場で変わります。
+
+    選択肢の名前は、それぞれの言語で書いてあります（`UiLangCaption`）。
+    「English」を「英語」と出すと、英語しか読めない人には選べません。
+
+    **この選択肢は訳しません。**訳すと、読めない言語で書かれた選択肢の中から
+    読める言語を探すことになります。
+
+    The language of the screen (requirement NFR-7.6). **No restart is asked
+    for**: it changes as it is chosen.
+
+    Each choice is named in its own language (`UiLangCaption`): shown as `英語`,
+    `English` could not be found by someone who reads only English.
+
+    **These choices are not translated**, or the operator would be hunting for a
+    language they can read among names written in one they cannot. }
+  AddLabel(Operating, '画面の言葉 / Language', 14, 278);
+  FSetLanguage := TComboBox.Create(Operating);
+  FSetLanguage.Parent := Operating;
+  FSetLanguage.SetBounds(200, 274, 160, 28);
+  FSetLanguage.Style := csDropDownList;
+  for Language_ := Low(UI_LANG_KEYS) to High(UI_LANG_KEYS) do
+    FSetLanguage.Items.Add(UiLangCaption(Language_));
+  FSetLanguage.ItemIndex := UI_LANG_DEFAULT;
+  FSetLanguage.OnChange := @SetLanguageChanged;
+  FSetLanguageInfo := AddLabel(Operating, '', 380, 278);
 
   { ── 詳細・診断：困ったときだけ見るもの ──
     Advanced and diagnostics: only looked at when something is wrong. }
@@ -3285,6 +3386,11 @@ begin
     { 鍵より前の設定には日本語が入っています。読むときに揃えます。
       A settings file from before the keys holds Japanese; it is normalised here. }
     FFtTrendKeyWanted := FistKeyToKey(Ini.ReadString('fist', 'trend_key', ''));
+    { 画面の言語（要件 NFR-7.6）。**読み込みの終わりで入れ直します**ので、
+      ここでは選択だけを合わせます。
+      The language (NFR-7.6). **The words go back in at the end of loading**, so
+      only the choice is set here. }
+    FSetLanguage.ItemIndex := StartingUiLang(Ini.ReadString('ui', 'language', ''));
     FFtBottomKind.ItemIndex := ClampInt(Ini.ReadInteger('fist', 'bottom', 0),
       0, FFtBottomKind.Items.Count - 1);
     FtBottomChanged(nil);
@@ -3390,6 +3496,15 @@ begin
           FistKeyToKey(FFtTrendKey.Items[FFtTrendKey.ItemIndex]))
       else
         Ini.WriteString('fist', 'trend_key', '');
+      { 画面の言語は**鍵**で覚えます（要件 NFR-7.6）。番号で覚えると、言語を
+        足した日に別の言語が選ばれます。表示名で覚えれば、その言語でしか
+        読み戻せません（版 2.54 と同じ話）。
+        The language is remembered **by key** (NFR-7.6): by number, adding a
+        language would select a different one; by the name shown, it could only
+        be read back in that same language (the same story as version 2.54). }
+      if (FSetLanguage.ItemIndex >= Low(UI_LANG_KEYS)) and
+         (FSetLanguage.ItemIndex <= High(UI_LANG_KEYS)) then
+        Ini.WriteString('ui', 'language', UI_LANG_KEYS[FSetLanguage.ItemIndex]);
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('receive', 'watch', FRxWatch.Text);
       Ini.WriteInteger('receive', 'band', FRxBand.ItemIndex);
@@ -3428,6 +3543,138 @@ begin
   UnloadOnnxRuntime;
   EnsureDecoder;
   RefreshInfo;
+end;
+
+{ 控えてある文言を、いまの言語で入れ直します（要件 NFR-7.6）。
+
+  **控えに載らないものが 2 通りあります。**
+
+  1. 部品の `Caption` ではない見出し（ここでは受信テキストの初期表示）
+  2. **実行中に組み立てた文**——状態、同調、記録の件数、練習の履歴
+
+  2 のうち、**いまの状態から出し直せるものは出し直します。**出し直せないもの
+  ——すでに流れた案内や、そのときの出来事として出た警告——は**そのまま残します。**
+  起きたときの言葉で残っているほうが、記録としては正しいからです。
+
+  Puts the noted words back in the current language (requirement NFR-7.6).
+
+  **Two kinds are not covered by the notes**: headings that are not a control's
+  `Caption` (here, the receive area's placeholder), and **sentences built while
+  running** -- status, tuning, how many contacts, the practice history.
+
+  Of the second kind, **whatever can be produced again from the current state
+  is produced again.** What cannot -- a notice that has already scrolled past,
+  a warning raised by something that happened -- **is left as it is**: as a
+  record, it is more truthful in the words it was raised in. }
+procedure TMainForm.ApplyTexts;
+begin
+  UiText.ApplyTexts;
+  if FRxTranscript <> nil then
+    FRxTranscript.Message_ := RsRxEmpty;
+  { いまの状態から出し直せるもの。/ What can be produced again from the state. }
+  RefreshInfo;
+  UpdateTuneInfo;
+  UpdateLogInfo;
+  PrShowHistory;
+  FtShowHistory;
+end;
+
+function TMainForm.ReportLanguage: TStringList;
+var
+  Before, After, Back: TStringList;
+  Pairs: TTextWidthList;
+  I, J, Moved, Wrong: Integer;
+begin
+  Result := TStringList.Create;
+  Before := TStringList.Create;
+  After := TStringList.Create;
+  Back := TStringList.Create;
+  try
+    UseUiLang(UI_LANG_DEFAULT);
+    ApplyTexts;
+    UiText.CollectTexts(Before);
+
+    UseUiLang(UiLangIndexOf('en'));
+    ApplyTexts;
+    UiText.CollectTexts(After);
+
+    UseUiLang(UI_LANG_DEFAULT);
+    ApplyTexts;
+    UiText.CollectTexts(Back);
+
+    { **訳があるのに変わらなかったものを名指しします。**数えるだけでは、
+      40 件のうち 7 件しか切り替わっていなくても通ってしまいます（実測。
+      付録 BD.4）。`.po` に「違う訳」があるものは、必ず変わらねばなりません。
+      **Whatever has a translation and did not change is named.** Counting
+      alone would pass with only 7 of 40 switching (measured; appendix BD.4):
+      anything the `.po` gives a different wording for must change. }
+    Pairs := LoadPoPairs(IncludeTrailingPathDelimiter(
+      ExtractFilePath(ParamStr(0))) + 'languages' + PathDelim +
+      'deepcw_station.en.po');
+
+    Moved := 0;
+    Wrong := 0;
+    for I := 0 to Before.Count - 1 do
+    begin
+      if (I < After.Count) and (After[I] <> Before[I]) then
+        Inc(Moved)
+      else
+      begin
+        for J := 0 to High(Pairs) do
+          if (Pairs[J].Source = Before[I]) and (Pairs[J].Target <> Before[I]) then
+          begin
+            Inc(Wrong);
+            if Wrong <= 10 then
+              Result.Add(Format('切り替わっていない: 「%s」は「%s」になるはず',
+                [Before[I], Pairs[J].Target]));
+            Break;
+          end;
+      end;
+      { **戻ってきていないものを名指しします。**数だけでは、どれが戻らないのか
+        分かりません。
+        **Whatever did not come back is named**: a count alone does not say
+        which one. }
+      if (I >= Back.Count) or (Back[I] <> Before[I]) then
+      begin
+        Inc(Wrong);
+        if Wrong <= 10 then
+          Result.Add(Format('戻っていない: 「%s」→「%s」', [Before[I],
+            Back[Min(I, Back.Count - 1)]]));
+      end;
+    end;
+
+    Result.Insert(0, Format('控え %d 件 / 英語で変わった %d 件 / 戻らなかった %d 件',
+      [UiText.TextCount, Moved, Wrong]));
+    { **1 つも変わらないのは、切替が効いていないということです。**訳が
+      見つからなくても静かに通ってしまうので、ここで落とします。
+      **Nothing changing means the switch is not working.** A translation that
+      is never found would otherwise pass in silence, so it fails here. }
+    if Moved = 0 then
+      Result.Add('英語に切り替えても 1 つも変わりませんでした');
+  finally
+    Back.Free;
+    After.Free;
+    Before.Free;
+  end;
+end;
+
+{ 画面の言語を変えます（要件 NFR-7.6）。
+
+  **再起動を求めません。**受信中でも切り替えられます——入れ直すだけで、画面を
+  作り直すわけではないからです（画面を作り直すと、受信中の経路を壊します）。
+
+  Changes the language of the screen (requirement NFR-7.6).
+
+  **No restart is asked for**, and it can be done mid-reception: the words are
+  put back in place, the screen is not rebuilt (rebuilding it would tear down a
+  running receive path). }
+procedure TMainForm.SetLanguageChanged(Sender: TObject);
+begin
+  if FSetLanguage = nil then
+    Exit;
+  UseUiLang(FSetLanguage.ItemIndex);
+  ApplyTexts;
+  MarkSettingsDirty;
 end;
 
 procedure TMainForm.RefreshInfo;
