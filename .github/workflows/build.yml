@@ -46,6 +46,13 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # 初回、macOS の入れる段が **41 分**かかって落ちました（SourceForge から
+    # の取得）。**止まったまま待つのは、落ちるより悪い**——落ちたことすら
+    # 分からないからです。
+    # On the first run the macOS install step took **41 minutes** before failing
+    # (fetching from SourceForge). **Hanging is worse than failing**: a failure
+    # at least says so.
+    timeout-minutes: 45
     strategy:
       # 1 つ落ちても残りを止めません。**どの OS で落ちたかを知りたいのであって、
       # 最初に落ちた 1 つを知りたいのではありません。**
@@ -60,8 +67,14 @@ jobs:
             name: Windows x86_64
           - os: macos-latest
             name: macOS ARM64
-          - os: macos-13
-            name: macOS x86_64
+          # macOS x86_64（`macos-13`）は外しました。**初回、50 分待っても
+          # 順番が来ませんでした。**順番待ちのまま終わらない段があると、
+          # **run 全体がいつまでも結論を出しません。**Intel の macOS は
+          # 走らせる手立てが決まってから戻します（NOT VERIFIED のまま）。
+          # macOS x86_64 (`macos-13`) is left out: **on the first run it never
+          # got a runner in 50 minutes**, and a job that stays queued means
+          # **the run never reaches a verdict.** Intel macOS comes back when
+          # there is a way to run it; until then it stays NOT VERIFIED.
 
     steps:
       - uses: actions/checkout@v4
@@ -81,11 +94,46 @@ jobs:
           # choco does not put it on this step's PATH, so the place is passed on.
           echo "C:/lazarus" >> "$GITHUB_PATH"
 
+      # **`brew install --cask lazarus` は使えません。**初回の実行で分かりました。
+      #
+      #   fpc-laz: Cask 'fpc-laz' has been disabled because it does not pass
+      #   the macOS Gatekeeper check! It was disabled on 2026-09-01.
+      #
+      # `lazarus` の cask 自体も 2026-01-27 に deprecated になっており、取得に
+      # 41 分かかったうえで依存の 2 つが落ちました。
+      #
+      # 代わりに、**コンパイラは formula から入れ、`lazbuild` は原典から組み
+      # ます。**SourceForge も Gatekeeper も通りません。
+      #
+      # 版は**問い合わせて決めます。**ここに書き写すと、Lazarus が版を上げた
+      # 日に、書き写した綴りだけが古くなります（教訓 10.11）。
+      #
+      # **`brew install --cask lazarus` does not work**, as the first run showed:
+      # its two dependencies are disabled for failing the macOS Gatekeeper
+      # check, and the cask itself was deprecated on 2026-01-27 -- after a
+      # 41-minute fetch.
+      #
+      # Instead **the compiler comes from the formula and `lazbuild` is built
+      # from source**, touching neither SourceForge nor Gatekeeper.
+      #
+      # The version is **asked for, not written down here**: written down, it
+      # is the spelling that goes stale the day Lazarus moves (lesson 10.11).
       - name: Lazarus を入れる（macOS）
         if: runner.os == 'macOS'
         run: |
-          brew install --cask lazarus
-          echo "/Applications/Lazarus" >> "$GITHUB_PATH"
+          set -e
+          brew install fpc
+          fpc -iV
+          tag=$(git ls-remote --tags --refs \
+                  https://gitlab.com/freepascal.org/lazarus/lazarus.git \
+                | awk -F/ '{print $NF}' \
+                | grep -E '^lazarus_[0-9]+_[0-9]+$' | sort -V | tail -1)
+          [ -n "$tag" ] || { echo "Lazarus の版が問い合わせられません"; exit 1; }
+          echo "Lazarus $tag を組みます"
+          git clone --depth 1 --branch "$tag" \
+            https://gitlab.com/freepascal.org/lazarus/lazarus.git "$HOME/lazarus"
+          make -C "$HOME/lazarus" lazbuild
+          echo "$HOME/lazarus" >> "$GITHUB_PATH"
 
       - name: 版を言う
         run: |
