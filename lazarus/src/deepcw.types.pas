@@ -51,6 +51,34 @@ function ClampDouble(Value, Low, High: Double): Double;
   candidate is returned, which makes the resulting error name a useful path. }
 function LocateDataFile(const FileName: string): string;
 
+{ 持ち物（model.onnx、訳、許諾条項）を置く場所。
+
+  ふつうは**実行ファイルの隣**です。**macOS の `.app` では違います。**実行
+  ファイルは `Contents/MacOS/` に居て、持ち物は Apple の決まりで
+  `Contents/Resources/` に置きます。`Contents/MacOS/` に実行ファイル以外を
+  置くと、署名のときに「入れ物の形が違う」と言われるためです（未解決 #22）。
+
+  **形で見分けます。**`$IFDEF DARWIN` にしていません。そうすると Linux では
+  一度も通らない道になり、**確かめられなくなります。**見ているのは
+  「実行ファイルの居る所の名前が `MacOS` で、1 つ上に `Info.plist` がある」
+  という**並び方**だけで、この並びは `.app` にしか現れません。
+
+  Where the application's belongings live: `model.onnx`, the translations, the
+  licence texts.
+
+  Normally **beside the executable**. **Inside a macOS `.app` it is not**: the
+  executable sits in `Contents/MacOS/` and, by Apple's convention, what it
+  carries goes in `Contents/Resources/` -- anything but executables in
+  `Contents/MacOS/` makes the signing step reject the bundle's shape (open
+  question #22).
+
+  **It is recognised by shape, not by `$IFDEF DARWIN`.** Guarded by the
+  define, this would be a path never taken on Linux and therefore **never
+  checked.** What is looked at is only the arrangement -- the executable's
+  directory is named `MacOS` and one level up holds `Info.plist` -- and that
+  arrangement occurs nowhere but in a `.app`. }
+function ResourceDirectory: string;
+
 implementation
 
 function ClampInt(Value, Low, High: Integer): Integer;
@@ -67,20 +95,39 @@ begin
   else Result := Value;
 end;
 
+function ResourceDirectory: string;
+var
+  Base, Contents: string;
+begin
+  Base := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
+  Contents := ExtractFilePath(ExcludeTrailingPathDelimiter(Base));
+  if (ExtractFileName(ExcludeTrailingPathDelimiter(Base)) = 'MacOS') and
+     FileExists(Contents + 'Info.plist') then
+    Result := IncludeTrailingPathDelimiter(Contents + 'Resources')
+  else
+    Result := Base;
+end;
+
 function LocateDataFile(const FileName: string): string;
 const
-  RepositoryRootCandidate = 2;
+  RepositoryRootCandidate = 3;
 var
   Base: string;
-  Candidates: array[0..3] of string;
+  Candidates: array[0..4] of string;
   I: Integer;
 begin
   Base := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
-  Candidates[0] := Base + FileName;
-  Candidates[1] := Base + '..' + PathDelim + FileName;
+  { `.app` の中では、実行ファイルの隣ではなく `Contents/Resources/` に在ります。
+    入れ物の外ではここは実行ファイルの隣と同じなので、候補が 1 つ増えるだけです。
+    Inside a `.app` these live in `Contents/Resources/`, not beside the
+    executable. Outside one this is the same directory, so it merely adds a
+    candidate. }
+  Candidates[0] := ResourceDirectory + FileName;
+  Candidates[1] := Base + FileName;
+  Candidates[2] := Base + '..' + PathDelim + FileName;
   Candidates[RepositoryRootCandidate] :=
     Base + '..' + PathDelim + '..' + PathDelim + FileName;
-  Candidates[3] := FileName;
+  Candidates[4] := FileName;
   for I := Low(Candidates) to High(Candidates) do
     if FileExists(Candidates[I]) then
       Exit(ExpandFileName(Candidates[I]));

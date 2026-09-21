@@ -42,9 +42,16 @@ printf 'x' > "$work/without/libbare.so"
 DEEPCW_ONNXRUNTIME="$work/withlicence/libfake.so" \
 DEEPCW_PORTAUDIO="$work/withlicence/libfake.so" \
   "$here/tools/make_bundle.sh" "$work/out1" >"$work/log1" 2>&1 || true
+# 置き場所は組み方で変わります（macOS は `.app` の中の `Contents/Resources/`）。
+# **ここで確かめたいのは「入ったか」であって「どこに入ったか」ではありません。**
+# 場所は `tools/bundle_macos_test.sh` が見ます。
+# Where they land depends on the layout (inside `Contents/Resources/` on
+# macOS). **What is checked here is that they are carried, not where**; the
+# place is `tools/bundle_macos_test.sh`'s business.
 stage1=$(find "$work/out1" -maxdepth 1 -type d -name 'deepcw-station-*' | head -1)
-if [ -n "$stage1" ] && [ -f "$stage1/licences/ONNX-Runtime-LICENSE.txt" ] \
-   && [ -f "$stage1/licences/PortAudio-LICENSE.txt" ]; then
+if [ -n "$stage1" ] \
+   && [ -n "$(find "$stage1" -name 'ONNX-Runtime-LICENSE.txt' | head -1)" ] \
+   && [ -n "$(find "$stage1" -name 'PortAudio-LICENSE.txt' | head -1)" ]; then
   check "そばに条項があれば、配布物に入る" ok
 else
   check "そばに条項があれば、配布物に入る" ng "$(tail -3 "$work/log1")"
@@ -87,7 +94,7 @@ if DEEPCW_ONNXRUNTIME="$work/without/libbare.so" \
    DEEPCW_PORTAUDIO="$work/withlicence/libfake.so" \
      "$here/tools/make_bundle.sh" "$work/out4" >"$work/log4" 2>&1; then
   stage4=$(find "$work/out4" -maxdepth 1 -type d -name 'deepcw-station-*' | head -1)
-  if [ -f "$stage4/licences/ONNX-Runtime-LICENSE.txt" ]; then
+  if [ -n "$(find "$stage4" -name 'ONNX-Runtime-LICENSE.txt' | head -1)" ]; then
     check "指したファイルが入る" ok
   else
     check "指したファイルが入る" ng "入っていません"

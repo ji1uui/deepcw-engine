@@ -83,6 +83,18 @@ step "強制終了しても記録が残る" ./tools/kill_safety_test.sh
 # (requirement NFR-8.2). **What cannot be fixed after shipping belongs in the
 # regression.**
 step "配布物に許諾条項が入る" ./tools/bundle_licence_test.sh
+# macOS の `.app` が、配れる形に組み上がること（要件 FR-A.3、未解決 #22）。
+# **`NSMicrophoneUsageDescription` が無ければ、macOS 10.14 以降は許可を訊かれる
+# ことさえなく、マイクを開こうとした瞬間に OS がアプリを終了させます。**この
+# 容器は Linux なので、確かめられるのは**並び**だけです（macOS での起動と署名は
+# 未確認。付録 BJ）。
+# The macOS `.app` is assembled in a shape that can be distributed (requirement
+# FR-A.3, open question #22). **Without `NSMicrophoneUsageDescription`, macOS
+# 10.14 and later terminate the application the moment it opens the microphone,
+# with no prompt at all.** This container is Linux, so only **the arrangement**
+# can be checked here (running and signing on macOS are NOT VERIFIED;
+# appendix BJ).
+step "macOS の .app が配れる形になる" ./tools/bundle_macos_test.sh
 # 画素密度の違う画面で、窓の組み方が破綻しないこと（要件 NFR-5.1）。
 # **1 つの画面で見て回るだけでは、高 DPI の破綻は見つからない。**
 # The layout holds on screens of different pixel density (requirement NFR-5.1).

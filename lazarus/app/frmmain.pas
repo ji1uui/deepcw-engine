@@ -3903,9 +3903,7 @@ begin
       **Whatever has a translation and did not change is named.** Counting
       alone would pass with only 7 of 40 switching (measured; appendix BD.4):
       anything the `.po` gives a different wording for must change. }
-    Pairs := LoadPoPairs(IncludeTrailingPathDelimiter(
-      ExtractFilePath(ParamStr(0))) + 'languages' + PathDelim +
-      'deepcw_station.en.po');
+    Pairs := LoadPoPairs(LanguageDirectory + 'deepcw_station.en.po');
 
     Moved := 0;
     Wrong := 0;

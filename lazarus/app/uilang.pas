@@ -95,7 +95,7 @@ procedure UseUiLang(Index_: Integer);
 implementation
 
 uses
-  LCLTranslator, GetText;
+  LCLTranslator, GetText, DeepCW.Platform;
 
 { 命令行の `--lang`。無ければ空を返します。**`LCLTranslator` も同じものを
   見ますが、こちらは「指定があったかどうか」を知りたいので自分で読みます。**
@@ -175,7 +175,13 @@ begin
   ResetResourceTables;
   if (Index_ <= UI_LANG_DEFAULT) or (Index_ > High(UI_LANG_KEYS)) then
     Exit;
-  SetDefaultLang(UI_LANG_KEYS[Index_], 'languages');
+  { **置き場所は 1 か所で決めます。**`.app` の中では実行ファイルの隣では
+    ありません（`DeepCW.Platform.LanguageDirectory`）。絶対の道を渡せば
+    `SetDefaultLang` はそのまま使います。
+    **One place decides where they are**: inside a `.app` it is not beside the
+    executable (`DeepCW.Platform.LanguageDirectory`). Handed an absolute path,
+    `SetDefaultLang` uses it as given. }
+  SetDefaultLang(UI_LANG_KEYS[Index_], LanguageDirectory);
 end;
 
 end.

@@ -41,7 +41,7 @@ unit TextCheck;
 interface
 
 uses
-  SysUtils, Classes, Math, Graphics, FileUtil, Translations;
+  SysUtils, Classes, Math, Graphics, FileUtil, Translations, DeepCW.Platform;
 
 type
   { 1 件ぶんの突き合わせ。 / One string's worth of comparison. }
@@ -573,8 +573,7 @@ var
 begin
   Result := 0;
   Total := 0;
-  Dir := IncludeTrailingPathDelimiter(
-    ExtractFilePath(ParamStr(0))) + 'languages' + PathDelim;
+  Dir := LanguageDirectory;
   Found := FindAllFiles(Dir, '*.po', False);
   try
     if Found.Count = 0 then

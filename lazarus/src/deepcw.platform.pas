@@ -25,7 +25,7 @@ unit DeepCW.Platform;
 interface
 
 uses
-  SysUtils, Classes;
+  SysUtils, Classes, DeepCW.Types;
 
 type
   { 使っている記憶の量と、それをどうやって測ったか。
@@ -97,6 +97,20 @@ function BundledLicences: TStringList;
 { 許諾条項の置き場所。無ければ空を返します。
   Where the licence texts are, or empty when there are none. }
 function LicenceDirectory: string;
+
+{ 訳した文言（`.po`）の置き場所。**最後に区切り記号が付きます。**
+
+  同じ場所を 3 か所で組み立てていました（`UiLang`・`frmmain`・`TextCheck`）。
+  `.app` の中では実行ファイルの隣ではなくなるので、**3 か所のうち 1 つを
+  直し忘れれば、そこだけ訳が見つからなくなります**（教訓 10.11）。1 本にします。
+
+  Where the translated `.po` files live, **with a trailing delimiter.**
+
+  The same path was being built in three places (`UiLang`, `frmmain`,
+  `TextCheck`). Inside a `.app` it is no longer beside the executable, so
+  **forgetting one of the three would leave that one unable to find the
+  translations** (lesson 10.11). One place now. }
+function LanguageDirectory: string;
 
 implementation
 
@@ -175,22 +189,29 @@ end;
 function LicenceDirectory: string;
 var
   Base: string;
-  Candidates: array[0..2] of string;
+  Candidates: array[0..3] of string;
   I: Integer;
 begin
   Base := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
-  { 配布物では実行ファイルの隣。開発の木では 1 つ上（`lazarus/app/` から
+  { 配布物では実行ファイルの隣（`.app` では `Contents/Resources/`）。
+    開発の木では 1 つ上（`lazarus/app/` から
     `lazarus/`）も見ます。`LocateDataFile` と同じ考え方です。
     Beside the executable in a distribution; in a build tree one level up is
     looked at too (from `lazarus/app/` to `lazarus/`), the same way
     `LocateDataFile` works. }
-  Candidates[0] := Base + 'licences';
-  Candidates[1] := Base + '..' + PathDelim + 'licences';
-  Candidates[2] := Base + '..' + PathDelim + '..' + PathDelim + 'licences';
+  Candidates[0] := ResourceDirectory + 'licences';
+  Candidates[1] := Base + 'licences';
+  Candidates[2] := Base + '..' + PathDelim + 'licences';
+  Candidates[3] := Base + '..' + PathDelim + '..' + PathDelim + 'licences';
   for I := Low(Candidates) to High(Candidates) do
     if DirectoryExists(Candidates[I]) then
       Exit(ExpandFileName(Candidates[I]));
   Result := '';
+end;
+
+function LanguageDirectory: string;
+begin
+  Result := ResourceDirectory + 'languages' + PathDelim;
 end;
 
 function BundledLicences: TStringList;
