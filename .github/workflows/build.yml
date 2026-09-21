@@ -164,12 +164,52 @@ jobs:
           lazbuild --version
           fpc -iV || true
 
-      - name: 組み立てる
+      # **道具の身元。**macOS の 3 回目の実行で、LCL（cocoa）のリンクが
+      # 落ちました。
+      #
+      #   ld: malformed method list atom 'ltmp5'
+      #       (.../cocoa/cocoawsextctrls.o),
+      #       fixups found beyond the number of method entries
+      #
+      # FPC が出す Objective-C の並びを、Apple の新しいリンカが受け付けて
+      # いません。**直し方は、どのリンカと Xcode が居るかで変わります。**
+      # 推測で当てにいく前に、居るものを言わせます。
+      #
+      # **Who the tools are.** On the third run the LCL (cocoa) link failed:
+      # Apple's newer linker rejects the Objective-C method lists FPC emits.
+      # **Which fix applies depends on which linker and Xcode are present**, so
+      # before guessing at one, the machine is asked what it has.
+      - name: 道具の身元を言う（macOS）
+        if: runner.os == 'macOS'
+        run: |
+          fpc -iV
+          fpc -iTO -iTP || true
+          xcode-select -p
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "Xcode の別版は無し"
+          ld -v 2>&1 | head -5 || true
+          find /opt/homebrew -name 'fpc.cfg' 2>/dev/null | head -5
+
+      # **組み立てを 2 つに分けます。**命令行の道具は LCL を使いません。
+      # 画面のアプリだけが落ちるのなら、**落ちているのは LCL の cocoa であって
+      # この木のコードではない**と言えます。分けておけば、画面が組めない間も
+      # 数値と ABI の検証は macOS で走ります。
+      #
+      # **順番が大事です。**画面を最後に置くのは、落ちたときに前の段の結果を
+      # 失わないためです。**段が落ちれば job は落ちます**——隠してはいません。
+      #
+      # **The build is split in two.** The command-line tools do not use the
+      # LCL: if only the GUI fails, **what is failing is the LCL's cocoa
+      # widgetset and not this tree's code.** Split, the numeric and ABI checks
+      # still run on macOS while the GUI cannot be linked.
+      #
+      # **The order matters**: the GUI goes last so that a failure there does
+      # not cost the results of the steps before it. **A failing step still
+      # fails the job** -- nothing is hidden.
+      - name: 命令行の道具を組み立てる
         working-directory: lazarus
         run: |
           set -e
-          for p in app/deepcw_station app/gui_probe \
-                   cli/cw_devices cli/cw_loopback cli/cw_stream cli/cw_tune \
+          for p in cli/cw_devices cli/cw_loopback cli/cw_stream cli/cw_tune \
                    cli/decode_morse cli/dsp_check; do
             echo "== $p =="
             lazbuild -B "$p.lpi"
@@ -199,6 +239,15 @@ jobs:
       - name: PortAudio の構造体の並び
         working-directory: lazarus
         run: ./cli/cw_devices${{ runner.os == 'Windows' && '.exe' || '' }} --abi-only
+
+      - name: 画面のアプリを組み立てる
+        working-directory: lazarus
+        run: |
+          set -e
+          for p in app/deepcw_station app/gui_probe; do
+            echo "== $p =="
+            lazbuild -B "$p.lpi"
+          done
 
       # macOS だけ。**`.app` を組み、署名が通るかを確かめます。**版 2.62 で
       # 並びは Linux で確かめましたが、`codesign` は macOS でしか走りません
