@@ -1,6 +1,66 @@
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8"
 
+#: frmmain.rserrinputstream
+msgid ""
+"マイク（ライン入力）を開けませんでした。\n"
+"別の入力装置を選ぶか、他のアプリが装置を使用していないか確認してください。"
+msgstr "The microphone (line in) could not be opened.\nChoose another input, or check no other app is holding it."
+
+#: frmmain.rserrmetadatamissing
+msgid ""
+"設定ファイル model.onnx.json が見つかりません。\n"
+"設定タブで場所を指定してください。"
+msgstr "The settings file model.onnx.json was not found.\nSet its location on the Settings tab."
+
+#: frmmain.rserrmismatch
+msgid ""
+"モデルと設定ファイルの組み合わせが正しくありません。\n"
+"同じ配布物に入っている model.onnx と model.onnx.json を指定してください。"
+msgstr "The model and its settings file do not go together.\nUse the model.onnx and model.onnx.json from one distribution."
+
+#: frmmain.rserrmodelmissing
+msgid ""
+"モデルファイル model.onnx が見つかりません。\n"
+"設定タブで場所を指定してください。"
+msgstr "The model file model.onnx was not found.\nSet its location on the Settings tab."
+
+#: frmmain.rserrother
+msgid ""
+"問題が起きたため、処理を中止しました。\n"
+"詳しい内容は設定タブの診断情報に記録しています。"
+msgstr "Something went wrong; the work stopped.\nDetails are in the diagnostics, Settings tab."
+
+#: frmmain.rserroutputstream
+msgid ""
+"再生装置を開けませんでした。\n"
+"別の出力装置を選ぶか、他のアプリが装置を使用していないか確認してください。"
+msgstr "The playback device could not be opened.\nChoose another output, or check no other app is holding it."
+
+#: frmmain.rserrportaudio
+msgid ""
+"音声ライブラリ PortAudio を利用できません。\n"
+"同梱されていない場合は、設定タブでライブラリの場所を指定してください。\n"
+"WAV ファイルの読み書きは、この状態でも利用できます。"
+msgstr "The PortAudio sound library is not available.\nIf it was not bundled, set its location on the Settings tab.\nReading and writing WAV files still works."
+
+#: frmmain.rserrruntime
+msgid ""
+"推論ライブラリ ONNX Runtime を読み込めませんでした。\n"
+"設定タブでライブラリの場所を指定してください。\n"
+"送信音の生成と WAV への保存は、この状態でも利用できます。"
+msgstr "The ONNX Runtime inference library could not be loaded.\nSet its location on the Settings tab.\nSending tones and saving WAV files still works."
+
+#: frmmain.rserrtooshort
+msgid "音声が短すぎます。もう少し長い録音でお試しください。"
+msgstr "The audio is too short. Try a longer recording."
+
+#: frmmain.rserrwav
+msgid ""
+"この音声ファイルを読み取れませんでした。\n"
+"PCM 形式のモノラルまたはステレオの WAV ファイルをお使いください。"
+msgstr "This sound file could not be read.\nUse a PCM WAV file, mono or stereo."
+
 #: frmmain.rsftallitems
 msgid "5 項目すべて"
 msgstr "All five"
@@ -93,6 +153,123 @@ msgstr "Trend"
 #: frmmain.rsfttrenditemlabel
 msgid "推移に出す項目"
 msgstr "Trend shows"
+
+#: frmmain.rsinfoalphabet
+#, object-pascal-format
+msgid "文字集合 (%0:d): %1:s"
+msgstr "Chars (%0:d): %1:s"
+
+#: frmmain.rsinfoband
+#, object-pascal-format
+msgid "周波数帯: %0:.0f - %1:.0f Hz (%2:d ビン)"
+msgstr "Band: %0:.0f - %1:.0f Hz (%2:d bins)"
+
+#: frmmain.rsinfoconfigfile
+#, object-pascal-format
+msgid "設定ファイル: %0:s"
+msgstr "Settings file: %0:s"
+
+#: frmmain.rsinfodefaultmark
+msgid "  ← 既定"
+msgstr "  <- default"
+
+#: frmmain.rsinfodevice
+#, object-pascal-format
+msgid "入力装置 %0:d: %1:s [%2:s] %3:d ch / %4:.0f Hz%5:s"
+msgstr "Input %0:d: %1:s [%2:s] %3:d ch / %4:.0f Hz%5:s"
+
+#: frmmain.rsinfodiagnostics
+msgid "診断情報（技術的な原文）"
+msgstr "Diagnostics (raw text)"
+
+#: frmmain.rsinfodropped
+#, object-pascal-format
+msgid "追いつけずに捨てた音声: %.1f 秒"
+msgstr "Dropped when behind: %.1f s"
+
+#: frmmain.rsinfoengineloaded
+msgid "エンジン: 読み込み済み"
+msgstr "Engine: loaded"
+
+#: frmmain.rsinfoenginenotloaded
+msgid "エンジン: 未読み込み"
+msgstr "Engine: not loaded"
+
+#: frmmain.rsinfoengineversion
+#, object-pascal-format
+msgid "エンジン: ONNX Runtime %0:s"
+msgstr "Engine: ONNX Runtime %0:s"
+
+#: frmmain.rsinfoffthop
+#, object-pascal-format
+msgid "FFT 長 / ホップ長: %0:d / %1:d"
+msgstr "FFT / hop length: %0:d / %1:d"
+
+#: frmmain.rsinfoinout
+#, object-pascal-format
+msgid "入力 / 出力: %0:s / %1:s"
+msgstr "In / out: %0:s / %1:s"
+
+#: frmmain.rsinfojournal
+#, object-pascal-format
+msgid "受信テキストの記録: %0:s（%1:d 行 / %2:d バイト）"
+msgstr "Received text log: %0:s (%1:d lines / %2:d bytes)"
+
+#: frmmain.rsinfojournalnotyet
+#, object-pascal-format
+msgid "受信テキストの記録: %0:s（まだ書いていません）"
+msgstr "Received text log: %0:s (nothing written yet)"
+
+#: frmmain.rsinfojournaloff
+msgid "受信テキストの記録: 取っていません"
+msgstr "Received text log: not kept"
+
+#: frmmain.rsinfolicences
+#, object-pascal-format
+msgid "同梱の許諾条項: %0:d 件（%1:s）"
+msgstr "Bundled licences: %0:d (%1:s)"
+
+#: frmmain.rsinfolog
+#, object-pascal-format
+msgid "交信記録: %0:d 件（%1:s）"
+msgstr "Contact log: %0:d (%1:s)"
+
+#: frmmain.rsinfonodevices
+msgid "入力装置: 見つかりません"
+msgstr "Input devices: none"
+
+#: frmmain.rsinfonolicences
+msgid "同梱の許諾条項: 見つかりません（配布物ではなく、ビルドした木から動かしています）"
+msgstr "Bundled licences: none found (running from a build tree, not a distribution)"
+
+#: frmmain.rsinfonoportaudio
+msgid "PortAudio: 利用不可（送信の再生とマイク受信は使えません）"
+msgstr "PortAudio: unavailable (no playback, no mic input)"
+
+#: frmmain.rsinfopace
+#, object-pascal-format
+msgid "解析 1 回: %0:.2f 秒 / 実時間比 %1:.0f 倍 / 推論間隔 %2:.2f 秒"
+msgstr "One pass: %0:.2f s / %1:.0f x real time / interval %2:.2f s"
+
+#: frmmain.rsinfopending
+#, object-pascal-format
+msgid "未解析の音声: %.1f 秒"
+msgstr "Unread audio: %.1f s"
+
+#: frmmain.rsinforeplay
+#, object-pascal-format
+msgid "聴き直せる音声: %0:.0f 秒 / 保持の上限 %1:.0f 分（約 %2:.0f MB）"
+msgstr "Replayable: %0:.0f s / keep up to %1:.0f min (about %2:.0f MB)"
+
+#: frmmain.rsinfosamplerate
+#, object-pascal-format
+msgid "サンプリング周波数: %d Hz"
+msgstr "Sample rate: %d Hz"
+
+#: frmmain.rsinfoseconds
+#, object-pascal-format
+msgid "音声長の制約: %0:.0f - %1:.0f 秒（長い録音は自動的に分割）"
+msgstr "Audio length: %0:.0f - %1:.0f s (longer is split)"
 
 #: frmmain.rspragain
 msgid "もう一度鳴らす"

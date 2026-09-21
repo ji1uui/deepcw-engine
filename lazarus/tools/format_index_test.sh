@@ -65,6 +65,32 @@ def literals(path):
         i += 1
     return out
 
+def without_comments(path):
+    """註釈を空白に置き換えます。**行番号は変えません。**
+    Comments blanked out, **keeping the line numbering.**"""
+    s = io.open(path, encoding='utf-8').read()
+    out = []
+    i = 0; n = len(s)
+    while i < n:
+        c = s[i]
+        if c == '{':
+            while i < n and s[i] != '}':
+                out.append('\n' if s[i] == '\n' else ' '); i += 1
+            if i < n: out.append(' '); i += 1
+            continue
+        if c == '(' and i + 1 < n and s[i+1] == '*':
+            out.append('  '); i += 2
+            while i + 1 < n and not (s[i] == '*' and s[i+1] == ')'):
+                out.append('\n' if s[i] == '\n' else ' '); i += 1
+            out.append('  '); i += 2
+            continue
+        if c == '/' and i + 1 < n and s[i+1] == '/':
+            while i < n and s[i] != '\n':
+                out.append(' '); i += 1
+            continue
+        out.append(c); i += 1
+    return ''.join(out)
+
 SPEC = re.compile(r'%(?P<idx>\d+:)?-?(?:\*|\d*)(?:\.(?:\*|\d+))?[sdufgxeMmnp]')
 
 def placeholders(t):
@@ -105,6 +131,44 @@ for path in sorted(set(glob.glob('app/*.pas') + glob.glob('app/*.lpr') +
         if not any(m.group('idx') for m in ms):
             bad.append((path, line, text))
 
+# `resourcestring` の宣言に `LineEnding` が混じっていないか。
+#
+# **`LineEnding` は OS で中身が変わります**（Linux は `#10`、Windows は
+# `#13#10`）。訳の一覧に載る綴りが OS ごとに変わるので、**Windows では訳が
+# 当たりません**（付録 BH.1）。改行は `#10` と書き、画面に出す直前に
+# `AsLines` が直します。
+#
+# Is `LineEnding` mixed into a `resourcestring` declaration?
+#
+# **Its contents differ by platform** (`#10` on Linux, `#13#10` on Windows), so
+# the spelling in the translation list would differ and **the translations
+# would not match on Windows** (appendix BH.1). Line breaks are written `#10`
+# and turned into the real one by `AsLines` just before they are shown.
+platform_breaks = []
+for path in sorted(set(glob.glob('app/*.pas') + glob.glob('app/*.lpr') +
+                       glob.glob('src/*.pas'))):
+    if path in SKIP:
+        continue
+    text = without_comments(path)
+    inside = False
+    for n, line in enumerate(text.split('\n'), 1):
+        stripped = line.strip()
+        if stripped == 'resourcestring':
+            inside = True; continue
+        if inside and stripped in ('implementation', 'begin', 'var', 'type',
+                                   'const'):
+            inside = False; continue
+        if inside and 'LineEnding' in line:
+            platform_breaks.append((path, n, stripped))
+
+if platform_breaks:
+    print('訳せる文言に `LineEnding` が混じっています（%d 件）。' %
+          len(platform_breaks))
+    print('OS で中身が変わるため、Windows では訳が当たりません。`#10` と書いてください。')
+    for path, line, text in platform_breaks:
+        print('  %s:%d  %s' % (path, line, text))
+    sys.exit(1)
+
 if bad:
     print('番号の付いていない文言が %d 件あります。' % len(bad))
     print('訳す人が引数を並べ替えられません。番号付き（0 から順）にしてください。')
@@ -112,5 +176,5 @@ if bad:
         print('  %s:%d  %s' % (path, line, text))
     sys.exit(1)
 
-print('差し込みが 2 つ以上の文言 %d 件、すべて番号付きです' % looked)
+print('差し込みが 2 つ以上の文言 %d 件、すべて番号付き。改行も OS に依らない形です' % looked)
 PY

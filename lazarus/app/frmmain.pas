@@ -954,6 +954,103 @@ resourcestring
   RsSetDiagNote2 = 'ファイルの場所の利用者名は ~ に置き換えます。';
   RsSetDiagnostics = '診断情報';
 
+  { ── 実行中に出る文言 ── / words that appear while running ──
+
+    **改行は `#10` で書きます。`LineEnding` を使ってはいけません。**
+    `LineEnding` は OS で中身が変わる（Linux は `#10`、Windows は `#13#10`）ので、
+    訳の一覧に載る綴りが OS ごとに変わり、**Windows では訳が当たらなくなります**
+    （実測。付録 BH.1）。画面に出す直前に `AsLines` が OS の改行へ直します。
+
+    **Line breaks are written as `#10`; never `LineEnding`.** Its contents
+    differ by platform (`#10` on Linux, `#13#10` on Windows), so the spelling in
+    the translation list would differ by platform and **the translations would
+    not match on Windows** (measured; appendix BH.1). `AsLines` turns them into
+    the platform's line ending just before they are shown. }
+
+  { 困ったときに出る案内（`UserMessageFor`）。**何が起きたかだけでなく、
+    いま何ができるかを書きます。**
+    What is said when something goes wrong: **not only what happened, but what
+    can still be done.** }
+  RsErrPortAudio = '音声ライブラリ PortAudio を利用できません。'#10 +
+    '同梱されていない場合は、設定タブでライブラリの場所を指定してください。'#10 +
+    'WAV ファイルの読み書きは、この状態でも利用できます。';
+  RsErrInputStream = 'マイク（ライン入力）を開けませんでした。'#10 +
+    '別の入力装置を選ぶか、他のアプリが装置を使用していないか確認してください。';
+  RsErrOutputStream = '再生装置を開けませんでした。'#10 +
+    '別の出力装置を選ぶか、他のアプリが装置を使用していないか確認してください。';
+  RsErrRuntime = '推論ライブラリ ONNX Runtime を読み込めませんでした。'#10 +
+    '設定タブでライブラリの場所を指定してください。'#10 +
+    '送信音の生成と WAV への保存は、この状態でも利用できます。';
+  RsErrModelMissing = 'モデルファイル model.onnx が見つかりません。'#10 +
+    '設定タブで場所を指定してください。';
+  RsErrMetadataMissing = '設定ファイル model.onnx.json が見つかりません。'#10 +
+    '設定タブで場所を指定してください。';
+  RsErrMismatch = 'モデルと設定ファイルの組み合わせが正しくありません。'#10 +
+    '同じ配布物に入っている model.onnx と model.onnx.json を指定してください。';
+  RsErrWav = 'この音声ファイルを読み取れませんでした。'#10 +
+    'PCM 形式のモノラルまたはステレオの WAV ファイルをお使いください。';
+  RsErrTooShort = '音声が短すぎます。もう少し長い録音でお試しください。';
+  RsErrOther = '問題が起きたため、処理を中止しました。'#10 +
+    '詳しい内容は設定タブの診断情報に記録しています。';
+
+  { 診断情報の欄（`RefreshInfo`）。**利用者が不具合報告に貼る中身**なので、
+    読める言語で出します。
+    The diagnostics panel: **what the operator pastes into a bug report**, so it
+    is shown in a language they can read. }
+  RsInfoEngineLoaded = 'エンジン: 読み込み済み';
+  RsInfoEngineNotLoaded = 'エンジン: 未読み込み';
+  RsInfoSampleRate = 'サンプリング周波数: %d Hz';
+  RsInfoFftHop = 'FFT 長 / ホップ長: %0:d / %1:d';
+  RsInfoBand = '周波数帯: %0:.0f - %1:.0f Hz (%2:d ビン)';
+  RsInfoInOut = '入力 / 出力: %0:s / %1:s';
+  RsInfoAlphabet = '文字集合 (%0:d): %1:s';
+  RsInfoSeconds = '音声長の制約: %0:.0f - %1:.0f 秒（長い録音は自動的に分割）';
+  RsInfoNoPortAudio = 'PortAudio: 利用不可（送信の再生とマイク受信は使えません）';
+  RsInfoPending = '未解析の音声: %.1f 秒';
+  RsInfoPace = '解析 1 回: %0:.2f 秒 / 実時間比 %1:.0f 倍 / 推論間隔 %2:.2f 秒';
+  RsInfoDropped = '追いつけずに捨てた音声: %.1f 秒';
+  RsInfoJournalOff = '受信テキストの記録: 取っていません';
+  RsInfoJournalNotYet = '受信テキストの記録: %0:s（まだ書いていません）';
+  RsInfoJournal = '受信テキストの記録: %0:s（%1:d 行 / %2:d バイト）';
+  RsInfoNoLicences = '同梱の許諾条項: 見つかりません' +
+    '（配布物ではなく、ビルドした木から動かしています）';
+  RsInfoLicences = '同梱の許諾条項: %0:d 件（%1:s）';
+  RsInfoLog = '交信記録: %0:d 件（%1:s）';
+  RsInfoReplay = '聴き直せる音声: %0:.0f 秒 / 保持の上限 %1:.0f 分（約 %2:.0f MB）';
+  RsInfoNoDevices = '入力装置: 見つかりません';
+  RsInfoDevice = '入力装置 %0:d: %1:s [%2:s] %3:d ch / %4:.0f Hz%5:s';
+  RsInfoDefaultMark = '  ← 既定';
+  RsInfoConfigFile = '設定ファイル: %0:s';
+  RsInfoDiagnostics = '診断情報（技術的な原文）';
+  RsInfoEngineVersion = 'エンジン: ONNX Runtime %0:s';
+
+
+
+{ 訳せる文字列の改行（`#10`）を、この OS の改行へ直します（要件 NFR-7.6）。
+
+  **訳の一覧に載る綴りは、どの OS でも同じでなければなりません。**`LineEnding`
+  を文字列に埋めると、Linux は `#10`、Windows は `#13#10` になり、**Windows では
+  訳が当たりません**（実測。付録 BH.1）。そこで文字列には `#10` だけを書き、
+  画面に出す直前にここで直します。
+
+  Turns the `#10` line breaks of a translatable string into this platform's
+  line ending (requirement NFR-7.6).
+
+  **The spelling in the translation list has to be the same on every
+  platform.** With `LineEnding` embedded it would be `#10` on Linux and
+  `#13#10` on Windows, and **the translations would not match on Windows**
+  (measured; appendix BH.1). So only `#10` is written, and it is turned into
+  the real line ending here. }
+function AsLines(const Text_: string): string;
+begin
+  {$IFDEF WINDOWS}
+  Result := StringReplace(Text_, #10, LineEnding, [rfReplaceAll]);
+  {$ELSE}
+  { この OS では `#10` がそのまま改行です。**写さずに返します。**
+    On this platform `#10` already is the line ending: returned untouched. }
+  Result := Text_;
+  {$ENDIF}
+end;
 
 { 実装の後方で定義します。/ Defined further down. }
 function UserMessageFor(const Raw: string): string; forward;
@@ -3823,26 +3920,26 @@ begin
   try
     if FDecoder <> nil then
     begin
-      Lines.Add('エンジン: 読み込み済み');
+      Lines.Add(RsInfoEngineLoaded);
       Lines.Add(Format('ONNX Runtime: %s (%s)', [OnnxRuntimeVersion, OnnxRuntimeLibraryPath]));
-      Lines.Add(Format('サンプリング周波数: %d Hz', [FDecoder.Metadata.SampleRate]));
-      Lines.Add(Format('FFT 長 / ホップ長: %0:d / %1:d',
+      Lines.Add(Format(RsInfoSampleRate, [FDecoder.Metadata.SampleRate]));
+      Lines.Add(Format(RsInfoFftHop,
         [FDecoder.Metadata.FFTLength, FDecoder.Metadata.HopLength]));
-      Lines.Add(Format('周波数帯: %0:.0f - %1:.0f Hz (%2:d ビン)',
+      Lines.Add(Format(RsInfoBand,
         [FDecoder.Metadata.MinFreqHz, FDecoder.Metadata.MaxFreqHz,
          FDecoder.Metadata.FrequencyBins]));
-      Lines.Add(Format('入力 / 出力: %0:s / %1:s',
+      Lines.Add(Format(RsInfoInOut,
         [FDecoder.Metadata.InputName, FDecoder.Metadata.OutputName]));
       Alphabet := '';
       for I := 0 to FDecoder.Metadata.CharCount - 1 do
         Alphabet := Alphabet + FDecoder.Metadata.Chars[I];
-      Lines.Add(Format('文字集合 (%0:d): %1:s', [FDecoder.Metadata.CharCount, Alphabet]));
-      Lines.Add(Format('音声長の制約: %0:.0f - %1:.0f 秒（長い録音は自動的に分割）',
+      Lines.Add(Format(RsInfoAlphabet, [FDecoder.Metadata.CharCount, Alphabet]));
+      Lines.Add(Format(RsInfoSeconds,
         [DEEPCW_MIN_SECONDS, DEEPCW_MAX_SECONDS]));
     end
     else
     begin
-      Lines.Add('エンジン: 未読み込み');
+      Lines.Add(RsInfoEngineNotLoaded);
       if FEngineError <> '' then
         Lines.Add(FEngineError);
     end;
@@ -3852,19 +3949,19 @@ begin
       Lines.Add(Format('PortAudio: %s (%s)', [PortAudioVersion, PortAudioLibraryPath]))
     else
     begin
-      Lines.Add('PortAudio: 利用不可（送信の再生とマイク受信は使えません）');
+      Lines.Add(RsInfoNoPortAudio);
       Lines.Add(PortAudioLoadError);
     end;
     Lines.Add('');
     if FStream <> nil then
     begin
-      Lines.Add(Format('未解析の音声: %.1f 秒', [FStream.PendingSeconds]));
+      Lines.Add(Format(RsInfoPending, [FStream.PendingSeconds]));
       { 実時間比と、いま守っている解析の間隔（要件 FR-G.4・FR-G.3）。
         **どちらも、遅い機械で何が起きているのかを説明する数字です。**
         The real-time ratio and the interval now kept (FR-G.4, FR-G.3): **the
         two numbers that explain what is happening on a slow machine.** }
       if FStream.RealTimeRatio > 0 then
-        Lines.Add(Format('解析 1 回: %0:.2f 秒 / 実時間比 %1:.0f 倍 / 推論間隔 %2:.2f 秒',
+        Lines.Add(Format(RsInfoPace,
           [FStream.StepCostSeconds, FStream.RealTimeRatio,
            FStream.PaceSeconds]));
       { 追いつけずに捨てた分は、黙って消えてはいけません。読めなかった理由が
@@ -3872,16 +3969,16 @@ begin
         Audio dropped through falling behind must not vanish silently: it may
         be why something was not read (requirements NFR-4, FR-G.3). }
       if FStream.DroppedSeconds > 0 then
-        Lines.Add(Format('追いつけずに捨てた音声: %.1f 秒', [FStream.DroppedSeconds]));
+        Lines.Add(Format(RsInfoDropped, [FStream.DroppedSeconds]));
     end;
     if FJournal <> nil then
     begin
       if not FSetJournal.Checked then
-        Lines.Add('受信テキストの記録: 取っていません')
+        Lines.Add(RsInfoJournalOff)
       else if FJournal.FileName = '' then
-        Lines.Add('受信テキストの記録: ' + JournalDirectory + '（まだ書いていません）')
+        Lines.Add(Format(RsInfoJournalNotYet, [JournalDirectory]))
       else
-        Lines.Add(Format('受信テキストの記録: %0:s（%1:d 行 / %2:d バイト）',
+        Lines.Add(Format(RsInfoJournal,
           [FJournal.FileName, FJournal.LinesWritten, FJournal.BytesWritten]));
       if FJournal.LastError <> '' then
         Lines.Add('  ' + FJournal.LastError);
@@ -3901,11 +3998,10 @@ begin
     try
       Lines.Add('');
       if Licences.Count = 0 then
-        Lines.Add('同梱の許諾条項: 見つかりません' +
-          '（配布物ではなく、ビルドした木から動かしています）')
+        Lines.Add(RsInfoNoLicences)
       else
       begin
-        Lines.Add(Format('同梱の許諾条項: %0:d 件（%1:s）',
+        Lines.Add(Format(RsInfoLicences,
           [Licences.Count, LicenceDirectory]));
         for I := 0 to Licences.Count - 1 do
           Lines.Add('  ' + Licences[I]);
@@ -3916,7 +4012,7 @@ begin
 
     if FLog <> nil then
     begin
-      Lines.Add(Format('交信記録: %0:d 件（%1:s）', [FLog.Count, FLog.FileName]));
+      Lines.Add(Format(RsInfoLog, [FLog.Count, FLog.FileName]));
       if FLog.LastError <> '' then
         Lines.Add('  ' + FLog.LastError);
     end;
@@ -3927,24 +4023,24 @@ begin
         How much audio is held and what it costs in memory. It grows with the
         retention, so the real figure has to be visible after the choice rather
         than only described before it (requirement FR-G.3). }
-      Lines.Add(Format('聴き直せる音声: %0:.0f 秒 / 保持の上限 %1:.0f 分（約 %2:.0f MB）',
+      Lines.Add(Format(RsInfoReplay,
         [FHistory.RetainedSeconds, FHistory.RetentionSeconds / 60,
          FHistory.RetentionSeconds * FHistory.SampleRate * SizeOf(Single) / (1024 * 1024)]));
     if Length(FDevices) = 0 then
-      Lines.Add('入力装置: 見つかりません')
+      Lines.Add(RsInfoNoDevices)
     else
       for Device := 0 to High(FDevices) do
-        Lines.Add(Format('入力装置 %0:d: %1:s [%2:s] %3:d ch / %4:.0f Hz%5:s',
+        Lines.Add(Format(RsInfoDevice,
           [FDevices[Device].Index, FDevices[Device].Name, FDevices[Device].HostApi,
            FDevices[Device].MaxInputChannels, FDevices[Device].DefaultSampleRate,
-           BoolToStr(FDevices[Device].IsDefault, '  ← 既定', '')]));
+           BoolToStr(FDevices[Device].IsDefault, RsInfoDefaultMark, '')]));
 
     Lines.Add('');
-    Lines.Add('設定ファイル: ' + ConfigFileName);
+    Lines.Add(Format(RsInfoConfigFile, [ConfigFileName]));
     if (FDiagnostics <> nil) and (FDiagnostics.Count > 0) then
     begin
       Lines.Add('');
-      Lines.Add('診断情報（技術的な原文）');
+      Lines.Add(RsInfoDiagnostics);
       Lines.AddStrings(FDiagnostics);
     end;
     FSetInfo.Lines.Assign(Lines);
@@ -3953,9 +4049,9 @@ begin
   end;
 
   if FDecoder <> nil then
-    SetStatus('エンジン: ONNX Runtime ' + OnnxRuntimeVersion, '', '')
+    SetStatus(Format(RsInfoEngineVersion, [OnnxRuntimeVersion]), '', '')
   else
-    SetStatus('エンジン: 未読み込み', '', '');
+    SetStatus(RsInfoEngineNotLoaded, '', '');
 end;
 
 { ---- engine ---- }
@@ -7251,37 +7347,32 @@ function UserMessageFor(const Raw: string): string;
 
 begin
   if Mentions('PortAudio could not be loaded') or Mentions('Pa_Initialize') then
-    Result := '音声ライブラリ PortAudio を利用できません。' + LineEnding +
-      '同梱されていない場合は、設定タブでライブラリの場所を指定してください。' + LineEnding +
-      'WAV ファイルの読み書きは、この状態でも利用できます。'
+    Result := RsErrPortAudio
   else if Mentions('input stream') then
-    Result := 'マイク（ライン入力）を開けませんでした。' + LineEnding +
-      '別の入力装置を選ぶか、他のアプリが装置を使用していないか確認してください。'
+    Result := RsErrInputStream
   else if Mentions('output stream') then
-    Result := '再生装置を開けませんでした。' + LineEnding +
-      '別の出力装置を選ぶか、他のアプリが装置を使用していないか確認してください。'
+    Result := RsErrOutputStream
   else if Mentions('Could not load the ONNX Runtime') then
-    Result := '推論ライブラリ ONNX Runtime を読み込めませんでした。' + LineEnding +
-      '設定タブでライブラリの場所を指定してください。' + LineEnding +
-      '送信音の生成と WAV への保存は、この状態でも利用できます。'
+    Result := RsErrRuntime
   else if Mentions('Model file not found') then
-    Result := 'モデルファイル model.onnx が見つかりません。' + LineEnding +
-      '設定タブで場所を指定してください。'
+    Result := RsErrModelMissing
   else if Mentions('Metadata file not found') then
-    Result := '設定ファイル model.onnx.json が見つかりません。' + LineEnding +
-      '設定タブで場所を指定してください。'
+    Result := RsErrMetadataMissing
   else if Mentions('Metadata expects') or Mentions('the metadata declares') or
           Mentions('the metadata names') or Mentions('num_classes') then
-    Result := 'モデルと設定ファイルの組み合わせが正しくありません。' + LineEnding +
-      '同じ配布物に入っている model.onnx と model.onnx.json を指定してください。'
+    Result := RsErrMismatch
   else if Mentions('RIFF') or Mentions('WAV') or Mentions('PCM') then
-    Result := 'この音声ファイルを読み取れませんでした。' + LineEnding +
-      'PCM 形式のモノラルまたはステレオの WAV ファイルをお使いください。'
+    Result := RsErrWav
   else if Mentions('must last between') then
-    Result := '音声が短すぎます。もう少し長い録音でお試しください。'
+    Result := RsErrTooShort
   else
-    Result := '問題が起きたため、処理を中止しました。' + LineEnding +
-      '詳しい内容は設定タブの診断情報に記録しています。';
+    Result := RsErrOther;
+  { **見つけ出す手がかり（英語の原文）は訳しません。**例外の文面は OS と
+    ライブラリが決めるもので、画面の言語とは関わりがありません。
+    **The fragments matched on are not translated**: the wording of an
+    exception comes from the platform and its libraries, not from the language
+    of the screen. }
+  Result := AsLines(Result);
 end;
 
 procedure TMainForm.LogDiagnostic(const Context, Raw: string);

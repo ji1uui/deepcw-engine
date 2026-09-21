@@ -152,6 +152,32 @@ function DescribeWidths(const Item: TTextWidths): string;
   something a translator should have to know, so **it is found by machine.** }
 function BadForCaption(const Items: TTextWidthList): TTextWidthList;
 
+{ 差し込みが元と食い違っている訳を返します（要件 NFR-7.6）。
+
+  **これは画面が崩れる話ではなく、落ちる話です。**`Format` は、文字列が求める
+  引数と渡された引数が合わなければ例外を投げます。`未解析の音声: %.1f 秒` を
+  `Audio %0:s` と訳せば、**その行が出ようとした瞬間に受信が止まります。**
+
+  訳す人が Pascal の書式を知っている必要はありません。**機械で見つけます。**
+
+  数えるのは**種類ごとの個数**です。順序は訳す人が選んでよい（番号付きにしたのは
+  そのためです）が、**何をいくつ差し込むかは変えられません。**
+
+  Returns translations whose placeholders disagree with the original
+  (requirement NFR-7.6).
+
+  **This is not about the screen breaking but about the program stopping.**
+  `Format` raises when the string asks for arguments the caller did not pass:
+  translate `未解析の音声: %.1f 秒` as `Audio %0:s` and **reception halts the
+  moment that line is due.**
+
+  A translator need not know Pascal's format syntax. **It is found by machine.**
+
+  What is counted is **how many of each type**. The order is the translator's to
+  choose -- that is what the indices are for -- but **what is substituted, and
+  how many, cannot change.** }
+function BadPlaceholders(const Items: TTextWidthList): TTextWidthList;
+
 { 置いてある `.po` をすべて読み、幅を報告します。広すぎるものが 1 件でもあれば
   0 以外を返します（呼ぶ側はそれを終了コードにします）。
 
@@ -318,6 +344,66 @@ begin
   end;
 end;
 
+{ 種類ごとの個数を数えます。`%%` は差し込みではありません。
+  Counts placeholders by type; `%%` is not one. }
+function PlaceholderTally(const Text_: string): string;
+var
+  Seen: array['a'..'z'] of Integer;
+  C: Char;
+  At_: Integer;
+  Kind: Char;
+begin
+  for C := 'a' to 'z' do
+    Seen[C] := 0;
+  At_ := 1;
+  while At_ <= Length(Text_) do
+  begin
+    if Text_[At_] = '%' then
+    begin
+      if (At_ < Length(Text_)) and (Text_[At_ + 1] = '%') then
+      begin
+        Inc(At_, 2);
+        Continue;
+      end;
+      Inc(At_);
+      { 番号・旗・桁・精度を読み飛ばし、種類の字だけを見ます。
+        The index, flags, width and precision are skipped; only the type letter
+        is looked at. }
+      while (At_ <= Length(Text_)) and
+            (Text_[At_] in ['0'..'9', ':', '-', '.', '*']) do
+        Inc(At_);
+      if At_ <= Length(Text_) then
+      begin
+        Kind := LowerCase(Text_[At_]);
+        if Kind in ['a'..'z'] then
+          Inc(Seen[Kind]);
+        Inc(At_);
+      end;
+    end
+    else
+      Inc(At_);
+  end;
+  Result := '';
+  for C := 'a' to 'z' do
+    if Seen[C] > 0 then
+      Result := Result + C + IntToStr(Seen[C]);
+end;
+
+function BadPlaceholders(const Items: TTextWidthList): TTextWidthList;
+var
+  I, Count: Integer;
+begin
+  SetLength(Result, Length(Items));
+  Count := 0;
+  for I := 0 to High(Items) do
+    if PlaceholderTally(Items[I].Source) <> PlaceholderTally(Items[I].Target) then
+    begin
+      Result[Count] := Items[I];
+      Inc(Count);
+    end;
+  SetLength(Result, Count);
+end;
+
 function BadForCaption(const Items: TTextWidthList): TTextWidthList;
 var
   I, Count, At_: Integer;
@@ -386,7 +472,7 @@ end;
 function ReportTextWidths(Canvas_: TCanvas): Integer;
 var
   Found: TStringList;
-  Items, Wide, Bad: TTextWidthList;
+  Items, Wide, Bad, Broken: TTextWidthList;
   I, J, Total: Integer;
   Dir: string;
 begin
@@ -408,9 +494,14 @@ begin
       MeasureWidths(Items, Canvas_);
       Wide := TooWide(Items);
       Bad := BadForCaption(Items);
-      Inc(Total, Length(Wide) + Length(Bad));
-      WriteLn(Format('%s: 訳 %d 件 / 広すぎるもの %d 件 / 見出しに使えない字 %d 件',
-        [ExtractFileName(Found[I]), Length(Items), Length(Wide), Length(Bad)]));
+      Broken := BadPlaceholders(Items);
+      Inc(Total, Length(Wide) + Length(Bad) + Length(Broken));
+      WriteLn(Format('%s: 訳 %d 件 / 広すぎる %d / 見出しに使えない字 %d / 差し込み違い %d',
+        [ExtractFileName(Found[I]), Length(Items), Length(Wide), Length(Bad),
+         Length(Broken)]));
+      for J := 0 to High(Broken) do
+        WriteLn(Format('  %s: 差し込みが元と違います。「%s」→「%s」',
+          [Broken[J].Name_, Broken[J].Source, Broken[J].Target]));
       for J := 0 to High(Wide) do
         WriteLn('  ', DescribeWidths(Wide[J]));
       for J := 0 to High(Bad) do
