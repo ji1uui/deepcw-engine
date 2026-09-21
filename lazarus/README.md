@@ -184,6 +184,17 @@ rule a C compiler follows, which is the first thing to run after porting to a
 new platform. `--listen` records briefly and reports the level that arrived,
 which is how the silence threshold gets chosen from measurement.
 
+On a machine PortAudio has not been installed on yet, `--abi-only` reports the
+layout and stops without loading the library at all:
+
+```bash
+./cli/cw_devices --abi-only
+```
+
+The layout is fixed when the program is built, so it can be answered there and
+then; the first thing to run on a new platform should not withhold its answer
+because a library is missing. This is what the build matrix runs.
+
 ## Making a distribution
 
 ```bash

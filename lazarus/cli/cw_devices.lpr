@@ -80,12 +80,13 @@ var
   I, Index: Integer;
   Key, Value, LibraryPath, Report: string;
   Marker: string;
-  Verbose: Boolean;
+  Verbose, LayoutOnly: Boolean;
   ListenSeconds: Double;
   ListenDevice, ListenRate: Integer;
 begin
   LibraryPath := '';
   Verbose := False;
+  LayoutOnly := False;
   ListenSeconds := 0;
   ListenDevice := AUDIO_DEFAULT_DEVICE;
   ListenRate := 8000;
@@ -99,6 +100,27 @@ begin
     if Key = '--abi' then
     begin
       Verbose := True;
+      Inc(Index);
+      Continue;
+    end;
+    { 並びだけを見て終わります。**移植したばかりの機械には、まだ PortAudio が
+      入っていません。**それでも並びは確かめられます——並びは組み立てたときに
+      決まっていて、ライブラリを読む必要がないからです。
+
+      移植先で最初に走らせるものが、ライブラリが無いという理由で答えを返さない
+      のでは、順序が逆になります（付録 F.1）。
+
+      Reports the layout and stops. **A machine just ported to has no PortAudio
+      on it yet**, and the layout can still be checked: it is fixed at build
+      time and reading the library is not needed for it.
+
+      The first thing to run on a new platform should not withhold its answer
+      because a library is missing -- that is the wrong way round
+      (appendix F.1). }
+    if Key = '--abi-only' then
+    begin
+      Verbose := True;
+      LayoutOnly := True;
       Inc(Index);
       Continue;
     end;
@@ -133,6 +155,9 @@ begin
   if Verbose then
     Write(Report);
   WriteLn;
+
+  if LayoutOnly then
+    Halt(0);
 
   if not LoadPortAudio(LibraryPath) then
   begin

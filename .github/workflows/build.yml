@@ -1,0 +1,163 @@
+# Windows・macOS・Linux で組み立て、数値と ABI を確かめます（要件 NFR-3.1）。
+#
+# **この木の対象は Windows と macOS です。**Linux は開発に使っている容器で
+# あって、配る先ではありません。それなのに、版 2.62 まで**対象 OS では一度も
+# 組み立てたことも走らせたこともありませんでした**（付録 F.1、AB.5）。
+#
+# `.claude/skills/lazarus-cross-platform` はこう定めています——
+# 「cross-platform verified を名乗るには対象 matrix の実行結果が必要。
+# 実行不能な platform は NOT VERIFIED とする」。その実行結果をここで取ります。
+#
+# **最初は狭く始めます。**外部ライブラリの要らないものだけ——組み立てと、
+# 数値の検証と、構造体の並びの検証。ここが緑になってから、ONNX Runtime と
+# 画面の検証へ広げます。**緑にならない段を最初から積むと、どれが本当の問題か
+# 分からなくなります。**
+#
+# Builds and checks on Windows, macOS and Linux (requirement NFR-3.1).
+#
+# **The targets of this tree are Windows and macOS.** Linux is the container it
+# is developed in, not a platform it ships to -- and yet, up to version 2.62,
+# **it had never once been built or run on either target** (appendices F.1,
+# AB.5). The project's own standard says that claiming cross-platform verified
+# needs results from the target matrix; this is where they come from.
+#
+# **It starts narrow**: only what needs no external library -- the build, the
+# numeric checks, and the structure-layout check. Once that is green it widens
+# to ONNX Runtime and the screen checks. **Stacking steps that are not green
+# yet makes it impossible to tell which failure is the real one.**
+
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+defaults:
+  run:
+    # 3 つの OS で同じ書き方をするためです。Windows の runner にも bash が
+    # あります。**OS ごとに別の script を書くと、片方だけ古くなります**
+    # （教訓 10.11）。
+    # One spelling for all three: the Windows runner has bash too. **Separate
+    # scripts per OS is how one of them goes stale** (lesson 10.11).
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # 1 つ落ちても残りを止めません。**どの OS で落ちたかを知りたいのであって、
+      # 最初に落ちた 1 つを知りたいのではありません。**
+      # One failure does not stop the others: **which platforms fail is the
+      # question, not which fails first.**
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux x86_64
+          - os: windows-latest
+            name: Windows x86_64
+          - os: macos-latest
+            name: macOS ARM64
+          - os: macos-13
+            name: macOS x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lazarus を入れる（Linux）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lazarus
+          lazbuild --version
+
+      - name: Lazarus を入れる（Windows）
+        if: runner.os == 'Windows'
+        run: |
+          choco install lazarus -y --no-progress
+          # choco は PATH をこの step に反映しないので、場所を渡します。
+          # choco does not put it on this step's PATH, so the place is passed on.
+          echo "C:/lazarus" >> "$GITHUB_PATH"
+
+      - name: Lazarus を入れる（macOS）
+        if: runner.os == 'macOS'
+        run: |
+          brew install --cask lazarus
+          echo "/Applications/Lazarus" >> "$GITHUB_PATH"
+
+      - name: 版を言う
+        run: |
+          lazbuild --version
+          fpc -iV || true
+
+      - name: 組み立てる
+        working-directory: lazarus
+        run: |
+          set -e
+          for p in app/deepcw_station app/gui_probe \
+                   cli/cw_devices cli/cw_loopback cli/cw_stream cli/cw_tune \
+                   cli/decode_morse cli/dsp_check; do
+            echo "== $p =="
+            lazbuild -B "$p.lpi"
+          done
+
+      # 外部ライブラリを要りません。**数百件の数値がここで確かめられます。**
+      #
+      # Windows では実行ファイルに `.exe` が付きます。**bash が補ってくれる
+      # かどうかに頼りません。**補わなければ「見つかりません」で落ち、しかも
+      # それは Windows でしか起きません。
+      #
+      # Needs no external library: **hundreds of numeric checks land here.**
+      #
+      # On Windows the executables carry `.exe`. **Whether bash supplies it is
+      # not relied on**: if it does not, the step fails with "not found", and
+      # only on Windows.
+      - name: 数値・記録・読み取りの検証
+        working-directory: lazarus
+        run: ./cli/dsp_check${{ runner.os == 'Windows' && '.exe' || '' }}
+
+      # **移植先で最初に走らせるもの。**PortAudio の構造体の並びは OS と
+      # 処理系で変わりえます。ここが崩れていれば、装置一覧の中身は何一つ
+      # 信用できません。
+      # **The first thing to run on a new platform.** PortAudio's structure
+      # layout can differ by system and compiler, and if it is wrong nothing in
+      # the device list can be trusted.
+      - name: PortAudio の構造体の並び
+        working-directory: lazarus
+        run: ./cli/cw_devices${{ runner.os == 'Windows' && '.exe' || '' }} --abi-only
+
+      # macOS だけ。**`.app` を組み、署名が通るかを確かめます。**版 2.62 で
+      # 並びは Linux で確かめましたが、`codesign` は macOS でしか走りません
+      # （付録 BJ.6 の NOT VERIFIED の 1 行）。
+      #
+      # `-s -` は ad-hoc の署名です。配布には証明書が要りますが、**入れ物の形が
+      # 署名を通るかどうか**はこれで分かります。
+      #
+      # macOS only. **The `.app` is assembled and put through signing.** Version
+      # 2.62 checked the arrangement on Linux, but `codesign` runs only on macOS
+      # (one of the NOT VERIFIED rows of appendix BJ.6).
+      #
+      # `-s -` signs ad-hoc: distribution needs a certificate, but **whether the
+      # bundle's shape passes signing at all** is answered here.
+      - name: .app を組んで署名を通す（macOS）
+        if: runner.os == 'macOS'
+        working-directory: lazarus
+        run: |
+          set -e
+          DEEPCW_ALLOW_MISSING_LICENCE=1 ./tools/make_bundle.sh "$PWD/dist"
+          app=$(find dist -maxdepth 2 -type d -name '*.app' | head -1)
+          [ -n "$app" ] || { echo ".app が出来ていません"; exit 1; }
+          echo "== plutil =="
+          plutil -lint "$app/Contents/Info.plist"
+          echo "== codesign =="
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          echo "== 許可の宣言が署名後も残っているか =="
+          # **署名は入れ物を封じます。**封じたあとで読めなければ、配った先でも
+          # 読めません。
+          # **Signing seals the bundle**; unreadable afterwards means unreadable
+          # wherever it goes.
+          /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' \
+            "$app/Contents/Info.plist"
