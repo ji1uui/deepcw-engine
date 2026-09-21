@@ -133,7 +133,31 @@ jobs:
           git clone --depth 1 --branch "$tag" \
             https://gitlab.com/freepascal.org/lazarus/lazarus.git "$HOME/lazarus"
           make -C "$HOME/lazarus" lazbuild
-          echo "$HOME/lazarus" >> "$GITHUB_PATH"
+          # 原典から組んだ `lazbuild` は、**自分がどこの Lazarus なのかを
+          # 知りません。**設定ファイル（`environmentoptions.xml`）が無いので
+          # `Invalid Lazarus directory "": directory lcl not found` で止まり
+          # ます（2 回目の実行で分かりました）。
+          #
+          # 毎回 `--lazarusdir` を書き足す手もありますが、**`lazbuild` を呼ぶ
+          # のはこの workflow だけではありません**——`tools/make_bundle.sh` も
+          # 呼びます。呼ぶ側を 2 か所直すより、**PATH に置く `lazbuild` の
+          # ほうを整える**ほうが確かです（教訓 10.11）。
+          #
+          # A `lazbuild` built from source **does not know which Lazarus it
+          # belongs to**: with no `environmentoptions.xml` it stops with
+          # `Invalid Lazarus directory "": directory lcl not found` (which the
+          # second run showed).
+          #
+          # `--lazarusdir` could be added at each call site, but **this workflow
+          # is not the only caller** -- `tools/make_bundle.sh` calls it too.
+          # Fixing the `lazbuild` that is on PATH is surer than fixing two
+          # callers (lesson 10.11).
+          mkdir -p "$HOME/bin"
+          printf '#!/bin/sh\nexec "%s/lazarus/lazbuild" --lazarusdir="%s/lazarus" "$@"\n' \
+            "$HOME" "$HOME" > "$HOME/bin/lazbuild"
+          chmod +x "$HOME/bin/lazbuild"
+          cat "$HOME/bin/lazbuild"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
 
       - name: 版を言う
         run: |
