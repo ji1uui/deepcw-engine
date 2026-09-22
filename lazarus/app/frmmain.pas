@@ -1156,6 +1156,43 @@ resourcestring
   RsPaceEased = 'この機械では解析が追いつきにくいため、確定の間隔を %0:.0f 秒に緩めています（実時間比 %1:.1f 倍）。読み落としはしません。';
   RsReplayHintHeld = '文字を押すと、その音を聴き直せます（直近 %0:d 分 %1:d 秒を保管中）。';
 
+  { 録音（要件 FR-E.8）。**何秒録れて、どこに残ったかを必ず言う。**
+    Recording (requirement FR-E.8): always says how long and where. }
+  RsCtxRecording = '録音';
+  RsRecordingStarted = '録音を始めました: %s';
+  RsRecordingNotKept = '%s録音は残していません（音が届きませんでした）。';
+  RsRecordingLost = '（%.1f 秒を取りこぼしました）';
+  RsRecordingEnded = '%0:s録音を終えました: %1:s（%2:s）%3:s';
+  RsRecordingStatus = '録音 %0:s（%1:.1f MB）';
+  RsRecordInfo = '受信と同時に %0:s へ書きます。上限は %1:.0f 時間で、そこで止めて知らせます。';
+
+  { 受信テキストの記録（要件 FR-B.6）。
+    Journalling the received text (requirement FR-B.6). }
+  RsCtxJournal = '記録';
+  RsJournalOn = '受信テキストを %s に記録します。';
+  RsJournalOff = '受信テキストの記録を止めました。';
+
+  { 聴き直し（要件 FR-E.10）。
+    Replay (requirement FR-E.10). }
+  RsRetentionSet = '聴き直せる長さを %d 分にしました。それまでに保管していた音は消えました。';
+  RsCtxReplay = '聴き直し';
+  RsReplayGone = 'この部分の音はもう残っていません。';
+  RsReplayOutOfRange = 'この部分の音は保管の範囲（直近 %d 分）から出ています。設定タブの「聴き直せる長さ」を延ばすと、より前まで遡れます。';
+  RsReplayNotHeld = 'この部分の音は保管していません。受信テキストを消したか、録音の設定を変えたあとの文字です。';
+  RsReplayPlaying = '%0:s：受信開始から %1:d 分 %2:d 秒の音（%3:.1f 秒）';
+
+  { 語の読み直し（要件 FR-C.3）。
+    Re-reading a word (requirement FR-C.3). }
+  RsRecheckBusy = '読み直し中...';
+  RsRecheckSlow = '%0:d ms (target 1000 ms): %1:d 文字';
+  RsRecheckNothing = '読み直すと、この区間からは何も読めませんでした（画面は %s）。';
+  RsRecheckSame = '読み直しても %s でした。';
+  RsRecheckDiffer = '読み直すと %0:s（画面は %1:s）。';
+
+  { 参照実装からの読み上げ（要件 FR-E.1）。
+    What was read from the reference (requirement FR-E.1). }
+  RsReferenceRead = '%s を読みました。';
+
 
 
 { 改行の直し（`AsLines`）は `DeepCW.Platform` に在ります。**OS で振る舞いが
@@ -3901,10 +3938,31 @@ begin
   UiText.ApplyTexts;
   if FRxTranscript <> nil then
     FRxTranscript.Message_ := RsRxEmpty;
-  { いまの状態から出し直せるもの。/ What can be produced again from the state. }
+  { いまの状態から出し直せるもの。**控えに載らない「実行時に組み立てる札」は
+    すべてここで出し直す。**これらは `UiText` に登録できない（内容が
+    `Format` で作られる／実行中に組み直される）ため、呼び忘れれば起動した
+    ときの言語のまま残る。版 2.64 では受信タブで見えた 2 つ（装置・JCC）
+    だけを直したが、設定タブの一覧（呼出符号・前置符字）と録音の説明、待ち
+    符号・検索・聴き直しの札も同じ穴だった（版 2.64 の実機点検で見つけた。
+    付録 BM）。**1 か所に集める**ことで、次に足す札も漏らさない（教訓 10.11）。
+    Everything produced again from the current state. **Every runtime-built
+    label that cannot be noted is refreshed here.** These cannot be registered
+    with `UiText` (their content is built by `Format` or rebuilt while running),
+    so left uncalled they stay in the language they were first built in. Version
+    2.64 fixed only the two visible on the Receive tab (device, JCC); the
+    Settings-tab lists (roster, prefixes), the recording note, and the watch,
+    find and replay labels were the same gap (found in the version 2.64
+    real-screen review; appendix BM). **Gathered in one place** so the next
+    label added is not missed (lesson 10.11). }
   RefreshInfo;
   UpdateTuneInfo;
   UpdateLogInfo;
+  UpdatePrefixesInfo;
+  UpdateRosterInfo;
+  UpdateWatchInfo;
+  UpdateFindInfo;
+  UpdateRecordInfo;
+  UpdateReplayInfo;
   PrShowHistory;
   FtShowHistory;
   { **これも控えに載らない組み直しです。**`FRxSubdivisionInfo` の文言は
@@ -3929,13 +3987,49 @@ begin
     RefreshDeviceList(SelectedDeviceName);
 end;
 
+{ 文字列に CJK（日本語）が含まれるか。**UTF-8 の先頭バイトで見ます。**
+  U+3000〜FFFF（かな・漢字・全角記号）の 3 バイト列は先頭が $E3〜$EF。英語の札は
+  ここに入らない（ASCII と Latin-1 のみ）ので、これで「英語なのに日本語」を拾えます。
+  Whether a string contains CJK (Japanese). **Judged by the UTF-8 lead byte**:
+  the three-byte sequences for U+3000..FFFF (kana, kanji, full-width) lead with
+  $E3..$EF, and an English label never reaches there (ASCII and Latin-1 only),
+  so this catches "Japanese on an English screen". }
+function HasCjk(const S: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to Length(S) do
+    if (Ord(S[I]) >= $E3) and (Ord(S[I]) <= $EF) then
+      Exit(True);
+end;
+
+{ 窓のすべての `TLabel` の文言を集めます（入れ子をたどります）。**登録できない
+  実行時の札も、ここには必ず出ます。**
+  Collects the caption of every `TLabel` on the form, descending into nested
+  controls. **Even a runtime label that cannot be registered shows up here.** }
+procedure CollectFormLabels(Root: TWinControl; Into: TStrings);
+var
+  I: Integer;
+  C: TControl;
+begin
+  for I := 0 to Root.ControlCount - 1 do
+  begin
+    C := Root.Controls[I];
+    if C is TLabel then
+      Into.Add(TLabel(C).Caption);
+    if C is TWinControl then
+      CollectFormLabels(TWinControl(C), Into);
+  end;
+end;
+
 function TMainForm.ReportLanguage: TStringList;
 var
-  Before, After, Back: TStringList;
+  Before, After, Back, Labels: TStringList;
   Pairs: TTextWidthList;
   Started: TDateTime;
   Spent: Int64;
-  I, J, Moved, Wrong: Integer;
+  I, J, Moved, Wrong, Leaks: Integer;
   HintBefore, HintAfter, HintBack: string;
   DeviceBefore, DeviceAfter, DeviceBack: string;
 begin
@@ -3943,6 +4037,7 @@ begin
   Before := TStringList.Create;
   After := TStringList.Create;
   Back := TStringList.Create;
+  Labels := TStringList.Create;
   try
     { **控えに載らない組み直しも、別枠で名指しします。**`FRxSubdivisionInfo`
       と `FRxDevice` は `UiText` に登録できない（付録 BE.6）ので、`Before`・
@@ -3978,6 +4073,18 @@ begin
     if FRxSubdivisionInfo <> nil then HintAfter := FRxSubdivisionInfo.Caption;
     if (FRxDevice <> nil) and (FRxDevice.Items.Count > 0) then
       DeviceAfter := FRxDevice.Items[0];
+    { **英語のまま日本語が残っている札を、名指しせずに拾います。**登録できない
+      札を 1 つずつ名前で見るのは、足すたびに検査も足す約束で、いつか漏れます
+      （版 2.64 で 2 つだけ見て 6 つ漏らした）。ここでは窓の札を全部たどり、
+      英語なのに日本語が残っているものを、登録済みの札（両言語で同じ「画面の
+      言葉 / Language」だけ）を除いて拾います（付録 BM）。
+      **Catches Japanese-on-English labels without naming them.** Checking each
+      unregisterable label by name is a promise to add a check every time one is
+      added, and that promise gets missed (version 2.64 checked two and missed
+      six). Here every label on the form is walked and any that still holds
+      Japanese in English mode is flagged, save the registered ones (only the
+      bilingual "画面の言葉 / Language") (appendix BM). }
+    CollectFormLabels(Self, Labels);
 
     UseUiLang(UI_LANG_DEFAULT);
     ApplyTexts;
@@ -4052,8 +4159,30 @@ begin
         [DeviceBefore, DeviceBack]));
     end;
 
-    Result.Insert(0, Format('控え %0:d 件 / 英語で変わった %1:d 件 / 戻らなかった %2:d 件 / 切替 %3:d ms',
-      [UiText.TextCount, Moved, Wrong, Spent]));
+    { 英語のときに集めた札のうち、日本語が残っていて、かつ登録済みでないものを
+      数えます。**これは落とす検査ではなく、進み具合の目盛りです。**移行の
+      途中では、まだ訳していない札（送信タブの要約や `src/` の
+      `ConfusionCaption` など）が正しく日本語のままなので、ここで落とすと
+      移行が終わるまで回帰試験が通りません。数だけを報告に載せ、移行が
+      終われば 0 になります（0 になったら落とす検査に格上げする。付録 BM）。
+      登録済み（`After` にある）のは意図して両言語のままの「画面の言葉 /
+      Language」だけなので除きます。
+      Counts the labels gathered in English that still hold Japanese and are not
+      registered. **This is a progress meter, not a gate.** Mid-migration, a
+      label not yet translated (the transmit summary, `src/`'s
+      `ConfusionCaption`) is correctly still Japanese, so failing here would keep
+      the regression red until the migration is done. Only the count is
+      reported; it reaches 0 when the migration is complete (then it is promoted
+      to a gate; appendix BM). The registered ones (in `After`) are excluded --
+      the only one with Japanese is the deliberately bilingual "画面の言葉 /
+      Language". }
+    Leaks := 0;
+    for I := 0 to Labels.Count - 1 do
+      if HasCjk(Labels[I]) and (After.IndexOf(Labels[I]) < 0) then
+        Inc(Leaks);
+
+    Result.Insert(0, Format('控え %0:d 件 / 英語で変わった %1:d 件 / 戻らなかった %2:d 件 / 未反映の疑い %3:d 件 / 切替 %4:d ms',
+      [UiText.TextCount, Moved, Wrong, Leaks, Spent]));
     { **1 つも変わらないのは、切替が効いていないということです。**訳が
       見つからなくても静かに通ってしまうので、ここで落とします。
       **Nothing changing means the switch is not working.** A translation that
@@ -4061,6 +4190,7 @@ begin
     if Moved = 0 then
       Result.Add('英語に切り替えても 1 つも変わりませんでした');
   finally
+    Labels.Free;
     Back.Free;
     After.Free;
     Before.Free;
@@ -5126,7 +5256,7 @@ begin
   if Latest = FReferenceShown then
     Exit;
   FReferenceShown := Latest;
-  SetStatus('', '', Latest + ' を読みました。');
+  SetStatus('', '', Format(RsReferenceRead, [Latest]));
 end;
 
 { 文字がまだ 1 つも無いあいだ、受信テキストの欄に何と出すかを決めます
@@ -6254,7 +6384,7 @@ begin
   FRecorder := TAudioRecorder.Create(FRing, FCaptureRate);
   if not FRecorder.Start(Path) then
   begin
-    LogDiagnostic('録音', FRecorder.LastError);
+    LogDiagnostic(RsCtxRecording, FRecorder.LastError);
     SetStatus('', '', StatusLine(FRecorder.LastError));
     FreeAndNil(FRecorder);
     { 始められなかったのに印だけ入ったままにはしません。**入っているのに録れて
@@ -6266,7 +6396,7 @@ begin
     FSetRecord.OnChange := @RxRecordChanged;
     Exit;
   end;
-  SetStatus('', '', '録音を始めました: ' + Path);
+  SetStatus('', '', Format(RsRecordingStarted, [Path]));
 end;
 
 { 録音を終えます。**何秒録れたか、どこに残ったかを必ず言います。**
@@ -6295,8 +6425,7 @@ begin
   if Status.Seconds <= 0 then
   begin
     DeleteFile(Path);
-    SetStatus('', '', Format('%s録音は残していません（音が届きませんでした）。',
-      [Why]));
+    SetStatus('', '', Format(RsRecordingNotKept, [Why]));
     Exit;
   end;
   Lost := '';
@@ -6305,8 +6434,8 @@ begin
       無傷の録音と同じ顔で渡さないためです。**
       Dropped audio is not swallowed in silence (lesson 10.1): **a recording with
       a hole in it must not be handed over wearing the face of a whole one.** }
-    Lost := Format('（%.1f 秒を取りこぼしました）', [Status.Lost / FCaptureRate]);
-  SetStatus('', '', Format('%0:s録音を終えました: %1:s（%2:s）%3:s',
+    Lost := Format(RsRecordingLost, [Status.Lost / FCaptureRate]);
+  SetStatus('', '', Format(RsRecordingEnded,
     [Why, Path, SecondsAsClock(Status.Seconds), Lost]));
 end;
 
@@ -6333,7 +6462,7 @@ begin
     StopRecording(Status.Stopped);
     Exit;
   end;
-  SetRecordStatus(Format('録音 %0:s（%1:.1f MB）',
+  SetRecordStatus(Format(RsRecordingStatus,
     [SecondsAsClock(Status.Seconds), Status.Bytes / (1000 * 1000)]));
 end;
 
@@ -6345,8 +6474,7 @@ procedure TMainForm.UpdateRecordInfo;
 begin
   if FSetRecordInfo = nil then
     Exit;
-  FSetRecordInfo.Caption := Format(
-    '受信と同時に %0:s へ書きます。上限は %1:.0f 時間で、そこで止めて知らせます。',
+  FSetRecordInfo.Caption := Format(RsRecordInfo,
     [RecordingDirectory, RECORD_MAX_SECONDS / 3600]);
 end;
 
@@ -6374,10 +6502,9 @@ begin
   FJournal.Enabled := FSetJournal.Checked;
   MarkSettingsDirty;
   if FSetJournal.Checked then
-    SetStatus('', '', Format('受信テキストを %s に記録します。',
-      [JournalDirectory]))
+    SetStatus('', '', Format(RsJournalOn, [JournalDirectory]))
   else
-    SetStatus('', '', '受信テキストの記録を止めました。');
+    SetStatus('', '', RsJournalOff);
   RefreshInfo;
 end;
 
@@ -6417,7 +6544,7 @@ begin
   FJournalled := Length(Confirmed);
   FJournal.Add(Fresh);
   if FJournal.LastError <> '' then
-    LogDiagnostic('記録', FJournal.LastError);
+    LogDiagnostic(RsCtxJournal, FJournal.LastError);
 end;
 
 { ---- 聴き直し（要件 FR-E.10） / replay (requirement FR-E.10) ---- }
@@ -6446,8 +6573,7 @@ begin
   FHistory.SetRetention(SelectedRetention);
   FRxTranscript.SelectedIndex := -1;
   UpdateReplayInfo;
-  SetStatus('', '', Format(
-    '聴き直せる長さを %d 分にしました。それまでに保管していた音は消えました。',
+  SetStatus('', '', Format(RsRetentionSet,
     [Round(SelectedRetention / 60)]));
   MarkSettingsDirty;
 end;
@@ -6564,19 +6690,16 @@ begin
     { 保管の外へ出た音は戻りません。別の音を鳴らして誤魔化さず、そう言います。
       Audio that has fallen outside the retention is gone; rather than playing
       something else, it is said plainly. }
-    FRxReplayInfo.Caption := 'この部分の音はもう残っていません。';
+    FRxReplayInfo.Caption := RsReplayGone;
     { なぜ残っていないのかで案内を分けます。「設定を延ばせば遡れる」と言って
       よいのは、保持時間の外へ出た場合だけです。
       The guidance depends on why it is gone: telling the operator that a longer
       retention would reach it is only true when it fell off the far end. }
     if FromSeconds < FHistory.EarliestSeconds then
-      SetStatus('', '', Format(
-        'この部分の音は保管の範囲（直近 %d 分）から出ています。' +
-        '設定タブの「聴き直せる長さ」を延ばすと、より前まで遡れます。',
+      SetStatus('', '', Format(RsReplayOutOfRange,
         [Round(SelectedRetention / 60)]))
     else
-      SetStatus('', '', 'この部分の音は保管していません。' +
-        '受信テキストを消したか、録音の設定を変えたあとの文字です。');
+      SetStatus('', '', RsReplayNotHeld);
     Exit;
   end;
 
@@ -6593,12 +6716,12 @@ begin
   FReviewPlay.Play(Audio, Rate);
   if FReviewPlay.LastError <> '' then
   begin
-    LogDiagnostic('聴き直し', FReviewPlay.LastError);
+    LogDiagnostic(RsCtxReplay, FReviewPlay.LastError);
     SetStatus('', '', StatusLine(FReviewPlay.LastError));
     Exit;
   end;
   FRxReplayStop.Enabled := True;
-  FRxReplayInfo.Caption := Format('%0:s：受信開始から %1:d 分 %2:d 秒の音（%3:.1f 秒）',
+  FRxReplayInfo.Caption := Format(RsReplayPlaying,
     [Trim(DecodedText(Copy(FLiveChars, First, Last - First + 1))),
      Trunc(GotFrom) div 60, Trunc(GotFrom) mod 60, GotTo - GotFrom]);
 end;
@@ -6683,7 +6806,7 @@ begin
   Prepared := PrepareForDecoder(Audio, Rate);
   FRecheckSent := FRecheckWord;
   FRecheckSentAt := FRecheckAt;
-  FRxBusy.Caption := '読み直し中...';
+  FRxBusy.Caption := RsRecheckBusy;
   FDecodeThread := TDecodeThread.CreateRecheck(FDecoder, Prepared,
     FDecoder.Metadata.SampleRate, @DecodeFinished);
 end;
@@ -6718,22 +6841,19 @@ begin
     contact with every report (requirements FR-G.5, NFR-6). Which word was slow
     is answered well enough by how long it was. }
   if Elapsed > 1000 then
-    LogDiagnostic('語の読み直し',
-      Format('%0:d ms (target 1000 ms): %1:d 文字', [Elapsed, Length(FRecheckSent)]));
+    LogDiagnostic(RsCtxRecheck,
+      Format(RsRecheckSlow, [Elapsed, Length(FRecheckSent)]));
   { 出す場所は状態表示の案内欄です。**聴き直しの欄は、既定の窓の幅では右端の
     外にあって見えません。**見えない場所に答えを書くのは、答えないのと同じです。
     It goes in the status bar's guidance panel: **the replay label sits beyond
     the right edge at the default window width and cannot be read.** An answer
     written where it cannot be seen is not an answer. }
   if Again = '' then
-    SetStatus('', '', Format(
-      '読み直すと、この区間からは何も読めませんでした（画面は %s）。',
-      [FRecheckSent]))
+    SetStatus('', '', Format(RsRecheckNothing, [FRecheckSent]))
   else if Again = FRecheckSent then
-    SetStatus('', '', Format('読み直しても %s でした。', [FRecheckSent]))
+    SetStatus('', '', Format(RsRecheckSame, [FRecheckSent]))
   else
-    SetStatus('', '', Format('読み直すと %0:s（画面は %1:s）。',
-      [Again, FRecheckSent]));
+    SetStatus('', '', Format(RsRecheckDiffer, [Again, FRecheckSent]));
 end;
 
 { 押された文字が呼出符号の上なら、その符号を相手として採ります（要件 FR-E.1）。

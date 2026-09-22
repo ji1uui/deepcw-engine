@@ -48,6 +48,10 @@ msgstr ""
 msgid "送信訓練の開始"
 msgstr ""
 
+#: frmmain.rsctxjournal
+msgid "記録"
+msgstr ""
+
 #: frmmain.rsctxmonitoraudio
 msgid "復調音"
 msgstr ""
@@ -72,6 +76,14 @@ msgstr ""
 
 #: frmmain.rsctxrecheck
 msgid "語の読み直し"
+msgstr ""
+
+#: frmmain.rsctxrecording
+msgid "録音"
+msgstr ""
+
+#: frmmain.rsctxreplay
+msgid "聴き直し"
 msgstr ""
 
 #: frmmain.rsctxwavread
@@ -545,6 +557,15 @@ msgstr ""
 msgid "音声長の制約: %0:.0f - %1:.0f 秒（長い録音は自動的に分割）"
 msgstr ""
 
+#: frmmain.rsjournaloff
+msgid "受信テキストの記録を止めました。"
+msgstr ""
+
+#: frmmain.rsjournalon
+#, object-pascal-format
+msgid "受信テキストを %s に記録します。"
+msgstr ""
+
 #: frmmain.rsloggedbadsubdivision
 #, object-pascal-format
 msgid "%0:s との交信を記録しました。JCC/JCG「%1:s」は形が違うので書いていません。"
@@ -741,9 +762,91 @@ msgstr ""
 msgid "受信中 %d Hz"
 msgstr ""
 
+#: frmmain.rsrecheckbusy
+msgid "読み直し中..."
+msgstr ""
+
+#: frmmain.rsrecheckdiffer
+#, object-pascal-format
+msgid "読み直すと %0:s（画面は %1:s）。"
+msgstr ""
+
+#: frmmain.rsrechecknothing
+#, object-pascal-format
+msgid "読み直すと、この区間からは何も読めませんでした（画面は %s）。"
+msgstr ""
+
+#: frmmain.rsrechecksame
+#, object-pascal-format
+msgid "読み直しても %s でした。"
+msgstr ""
+
+#: frmmain.rsrecheckslow
+#, object-pascal-format
+msgid "%0:d ms (target 1000 ms): %1:d 文字"
+msgstr ""
+
+#: frmmain.rsrecordinfo
+#, object-pascal-format
+msgid "受信と同時に %0:s へ書きます。上限は %1:.0f 時間で、そこで止めて知らせます。"
+msgstr ""
+
+#: frmmain.rsrecordingended
+#, object-pascal-format
+msgid "%0:s録音を終えました: %1:s（%2:s）%3:s"
+msgstr ""
+
+#: frmmain.rsrecordinglost
+#, object-pascal-format
+msgid "（%.1f 秒を取りこぼしました）"
+msgstr ""
+
+#: frmmain.rsrecordingnotkept
+#, object-pascal-format
+msgid "%s録音は残していません（音が届きませんでした）。"
+msgstr ""
+
+#: frmmain.rsrecordingstarted
+#, object-pascal-format
+msgid "録音を始めました: %s"
+msgstr ""
+
+#: frmmain.rsrecordingstatus
+#, object-pascal-format
+msgid "録音 %0:s（%1:.1f MB）"
+msgstr ""
+
+#: frmmain.rsreferenceread
+#, object-pascal-format
+msgid "%s を読みました。"
+msgstr ""
+
+#: frmmain.rsreplaygone
+msgid "この部分の音はもう残っていません。"
+msgstr ""
+
 #: frmmain.rsreplayhintheld
 #, object-pascal-format
 msgid "文字を押すと、その音を聴き直せます（直近 %0:d 分 %1:d 秒を保管中）。"
+msgstr ""
+
+#: frmmain.rsreplaynotheld
+msgid "この部分の音は保管していません。受信テキストを消したか、録音の設定を変えたあとの文字です。"
+msgstr ""
+
+#: frmmain.rsreplayoutofrange
+#, object-pascal-format
+msgid "この部分の音は保管の範囲（直近 %d 分）から出ています。設定タブの「聴き直せる長さ」を延ばすと、より前まで遡れます。"
+msgstr ""
+
+#: frmmain.rsreplayplaying
+#, object-pascal-format
+msgid "%0:s：受信開始から %1:d 分 %2:d 秒の音（%3:.1f 秒）"
+msgstr ""
+
+#: frmmain.rsretentionset
+#, object-pascal-format
+msgid "聴き直せる長さを %d 分にしました。それまでに保管していた音は消えました。"
 msgstr ""
 
 #: frmmain.rsrosterskipped
