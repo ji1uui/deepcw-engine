@@ -188,6 +188,37 @@ jobs:
           ls -d /Applications/Xcode*.app 2>/dev/null || echo "Xcode の別版は無し"
           ld -v 2>&1 | head -5 || true
           find /opt/homebrew -name 'fpc.cfg' 2>/dev/null | head -5
+          # **古いリンカが残っているか。**`-ld_classic` は Xcode 15 で
+          # 非推奨になり、16 で外されたと言われています。**言われている
+          # ことではなく、この機械にあるかどうかを見ます。**
+          # **Is the classic linker still here?** `-ld_classic` was deprecated
+          # in Xcode 15 and is said to be gone in 16. **What is looked at is
+          # this machine, not what is said.**
+          if ld -ld_classic -v >/dev/null 2>&1; then
+            echo "ld_classic: あり"
+          else
+            echo "ld_classic: 無し"
+          fi
+
+      # FPC 3.2.2 が出す Objective-C の並びを、Apple の新しいリンカ
+      # （ld-1267）が受け付けません。**古いリンカが残っていれば、それで
+      # 通ります。**残っていなければ、何もしません——**通らないものを
+      # 通ったように見せないためです。**
+      #
+      # Apple's newer linker (ld-1267) rejects the Objective-C method lists FPC
+      # 3.2.2 emits. **Where the classic linker survives, it is used**; where it
+      # does not, nothing is done -- **what does not work is not made to look as
+      # though it did.**
+      - name: 古いリンカがあれば使う（macOS）
+        if: runner.os == 'macOS'
+        run: |
+          cfg=/opt/homebrew/etc/fpc.cfg
+          if ld -ld_classic -v >/dev/null 2>&1 && [ -f "$cfg" ]; then
+            echo "-k-ld_classic" >> "$cfg"
+            echo "古いリンカを使うように $cfg へ書き足しました"
+          else
+            echo "古いリンカは使えません。画面のアプリのリンクは落ちる見込みです"
+          fi
 
       # **組み立てを 2 つに分けます。**命令行の道具は LCL を使いません。
       # 画面のアプリだけが落ちるのなら、**落ちているのは LCL の cocoa であって

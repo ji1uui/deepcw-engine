@@ -1092,31 +1092,10 @@ resourcestring
 
 
 
-{ 訳せる文字列の改行（`#10`）を、この OS の改行へ直します（要件 NFR-7.6）。
-
-  **訳の一覧に載る綴りは、どの OS でも同じでなければなりません。**`LineEnding`
-  を文字列に埋めると、Linux は `#10`、Windows は `#13#10` になり、**Windows では
-  訳が当たりません**（実測。付録 BH.1）。そこで文字列には `#10` だけを書き、
-  画面に出す直前にここで直します。
-
-  Turns the `#10` line breaks of a translatable string into this platform's
-  line ending (requirement NFR-7.6).
-
-  **The spelling in the translation list has to be the same on every
-  platform.** With `LineEnding` embedded it would be `#10` on Linux and
-  `#13#10` on Windows, and **the translations would not match on Windows**
-  (measured; appendix BH.1). So only `#10` is written, and it is turned into
-  the real line ending here. }
-function AsLines(const Text_: string): string;
-begin
-  {$IFDEF WINDOWS}
-  Result := StringReplace(Text_, #10, LineEnding, [rfReplaceAll]);
-  {$ELSE}
-  { この OS では `#10` がそのまま改行です。**写さずに返します。**
-    On this platform `#10` already is the line ending: returned untouched. }
-  Result := Text_;
-  {$ENDIF}
-end;
+{ 改行の直し（`AsLines`）は `DeepCW.Platform` に在ります。**OS で振る舞いが
+  変わるものは 1 か所へ。**
+  The line-ending fix (`AsLines`) lives in `DeepCW.Platform`: **what behaves
+  differently by platform goes in one place.** }
 
 { 実装の後方で定義します。/ Defined further down. }
 function UserMessageFor(const Raw: string): string; forward;
@@ -7452,10 +7431,6 @@ begin
   Friendly := UserMessageFor(E.Message);
   LogDiagnostic(Context, E.Message);
   SetStatus('', '', Format(RsErrStatusLine, [Context, StatusLine(E.Message)]));
-  { `Friendly` は `UserMessageFor` が `AsLines` を通したあとのものです。
-    **ここでもう一度通してはいけません**（Windows で `#13#13#10` になります）。
-    `Friendly` has already been through `AsLines` in `UserMessageFor`; **it must
-    not go through twice** (that yields `#13#13#10` on Windows). }
   MessageDlg(Format(RsErrFailedTitle, [Context]), Friendly, mtError, [mbOK], 0);
 end;
 

@@ -126,6 +126,16 @@ step "訳の一覧がソースと合っている" ./tools/po_sync_test.sh
 # silence (appendix BH.9). They keep open the one way out
 # (`#, no-object-pascal-format`) for when reordering is genuinely needed.
 step "文言の差し込みに番号が付いている" ./tools/format_index_test.sh
+# `Format` に渡す引数の数が、文言の求める数と合っていること（要件 NFR-7.6）。
+# **文言を `resourcestring` に移すと、綴りと呼び出しが離れます。**離れたものは
+# 片方だけ直せてしまい、`Format` は**その行が画面に出ようとした瞬間に**例外を
+# 投げます。滅多に出ない行ほど見つかりません。
+# The argument count handed to `Format` matches what the string asks for
+# (requirement NFR-7.6). **Moving words into a `resourcestring` separates the
+# spelling from the call**, and one of them can then be changed alone; `Format`
+# raises **at the moment that line is due on screen**, so the rarest lines are
+# the last to be found.
+step "文言に渡す引数の数が合っている" ./tools/format_args_test.sh
 # 稼働中に言語を切り替えて、戻れること（要件 NFR-7.6）。
 # **日本語へ戻す道は、英語へ行く道と違う。**取り違えると一度英語にしたら戻れず、
 # 画面を開いて押してみるまで分からない。配布物と同じ並びで押す。

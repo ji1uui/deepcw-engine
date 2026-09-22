@@ -4122,6 +4122,66 @@ end;
   not collide; that a record carries the key and not the name shown; that such a
   record reads back; and **that a record written in Japanese, before the keys
   existed, still reads back too.** }
+{ 改行の直し（要件 NFR-7.6、付録 BK.3）。
+
+  **これは OS ごとに答えが変わる、数少ない検査です。**`AsLines` は Linux では
+  何もせず、Windows では `#10` を `#13#10` に直します。**この容器では Windows
+  の側が一度も通りません。**だから `cli/dsp_check` に置きました——組み立ての
+  matrix が Windows と macOS でもこれを走らせます。
+
+  見るのは 3 つ。
+
+  1. 改行の無い文字列は変わらない
+  2. `#10` が**この OS の改行**になる（`LineEnding` と一致する）
+  3. **2 度通しても 1 度と同じ**（版 2.62 まで、ここは註釈で守られていた）
+
+  The line-ending fix (requirement NFR-7.6, appendix BK.3).
+
+  **This is one of the few checks whose answer differs by platform**: `AsLines`
+  does nothing on Linux and turns `#10` into `#13#10` on Windows, and **the
+  Windows side never runs in this container.** Hence its place in
+  `cli/dsp_check`, which the build matrix runs on Windows and macOS too.
+
+  Three things: a string with no break is unchanged; `#10` becomes **this
+  platform's** ending; and **applying it twice equals applying it once** (a rule
+  a comment used to keep, up to version 2.62). }
+procedure TestLineEndings;
+var
+  Once, Twice: string;
+begin
+  WriteLn;
+  WriteLn('画面に出す改行（要件 NFR-7.6）');
+  Check('改行の無い文字列は変わらない', AsLines('abc') = 'abc', AsLines('abc'));
+  Check('空も変わらない', AsLines('') = '', '(空)');
+
+  Once := AsLines('one'#10'two');
+  Check('`#10` がこの OS の改行になる', Once = 'one' + LineEnding + 'two',
+    IntToStr(Length(Once)) + ' 文字');
+  Check('行は 2 つに分かれる',
+    Pos(LineEnding, Once) = 4, IntToStr(Pos(LineEnding, Once)));
+
+  { **2 度通しても同じ。**ここが要です。`#13#13#10` になっていれば長さが
+    増えるので、長さだけでも捕まえられます。
+    **Twice equals once**, the point of this test: `#13#13#10` would be longer,
+    so even the length catches it. }
+  Twice := AsLines(Once);
+  Check('2 度通しても 1 度と同じ', Twice = Once,
+    IntToStr(Length(Twice)) + ' 対 ' + IntToStr(Length(Once)));
+  Check('改行が重なっていない', Pos(#13#13, Twice) = 0, IntToStr(Pos(#13#13, Twice)));
+
+  { 3 度でも同じであること。**2 度で止めると「偶数回だけ正しい」を見逃します。**
+    Three times as well: stopping at two would miss "correct on even counts". }
+  Check('3 度通しても同じ', AsLines(Twice) = Once,
+    IntToStr(Length(AsLines(Twice))));
+
+  { 複数の改行。**1 つだけ直して残りを忘れる書き方を捕まえます。**
+    Several breaks, to catch a fix that turns the first and forgets the rest. }
+  Once := AsLines('a'#10'b'#10'c');
+  Check('改行が 2 つでも両方直る',
+    Once = 'a' + LineEnding + 'b' + LineEnding + 'c', Once);
+  Check('改行が 2 つでも 2 度通して同じ', AsLines(Once) = Once, Once);
+end;
+
 procedure TestRecordKeys;
 var
   Standard_, OtherStandard: TFistStandard;
@@ -4815,6 +4875,7 @@ begin
     TestCopyLog;
     TestJapanSubdivision;
     TestRecordKeys;
+    TestLineEndings;
   finally
     Meta.Free;
   end;

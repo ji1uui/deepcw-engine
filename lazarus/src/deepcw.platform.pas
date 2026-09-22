@@ -98,6 +98,43 @@ function BundledLicences: TStringList;
   Where the licence texts are, or empty when there are none. }
 function LicenceDirectory: string;
 
+{ 訳せる文字列の改行（`#10`）を、この OS の改行へ直します（要件 NFR-7.6）。
+
+  **訳の一覧に載る綴りは、どの OS でも同じでなければなりません。**`LineEnding`
+  を文字列に埋めると、Linux は `#10`、Windows は `#13#10` になり、**Windows では
+  訳が当たりません**（実測。付録 BH.1）。そこで文字列には `#10` だけを書き、
+  画面に出す直前にここで直します。
+
+  **何度通しても同じ結果になります。**版 2.62 まで、この関数は「1 度しか通しては
+  いけない」ものでした——2 度通すと Windows で `#13#13#10` になるためで、それを
+  註釈で守っていました。**註釈で守る決まりは、いつか破られます。**先に `#10` へ
+  戻してから直すことで、決まりそのものを無くしました（付録 BK.3）。
+
+  **置き場所をここにしたのは、OS で振る舞いが変わるからです。**`DeepCW.Platform`
+  は OS 依存を集める場所であり、ここに在れば `dsp_check` から——つまり
+  **Windows と macOS の CI から**——確かめられます。
+
+  Turns the `#10` line breaks of a translatable string into this platform's line
+  ending (requirement NFR-7.6).
+
+  **The spelling in the translation list has to be the same on every
+  platform.** With `LineEnding` embedded it would be `#10` on Linux and
+  `#13#10` on Windows, and **the translations would not match on Windows**
+  (measured; appendix BH.1). So only `#10` is written, and it is turned into the
+  real line ending here.
+
+  **It may be applied any number of times.** Up to version 2.62 this was a
+  function that had to be applied exactly once -- twice would yield `#13#13#10`
+  on Windows -- and a comment was what kept it so. **A rule kept by a comment
+  gets broken.** Normalising back to `#10` first removed the rule itself
+  (appendix BK.3).
+
+  **It lives here because it behaves differently by platform.**
+  `DeepCW.Platform` is where system dependence is gathered, and from here it can
+  be checked by `dsp_check` -- that is, **from the Windows and macOS build
+  matrix.** }
+function AsLines(const Text_: string): string;
+
 { 訳した文言（`.po`）の置き場所。**最後に区切り記号が付きます。**
 
   同じ場所を 3 か所で組み立てていました（`UiLang`・`frmmain`・`TextCheck`）。
@@ -207,6 +244,15 @@ begin
     if DirectoryExists(Candidates[I]) then
       Exit(ExpandFileName(Candidates[I]));
   Result := '';
+end;
+
+function AsLines(const Text_: string): string;
+begin
+  { **まず `#10` へ戻します。**すでに直したものを渡されても同じ結果になります。
+    First back to `#10`, so that something already turned stays the same. }
+  Result := StringReplace(Text_, LineEnding, #10, [rfReplaceAll]);
+  if LineEnding <> #10 then
+    Result := StringReplace(Result, #10, LineEnding, [rfReplaceAll]);
 end;
 
 function LanguageDirectory: string;
