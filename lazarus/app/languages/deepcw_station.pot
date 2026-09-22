@@ -1,6 +1,36 @@
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8"
 
+#: frmmain.rsadifexportfilter
+msgid "ADIF (*.adi)|*.adi|すべて (*.*)|*.*"
+msgstr ""
+
+#: frmmain.rsadiffilter
+msgid "ADIF (*.adi;*.adif)|*.adi;*.adif|すべて (*.*)|*.*"
+msgstr ""
+
+#: frmmain.rsaudiopresent
+msgid "音が届いています"
+msgstr ""
+
+#: frmmain.rsaudiosilent
+msgid "無音です"
+msgstr ""
+
+#: frmmain.rscountandname
+#, object-pascal-format
+msgid "%0:d 件 / %1:s"
+msgstr ""
+
+#: frmmain.rsctxcapture
+msgid "取り込み"
+msgstr ""
+
+#: frmmain.rsctxcontactlog
+msgctxt "frmmain.rsctxcontactlog"
+msgid "交信記録"
+msgstr ""
+
 #: frmmain.rsctxdecode
 msgctxt "frmmain.rsctxdecode"
 msgid "デコード"
@@ -18,6 +48,10 @@ msgstr ""
 msgid "送信訓練の開始"
 msgstr ""
 
+#: frmmain.rsctxmonitoraudio
+msgid "復調音"
+msgstr ""
+
 #: frmmain.rsctxpractice
 msgctxt "frmmain.rsctxpractice"
 msgid "練習"
@@ -25,6 +59,11 @@ msgstr ""
 
 #: frmmain.rsctxpracticelog
 msgid "受信練習の記録"
+msgstr ""
+
+#: frmmain.rsctxreceive
+msgctxt "frmmain.rsctxreceive"
+msgid "受信"
 msgstr ""
 
 #: frmmain.rsctxreceivestop
@@ -42,6 +81,31 @@ msgstr ""
 #: frmmain.rsdecodedone
 #, object-pascal-format
 msgid "デコード完了: %d 文字"
+msgstr ""
+
+#: frmmain.rsdecodingbusy
+msgid "デコード中..."
+msgstr ""
+
+#: frmmain.rsdevicedefault
+msgid "既定の装置（おまかせ）"
+msgstr ""
+
+#: frmmain.rsdevicefound
+#, object-pascal-format
+msgid "入力装置を %d 台見つけました。"
+msgstr ""
+
+#: frmmain.rsdevicenolist
+msgid "既定の装置（一覧を取得できません）"
+msgstr ""
+
+#: frmmain.rsdevicenonefound
+msgid "録音に使える装置が見つかりませんでした。接続と OS 側の設定を確認してください。"
+msgstr ""
+
+#: frmmain.rsdevicereturned
+msgid "入力装置が戻りました。受信を再開しました。"
 msgstr ""
 
 #: frmmain.rserrfailedtitle
@@ -112,6 +176,24 @@ msgstr ""
 msgid ""
 "この音声ファイルを読み取れませんでした。\n"
 "PCM 形式のモノラルまたはステレオの WAV ファイルをお使いください。"
+msgstr ""
+
+#: frmmain.rsevidenceentry
+#, object-pascal-format
+msgid "（%s にあり＝実在は確かです）"
+msgstr ""
+
+#: frmmain.rsexported
+#, object-pascal-format
+msgid "%0:d 件を %1:s へ書き出しました。"
+msgstr ""
+
+#: frmmain.rsexporttitle
+msgid "交信記録（ADIF）を書き出す"
+msgstr ""
+
+#: frmmain.rsfileunreadable
+msgid "読めませんでした。ファイルを確かめてください"
 msgstr ""
 
 #: frmmain.rsftadvice
@@ -268,6 +350,11 @@ msgstr ""
 msgid "訓練中 %d Hz"
 msgstr ""
 
+#: frmmain.rsftrunningstatus
+#, object-pascal-format
+msgid "訓練中 %s。終わったら「終了して採点」を押してください。"
+msgstr ""
+
 #: frmmain.rsftscore
 msgid "採点"
 msgstr ""
@@ -330,6 +417,15 @@ msgstr ""
 #: frmmain.rsftwpm
 #, object-pascal-format
 msgid "実効 %0:.1f WPM ／ 短点 %1:.1f ms（ばらつき %2:.1f%%）／ 長短比 %3:.2f"
+msgstr ""
+
+#: frmmain.rsimported
+#, object-pascal-format
+msgid "%0:d 件を取り込みました（既にある %1:d 件は飛ばしました）。"
+msgstr ""
+
+#: frmmain.rsimporttitle
+msgid "交信記録（ADIF）を取り込む"
 msgstr ""
 
 #: frmmain.rsinfoalphabet
@@ -449,6 +545,69 @@ msgstr ""
 msgid "音声長の制約: %0:.0f - %1:.0f 秒（長い録音は自動的に分割）"
 msgstr ""
 
+#: frmmain.rsloggedbadsubdivision
+#, object-pascal-format
+msgid "%0:s との交信を記録しました。JCC/JCG「%1:s」は形が違うので書いていません。"
+msgstr ""
+
+#: frmmain.rsloggednoband
+#, object-pascal-format
+msgid "%0:s との交信を記録しました（%1:s UTC）。"
+msgstr ""
+
+#: frmmain.rsloggedwithband
+#, object-pascal-format
+msgid "%0:s との交信を %1:s で記録しました（%2:s UTC）。"
+msgstr ""
+
+#: frmmain.rslogneedcall
+msgid "相手の符号が読めたら記録できます"
+msgstr ""
+
+#: frmmain.rslogoncenote
+msgid "（1 回だけ）"
+msgstr ""
+
+#: frmmain.rslogworkedon
+#, object-pascal-format
+msgid "%0:s%1:s（%2:s に交信済み）"
+msgstr ""
+
+#: frmmain.rsmodecontactset
+msgid "交信モードにしました。選んだ 1 局を読みます。受信文は改めて取り直します。"
+msgstr ""
+
+#: frmmain.rsmodecontestset
+msgid "コンテストモードにしました。交信済みの局を隠せます。得点計算は行いません。"
+msgstr ""
+
+#: frmmain.rsmodewatchset
+msgid "待機モードにしました。帯域内の局を一覧に出します。受信文は改めて取り直します。"
+msgstr ""
+
+#: frmmain.rsmonitornoaudio
+msgid "鳴らせる音がまだありません。受信を始めてからお試しください。"
+msgstr ""
+
+#: frmmain.rsmonitornoprepared
+msgid "復調音を作れませんでした。"
+msgstr ""
+
+#: frmmain.rsmonitorplayingtuned
+#, object-pascal-format
+msgid "デコーダが聴いている音を %0:.1f 秒鳴らしています（%1:.0f Hz を %2:.0f Hz へ寄せ、帯域 ±%3:.0f Hz）。"
+msgstr ""
+
+#: frmmain.rsmonitorplayinguntuned
+#, object-pascal-format
+msgid "デコーダが聴いている音を %.1f 秒鳴らしています（同調していないので、受信機の音程のままです）。"
+msgstr ""
+
+#: frmmain.rspaceeased
+#, object-pascal-format
+msgid "この機械では解析が追いつきにくいため、確定の間隔を %0:.0f 秒に緩めています（実時間比 %1:.1f 倍）。読み落としはしません。"
+msgstr ""
+
 #: frmmain.rspragain
 msgid "もう一度鳴らす"
 msgstr ""
@@ -476,6 +635,15 @@ msgstr ""
 
 #: frmmain.rsprdelayseconds
 msgid "遅らせる秒数"
+msgstr ""
+
+#: frmmain.rsprefixesskipped
+#, object-pascal-format
+msgid "（前置符字として読めなかった行 %d）"
+msgstr ""
+
+#: frmmain.rsprefixesunused
+msgid "使っていません（形だけで判定します）"
 msgstr ""
 
 #: frmmain.rsprexercise
@@ -558,6 +726,41 @@ msgstr ""
 
 #: frmmain.rsprwpm
 msgid "速度 (WPM)"
+msgstr ""
+
+#: frmmain.rsreceivestarted
+msgid "受信を開始しました。"
+msgstr ""
+
+#: frmmain.rsreceivestopped
+msgid "受信を停止しました。"
+msgstr ""
+
+#: frmmain.rsreceivinghz
+#, object-pascal-format
+msgid "受信中 %d Hz"
+msgstr ""
+
+#: frmmain.rsreplayhintheld
+#, object-pascal-format
+msgid "文字を押すと、その音を聴き直せます（直近 %0:d 分 %1:d 秒を保管中）。"
+msgstr ""
+
+#: frmmain.rsrosterskipped
+#, object-pascal-format
+msgid "（符号として読めなかった行 %d）"
+msgstr ""
+
+#: frmmain.rsrostertruncated
+msgid "（大きすぎるため途中まで）"
+msgstr ""
+
+#: frmmain.rsrosterunused
+msgid "使っていません"
+msgstr ""
+
+#: frmmain.rsrxanalyzinghint
+msgid "読み込んだ音を解析しています。"
 msgstr ""
 
 #: frmmain.rsrxbandany
@@ -657,6 +860,10 @@ msgstr ""
 msgid "文字を波形に重ねる"
 msgstr ""
 
+#: frmmain.rsrxreceivinghint
+msgid "受信中です。最初の文字が出るまで数秒かかります。"
+msgstr ""
+
 #: frmmain.rsrxreplay
 msgid "もう一度聴く"
 msgstr ""
@@ -707,6 +914,7 @@ msgid "受信停止"
 msgstr ""
 
 #: frmmain.rsrxtab
+msgctxt "frmmain.rsrxtab"
 msgid "受信"
 msgstr ""
 
@@ -720,6 +928,14 @@ msgstr ""
 
 #: frmmain.rsrxuntune
 msgid "同調を解除"
+msgstr ""
+
+#: frmmain.rsrxwaitinglabel
+msgid "待機中"
+msgstr ""
+
+#: frmmain.rsrxwaitstopped
+msgid "入力装置を待つのをやめました。"
 msgstr ""
 
 #: frmmain.rsrxwatchlabel
@@ -743,6 +959,7 @@ msgid "設定を適用してエンジンを読み込み直す"
 msgstr ""
 
 #: frmmain.rssetauto
+msgctxt "frmmain.rssetauto"
 msgid "自動"
 msgstr ""
 
@@ -803,6 +1020,7 @@ msgid "画面の言葉 / Language"
 msgstr ""
 
 #: frmmain.rssetlog
+msgctxt "frmmain.rssetlog"
 msgid "交信記録"
 msgstr ""
 
@@ -874,6 +1092,56 @@ msgstr ""
 msgid "推論スレッド"
 msgstr ""
 
+#: frmmain.rssubdivisionbadshape
+msgid "この形では記録に書けません（4・5・6 桁）"
+msgstr ""
+
+#: frmmain.rssubdivisionhint
+msgid "相手局の市郡区番号（任意）"
+msgstr ""
+
+#: frmmain.rstuneauto
+msgctxt "frmmain.rstuneauto"
+msgid "自動"
+msgstr ""
+
+#: frmmain.rstunecleared
+msgid "同調を解除しました。受信機の音程のまま読みます。"
+msgstr ""
+
+#: frmmain.rstunedband
+#, object-pascal-format
+msgid "同調: %0:.0f Hz ／ 帯域 ±%1:.0f Hz（%2:s）"
+msgstr ""
+
+#: frmmain.rstunednolimit
+#, object-pascal-format
+msgid "同調: %.0f Hz ／ 帯域制限なし"
+msgstr ""
+
+#: frmmain.rstunednone
+msgid "同調: なし（受信機の音程のまま）"
+msgstr ""
+
+#: frmmain.rstunedsignal
+#, object-pascal-format
+msgid "%.0f Hz の信号に同調しました。"
+msgstr ""
+
+#: frmmain.rstunedsnap
+#, object-pascal-format
+msgid "%0:.0f Hz に寄せました。受信機の音程を %1:.0f〜%2:.0f Hz にしてください。"
+msgstr ""
+
+#: frmmain.rstunedtostation
+#, object-pascal-format
+msgid "%0:.0f Hz の局に同調し、交信モードへ移りました。%1:s%2:s"
+msgstr ""
+
+#: frmmain.rstunemanual
+msgid "手動"
+msgstr ""
+
 #: frmmain.rstxcharwpm
 msgid "文字速度 (WPM)"
 msgstr ""
@@ -931,5 +1199,19 @@ msgstr ""
 
 #: frmmain.rstxvolume
 msgid "音量"
+msgstr ""
+
+#: frmmain.rswatchhint
+msgid "符号を書くと、その局が聞こえたときに知らせます"
+msgstr ""
+
+#: frmmain.rswatchingall
+#, object-pascal-format
+msgid "%d 局を待っています"
+msgstr ""
+
+#: frmmain.rswatchingsome
+#, object-pascal-format
+msgid "%0:d 局を待っています（%1:d 件は呼出符号の形になっていません）"
 msgstr ""
 

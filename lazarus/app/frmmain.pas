@@ -1090,6 +1090,72 @@ resourcestring
   RsFtStreak = '%d 日続いています';
   RsDecodeDone = 'デコード完了: %d 文字';
 
+  { 受信タブ（要件 FR-I・FR-J・FR-E.3・FR-E.7）。
+    The Receive tab (requirements FR-I, FR-J, FR-E.3, FR-E.7). }
+  RsRxWaitingLabel = '待機中';
+  RsRxWaitStopped = '入力装置を待つのをやめました。';
+  RsReceiveStarted = '受信を開始しました。';
+  RsReceiveStopped = '受信を停止しました。';
+  RsDecodingBusy = 'デコード中...';
+  RsCountAndName = '%0:d 件 / %1:s';
+  RsFtRunningStatus = '訓練中 %s。終わったら「終了して採点」を押してください。';
+  RsRxReceivingHint = '受信中です。最初の文字が出るまで数秒かかります。';
+  RsRxAnalyzingHint = '読み込んだ音を解析しています。';
+  RsFileUnreadable = '読めませんでした。ファイルを確かめてください';
+  RsPrefixesUnused = '使っていません（形だけで判定します）';
+  RsPrefixesSkipped = '（前置符字として読めなかった行 %d）';
+  RsRosterUnused = '使っていません';
+  RsRosterSkipped = '（符号として読めなかった行 %d）';
+  RsRosterTruncated = '（大きすぎるため途中まで）';
+  RsLogOnceNote = '（1 回だけ）';
+  RsLogNeedCall = '相手の符号が読めたら記録できます';
+  RsLogWorkedOn = '%0:s%1:s（%2:s に交信済み）';
+  RsSubdivisionHint = '相手局の市郡区番号（任意）';
+  RsSubdivisionBadShape = 'この形では記録に書けません（4・5・6 桁）';
+  RsCtxContactLog = '交信記録';
+  RsLoggedBadSubdivision = '%0:s との交信を記録しました。JCC/JCG「%1:s」は形が違うので書いていません。';
+  RsLoggedWithBand = '%0:s との交信を %1:s で記録しました（%2:s UTC）。';
+  RsLoggedNoBand = '%0:s との交信を記録しました（%1:s UTC）。';
+  RsImportTitle = '交信記録（ADIF）を取り込む';
+  RsExportTitle = '交信記録（ADIF）を書き出す';
+  RsAdifFilter = 'ADIF (*.adi;*.adif)|*.adi;*.adif|すべて (*.*)|*.*';
+  RsAdifExportFilter = 'ADIF (*.adi)|*.adi|すべて (*.*)|*.*';
+  RsImported = '%0:d 件を取り込みました（既にある %1:d 件は飛ばしました）。';
+  RsExported = '%0:d 件を %1:s へ書き出しました。';
+  RsModeContestSet = 'コンテストモードにしました。交信済みの局を隠せます。得点計算は行いません。';
+  RsModeWatchSet = '待機モードにしました。帯域内の局を一覧に出します。受信文は改めて取り直します。';
+  RsModeContactSet = '交信モードにしました。選んだ 1 局を読みます。受信文は改めて取り直します。';
+  RsEvidenceEntry = '（%s にあり＝実在は確かです）';
+  RsTunedToStation = '%0:.0f Hz の局に同調し、交信モードへ移りました。%1:s%2:s';
+  RsWatchHint = '符号を書くと、その局が聞こえたときに知らせます';
+  RsWatchingSome = '%0:d 局を待っています（%1:d 件は呼出符号の形になっていません）';
+  RsWatchingAll = '%d 局を待っています';
+  RsTuneAuto = '自動';
+  RsTuneManual = '手動';
+  RsTunedBand = '同調: %0:.0f Hz ／ 帯域 ±%1:.0f Hz（%2:s）';
+  RsTunedNoLimit = '同調: %.0f Hz ／ 帯域制限なし';
+  RsTunedNone = '同調: なし（受信機の音程のまま）';
+  RsMonitorNoAudio = '鳴らせる音がまだありません。受信を始めてからお試しください。';
+  RsMonitorNoPrepared = '復調音を作れませんでした。';
+  RsCtxMonitorAudio = '復調音';
+  RsMonitorPlayingTuned = 'デコーダが聴いている音を %0:.1f 秒鳴らしています（%1:.0f Hz を %2:.0f Hz へ寄せ、帯域 ±%3:.0f Hz）。';
+  RsMonitorPlayingUntuned = 'デコーダが聴いている音を %.1f 秒鳴らしています（同調していないので、受信機の音程のままです）。';
+  RsCtxCapture = '取り込み';
+  RsReceivingHz = '受信中 %d Hz';
+  RsDeviceReturned = '入力装置が戻りました。受信を再開しました。';
+  RsAudioPresent = '音が届いています';
+  RsAudioSilent = '無音です';
+  RsCtxReceive = '受信';
+  RsTunedSnap = '%0:.0f Hz に寄せました。受信機の音程を %1:.0f〜%2:.0f Hz にしてください。';
+  RsTunedSignal = '%.0f Hz の信号に同調しました。';
+  RsTuneCleared = '同調を解除しました。受信機の音程のまま読みます。';
+  RsDeviceDefault = '既定の装置（おまかせ）';
+  RsDeviceNoList = '既定の装置（一覧を取得できません）';
+  RsDeviceNoneFound = '録音に使える装置が見つかりませんでした。接続と OS 側の設定を確認してください。';
+  RsDeviceFound = '入力装置を %d 台見つけました。';
+  RsPaceEased = 'この機械では解析が追いつきにくいため、確定の間隔を %0:.0f 秒に緩めています（実時間比 %1:.1f 倍）。読み落としはしません。';
+  RsReplayHintHeld = '文字を押すと、その音を聴き直せます（直近 %0:d 分 %1:d 秒を保管中）。';
+
 
 
 { 改行の直し（`AsLines`）は `DeepCW.Platform` に在ります。**OS で振る舞いが
@@ -3841,6 +3907,26 @@ begin
   UpdateLogInfo;
   PrShowHistory;
   FtShowHistory;
+  { **これも控えに載らない組み直しです。**`FRxSubdivisionInfo` の文言は
+    `RxSubdivisionChanged` が都度組み立てるので、控えには載せられません
+    （空欄なら案内、埋まっていれば読みの札）。呼ばなければ、起動したときの
+    言語のまま残ります（版 2.63 の点検で見つけた。付録 BE.6 と同じ形の穴）。
+    **This one is rebuilt too, and cannot be noted**: `FRxSubdivisionInfo`'s
+    words are `RxSubdivisionChanged`'s to build each time (the hint when empty,
+    the reading when not). Left uncalled, it would stay in whatever language it
+    was built in (found in the version 2.63 review; the same shape of gap as
+    appendix BE.6). }
+  if FRxSubdivision <> nil then
+    RxSubdivisionChanged(nil);
+  { 入力装置の一覧も同じです。**先頭の「おまかせ」と「← 既定」の印は文言で、
+    控えには載りません。**選んでいた装置は名前で覚えているので、渡せば同じ
+    ものを選び直します（要件 FR-A.5 と同じ考え方）。
+    The input device list, the same way: **the leading "auto" entry and the
+    "default" mark are words that cannot be noted.** The chosen device is
+    remembered by name, so passing it back selects the same one again (the
+    same reasoning as requirement FR-A.5). }
+  if FRxDevice <> nil then
+    RefreshDeviceList(SelectedDeviceName);
 end;
 
 function TMainForm.ReportLanguage: TStringList;
@@ -3850,15 +3936,33 @@ var
   Started: TDateTime;
   Spent: Int64;
   I, J, Moved, Wrong: Integer;
+  HintBefore, HintAfter, HintBack: string;
+  DeviceBefore, DeviceAfter, DeviceBack: string;
 begin
   Result := TStringList.Create;
   Before := TStringList.Create;
   After := TStringList.Create;
   Back := TStringList.Create;
   try
+    { **控えに載らない組み直しも、別枠で名指しします。**`FRxSubdivisionInfo`
+      と `FRxDevice` は `UiText` に登録できない（付録 BE.6）ので、`Before`・
+      `After`・`Back` の数には入りません。それでも `ApplyTexts` が呼び忘れれば
+      画面には日本語が残り、実機の点検でしか見つかりませんでした（版 2.63）。
+      ここで機械にも見つけさせます。
+      **What cannot be noted is checked apart, by name.**
+      `FRxSubdivisionInfo` and `FRxDevice` cannot be registered with `UiText`
+      (appendix BE.6), so they never entered the counts. Left uncalled by
+      `ApplyTexts`, Japanese stayed on screen and only a real-screen check
+      found it (version 2.63). This makes the machine find it too. }
+    if FRxSubdivision <> nil then
+      FRxSubdivision.Text := '';
+
     UseUiLang(UI_LANG_DEFAULT);
     ApplyTexts;
     UiText.CollectTexts(Before);
+    if FRxSubdivisionInfo <> nil then HintBefore := FRxSubdivisionInfo.Caption;
+    if (FRxDevice <> nil) and (FRxDevice.Items.Count > 0) then
+      DeviceBefore := FRxDevice.Items[0];
 
     { 切替にどれだけ掛かるかを測ります（要件 NFR-1）。**利用者が押す操作**なので、
       掛かるなら掛かると言えなければなりません。画面を作り直す方式との差も、
@@ -3871,10 +3975,16 @@ begin
     ApplyTexts;
     Spent := MilliSecondsBetween(Now, Started);
     UiText.CollectTexts(After);
+    if FRxSubdivisionInfo <> nil then HintAfter := FRxSubdivisionInfo.Caption;
+    if (FRxDevice <> nil) and (FRxDevice.Items.Count > 0) then
+      DeviceAfter := FRxDevice.Items[0];
 
     UseUiLang(UI_LANG_DEFAULT);
     ApplyTexts;
     UiText.CollectTexts(Back);
+    if FRxSubdivisionInfo <> nil then HintBack := FRxSubdivisionInfo.Caption;
+    if (FRxDevice <> nil) and (FRxDevice.Items.Count > 0) then
+      DeviceBack := FRxDevice.Items[0];
 
     { **訳があるのに変わらなかったものを名指しします。**数えるだけでは、
       40 件のうち 7 件しか切り替わっていなくても通ってしまいます（実測。
@@ -3913,6 +4023,33 @@ begin
           Result.Add(Format('戻っていない: 「%0:s」→「%1:s」', [Before[I],
             Back[Min(I, Back.Count - 1)]]));
       end;
+    end;
+
+    { 控えに載らない 2 つも、同じ形で見ます。**変わらなければ切り替わっていない、
+      戻らなければ戻る道が壊れています。**
+      The two that cannot be noted are checked the same way: **unchanged means
+      the switch did not reach them; not back means the way back is broken.** }
+    if (HintBefore <> '') and (HintAfter = HintBefore) then
+    begin
+      Inc(Wrong);
+      Result.Add(Format('JCC/JCG の案内が切り替わっていない: 「%s」', [HintBefore]));
+    end;
+    if HintBack <> HintBefore then
+    begin
+      Inc(Wrong);
+      Result.Add(Format('JCC/JCG の案内が戻っていない: 「%0:s」→「%1:s」',
+        [HintBefore, HintBack]));
+    end;
+    if (DeviceBefore <> '') and (DeviceAfter = DeviceBefore) then
+    begin
+      Inc(Wrong);
+      Result.Add(Format('装置一覧の先頭が切り替わっていない: 「%s」', [DeviceBefore]));
+    end;
+    if DeviceBack <> DeviceBefore then
+    begin
+      Inc(Wrong);
+      Result.Add(Format('装置一覧の先頭が戻っていない: 「%0:s」→「%1:s」',
+        [DeviceBefore, DeviceBack]));
     end;
 
     Result.Insert(0, Format('控え %0:d 件 / 英語で変わった %1:d 件 / 戻らなかった %2:d 件 / 切替 %3:d ms',
@@ -4177,7 +4314,7 @@ procedure TMainForm.StartDecode(const Samples: TSingleArray; SampleRate: Integer
 begin
   if DecoderBusy or not EnsureDecoder then
     Exit;
-  FRxBusy.Caption := 'デコード中...';
+  FRxBusy.Caption := RsDecodingBusy;
   FDecodeThread := TDecodeThread.Create(FDecoder, Samples, SampleRate, @DecodeFinished);
   { 解析が始まってから言い直します。**始める前に呼ぶと、まだ走っていないので
     「まだ始めていない」ほうの言葉になります。**長いファイルほど、その空白は
@@ -4622,7 +4759,7 @@ begin
   begin
     if FMulti = nil then
       FMulti := TMultiStationDecoder.Create(FDecoder);
-    FRxBusy.Caption := 'デコード中...';
+    FRxBusy.Caption := RsDecodingBusy;
     FDecodeThread := TDecodeThread.CreateMultiFile(FMulti, Samples, SampleRate,
       @DecodeFinished);
     UpdateTranscriptMessage;
@@ -4712,7 +4849,7 @@ begin
       "Recording" is the word for keeping a file (requirement FR-E.8), so
       capturing is called receiving: **one word with two meanings would read as
       recording when nothing is being recorded.** }
-    SetStatus('', Format('受信中 %d Hz', [FCaptureRate]), '受信を開始しました。');
+    SetStatus('', Format(RsReceivingHz, [FCaptureRate]), RsReceiveStarted);
     UpdateTranscriptMessage;
     if FSetRecord.Checked then
       StartRecording;
@@ -4804,7 +4941,7 @@ begin
   begin
     FWaiting := False;
     FRxSignal.Caption := '';
-    SetStatus('', '待機中', '入力装置を待つのをやめました。');
+    SetStatus('', RsRxWaitingLabel, RsRxWaitStopped);
   end;
   if FCapture = nil then
     Exit;
@@ -4858,7 +4995,7 @@ begin
     end;
   if FJournal <> nil then
     FJournal.Flush;
-  SetStatus('', '待機中', '受信を停止しました。');
+  SetStatus('', RsRxWaitingLabel, RsReceiveStopped);
   UpdateTranscriptMessage;
 end;
 
@@ -5026,11 +5163,11 @@ begin
   if FRxTranscript = nil then
     Exit;
   if FCapture <> nil then
-    FRxTranscript.Message_ := '受信中です。最初の文字が出るまで数秒かかります。'
+    FRxTranscript.Message_ := RsRxReceivingHint
   else if DecoderBusy then
-    FRxTranscript.Message_ := '読み込んだ音を解析しています。'
+    FRxTranscript.Message_ := RsRxAnalyzingHint
   else
-    FRxTranscript.Message_ := '受信を開始すると、ここに読めた文字が出ます。';
+    FRxTranscript.Message_ := RsRxEmpty;
 end;
 
 { 高コントラスト表示を効かせます（要件 NFR-5.5）。
@@ -5143,19 +5280,19 @@ begin
     Exit;
   if (FPrefixes = nil) or (FPrefixFile = '') then
   begin
-    FSetPrefixesInfo.Caption := '使っていません（形だけで判定します）';
+    FSetPrefixesInfo.Caption := RsPrefixesUnused;
     Exit;
   end;
   if FPrefixes.LastError <> '' then
   begin
-    FSetPrefixesInfo.Caption := '読めませんでした。ファイルを確かめてください';
+    FSetPrefixesInfo.Caption := RsFileUnreadable;
     Exit;
   end;
-  FSetPrefixesInfo.Caption := Format('%0:d 件 / %1:s',
+  FSetPrefixesInfo.Caption := Format(RsCountAndName,
     [AllocatedPrefixCount, FPrefixes.Name]);
   if FPrefixes.Skipped > 0 then
     FSetPrefixesInfo.Caption := FSetPrefixesInfo.Caption +
-      Format('（前置符字として読めなかった行 %d）', [FPrefixes.Skipped]);
+      Format(RsPrefixesSkipped, [FPrefixes.Skipped]);
 end;
 
 procedure TMainForm.SetPrefixesClick(Sender: TObject);
@@ -5253,24 +5390,24 @@ begin
     Exit;
   if (FRoster = nil) or (FRosterFile = '') then
   begin
-    FSetRosterInfo.Caption := '使っていません';
+    FSetRosterInfo.Caption := RsRosterUnused;
     Exit;
   end;
   if FRoster.LastError <> '' then
   begin
-    FSetRosterInfo.Caption := '読めませんでした。ファイルを確かめてください';
+    FSetRosterInfo.Caption := RsFileUnreadable;
     Exit;
   end;
   { **読めなかった行の数も出します。**件数だけを出すと、半分しか読めていない
     ファイルが「読めた」ように見えます。
     **The lines that could not be read are said too**: a count alone would let a
     file half of which was skipped look as though it had been read. }
-  FSetRosterInfo.Caption := Format('%0:d 件 / %1:s', [FRoster.Count, FRoster.Name]);
+  FSetRosterInfo.Caption := Format(RsCountAndName, [FRoster.Count, FRoster.Name]);
   if FRoster.Skipped > 0 then
     FSetRosterInfo.Caption := FSetRosterInfo.Caption +
-      Format('（符号として読めなかった行 %d）', [FRoster.Skipped]);
+      Format(RsRosterSkipped, [FRoster.Skipped]);
   if FRoster.Truncated then
-    FSetRosterInfo.Caption := FSetRosterInfo.Caption + '（大きすぎるため途中まで）';
+    FSetRosterInfo.Caption := FSetRosterInfo.Caption + RsRosterTruncated;
 end;
 
 procedure TMainForm.SetRosterClick(Sender: TObject);
@@ -5502,21 +5639,21 @@ begin
   Note := '';
   if (FChosenCallsign = '') and (FMode = rmContact) and
      (FExchange.Sightings = 1) then
-    Note := '（1 回だけ）';
+    Note := RsLogOnceNote;
   if Call = '' then
-    FRxLogInfo.Caption := '相手の符号が読めたら記録できます'
+    FRxLogInfo.Caption := RsLogNeedCall
   else if WorkedBefore(Call) then
     { 日付も同じバンドから採ります。回数だけをバンドごとに答えて日付を全体から
       採ると、そのバンドで交信していない日付を「交信済み」の証拠として示します。
       The date comes from the same band: answering the count band by band while
       taking the date from every band would offer, as the evidence of a duplicate,
       a date on which that band was not worked. }
-    FRxLogInfo.Caption := Format('%0:s%1:s（%2:s に交信済み）',
+    FRxLogInfo.Caption := Format(RsLogWorkedOn,
       [Call, Note, FLog.LastWorkedOn(Call, SelectedBand)])
   else
     FRxLogInfo.Caption := Call + Note;
   if FSetLogInfo <> nil then
-    FSetLogInfo.Caption := Format('%0:d 件 / %1:s', [FLog.Count, FLog.FileName]);
+    FSetLogInfo.Caption := Format(RsCountAndName, [FLog.Count, FLog.FileName]);
 end;
 
 { 交信を 1 件記録します（要件 FR-E.3）。時刻は協定世界時で持ちます。ADIF の
@@ -5545,12 +5682,12 @@ begin
     Exit;
   if Trim(FRxSubdivision.Text) = '' then
   begin
-    FRxSubdivisionInfo.Caption := '相手局の市郡区番号（任意）';
+    FRxSubdivisionInfo.Caption := RsSubdivisionHint;
     Exit;
   end;
   Kind := ParseJapanSubdivision(FRxSubdivision.Text, Code);
   if Kind = jsUnknown then
-    FRxSubdivisionInfo.Caption := 'この形では記録に書けません（4・5・6 桁）'
+    FRxSubdivisionInfo.Caption := RsSubdivisionBadShape
   else
     FRxSubdivisionInfo.Caption := JapanSubdivisionCaption(Kind) + ' ' + Code;
 end;
@@ -5590,7 +5727,7 @@ begin
     FRxSubdivision.Text);
   if not FLog.Add(Item) then
   begin
-    LogDiagnostic('交信記録', FLog.LastError);
+    LogDiagnostic(RsCtxContactLog, FLog.LastError);
     SetStatus('', '', StatusLine(FLog.LastError));
     Exit;
   end;
@@ -5626,14 +5763,13 @@ begin
     silence, the operator would believe it went in.** The contact itself is
     kept: losing the contact costs more than losing the subdivision. }
   if Typed and (Code = '') then
-    SetStatus('', '', Format(
-      '%0:s との交信を記録しました。JCC/JCG「%1:s」は形が違うので書いていません。',
+    SetStatus('', '', Format(RsLoggedBadSubdivision,
       [Call, Entered]))
   else if SelectedBand <> '' then
-    SetStatus('', '', Format('%0:s との交信を %1:s で記録しました（%2:s UTC）。',
+    SetStatus('', '', Format(RsLoggedWithBand,
       [Call, FRxBand.Text, FormatDateTime('yyyy-mm-dd hh":"nn', Moment)]))
   else
-    SetStatus('', '', Format('%0:s との交信を記録しました（%1:s UTC）。',
+    SetStatus('', '', Format(RsLoggedNoBand,
       [Call, FormatDateTime('yyyy-mm-dd hh":"nn', Moment)]));
 end;
 
@@ -5644,13 +5780,13 @@ var
 begin
   Dialog := TOpenDialog.Create(Self);
   try
-    Dialog.Title := '交信記録（ADIF）を取り込む';
-    Dialog.Filter := 'ADIF (*.adi;*.adif)|*.adi;*.adif|すべて (*.*)|*.*';
+    Dialog.Title := RsImportTitle;
+    Dialog.Filter := RsAdifFilter;
     if not Dialog.Execute then
       Exit;
     if not FLog.ImportAdif(Dialog.FileName, Added, Skipped) then
     begin
-      LogDiagnostic('交信記録', FLog.LastError);
+      LogDiagnostic(RsCtxContactLog, FLog.LastError);
       SetStatus('', '', StatusLine(FLog.LastError));
       Exit;
     end;
@@ -5662,7 +5798,7 @@ begin
     { 飛ばした件数も言います。**黙って減ると、取り込めたのかどうかが分かりません。**
       The number skipped is said too: **silence about it leaves the operator
       unable to tell whether the import worked.** }
-    SetStatus('', '', Format('%0:d 件を取り込みました（既にある %1:d 件は飛ばしました）。',
+    SetStatus('', '', Format(RsImported,
       [Added, Skipped]));
   finally
     Dialog.Free;
@@ -5675,19 +5811,19 @@ var
 begin
   Dialog := TSaveDialog.Create(Self);
   try
-    Dialog.Title := '交信記録（ADIF）を書き出す';
-    Dialog.Filter := 'ADIF (*.adi)|*.adi|すべて (*.*)|*.*';
+    Dialog.Title := RsExportTitle;
+    Dialog.Filter := RsAdifExportFilter;
     Dialog.DefaultExt := 'adi';
     Dialog.FileName := 'contacts.adi';
     if not Dialog.Execute then
       Exit;
     if not FLog.ExportAdif(Dialog.FileName) then
     begin
-      LogDiagnostic('交信記録', FLog.LastError);
+      LogDiagnostic(RsCtxContactLog, FLog.LastError);
       SetStatus('', '', StatusLine(FLog.LastError));
       Exit;
     end;
-    SetStatus('', '', Format('%0:d 件を %1:s へ書き出しました。',
+    SetStatus('', '', Format(RsExported,
       [FLog.Count, Dialog.FileName]));
   finally
     Dialog.Free;
@@ -5812,14 +5948,11 @@ begin
   ApplyMode;
   MarkSettingsDirty;
   if FMode = rmContest then
-    SetStatus('', '', 'コンテストモードにしました。交信済みの局を隠せます。' +
-      '得点計算は行いません。')
+    SetStatus('', '', RsModeContestSet)
   else if FMode = rmWatch then
-    SetStatus('', '', '待機モードにしました。帯域内の局を一覧に出します。' +
-      '受信文は改めて取り直します。')
+    SetStatus('', '', RsModeWatchSet)
   else
-    SetStatus('', '', '交信モードにしました。選んだ 1 局を読みます。' +
-      '受信文は改めて取り直します。');
+    SetStatus('', '', RsModeContactSet);
 end;
 
 { 一覧の行を選んだら、その局へ同調して交信モードへ移ります（要件 FR-J.3）。
@@ -5851,7 +5984,7 @@ begin
         **a station one has worked certainly exists.** Raising the trust without
         naming the reason would be asserting it silently. }
       if FBandEntries[I].TrustSource <> '' then
-        Evidence := Format('（%s にあり＝実在は確かです）',
+        Evidence := Format(RsEvidenceEntry,
           [FBandEntries[I].TrustSource]);
     end;
   FRxWaterfall.TuneHz := Hz;
@@ -5868,7 +6001,7 @@ begin
   if FStream <> nil then
     FStream.TuneHz := FRxWaterfall.TuneHz;
   UpdateTuneInfo;
-  SetStatus('', '', Format('%0:.0f Hz の局に同調し、交信モードへ移りました。%1:s%2:s',
+  SetStatus('', '', Format(RsTunedToStation,
     [FRxWaterfall.TuneHz, Picked, Evidence]));
 end;
 
@@ -5906,17 +6039,15 @@ begin
   Given := CountWatchWords(FRxWatch.Text);
   Kept := Length(FWatched);
   if Given = 0 then
-    FRxWatchInfo.Caption :=
-      '符号を書くと、その局が聞こえたときに知らせます'
+    FRxWatchInfo.Caption := RsWatchHint
   else if Kept < Given then
     { 形にならない符号を黙って捨てると、いつまでも知らせが来ない理由が分かりません。
       Dropping a malformed call sign silently leaves no way to tell why nothing is
       ever announced. }
-    FRxWatchInfo.Caption := Format(
-      '%0:d 局を待っています（%1:d 件は呼出符号の形になっていません）',
+    FRxWatchInfo.Caption := Format(RsWatchingSome,
       [Kept, Given - Kept])
   else
-    FRxWatchInfo.Caption := Format('%d 局を待っています', [Kept]);
+    FRxWatchInfo.Caption := Format(RsWatchingAll, [Kept]);
 end;
 
 { 待っていた局が出ていれば知らせます。
@@ -6334,10 +6465,9 @@ begin
     Exit;
   Held := FHistory.RetainedSeconds;
   if Held <= 0 then
-    FRxReplayInfo.Caption := '文字を押すと、その音を聴き直せます。'
+    FRxReplayInfo.Caption := RsRxReplayHint
   else
-    FRxReplayInfo.Caption := Format(
-      '文字を押すと、その音を聴き直せます（直近 %0:d 分 %1:d 秒を保管中）。',
+    FRxReplayInfo.Caption := Format(RsReplayHintHeld,
       [Trunc(Held) div 60, Trunc(Held) mod 60]);
 end;
 
@@ -6696,20 +6826,20 @@ begin
       the same as "normal", so the number alone does not tell them apart
       (requirements FR-D.3 and FR-D.8). }
     if SelectedBandwidth = tbAuto then
-      Mode := '自動'
+      Mode := RsTuneAuto
     else
-      Mode := '手動';
+      Mode := RsTuneManual;
     if Half > 0 then
-      FRxTuneInfo.Caption := Format('同調: %0:.0f Hz ／ 帯域 ±%1:.0f Hz（%2:s）',
+      FRxTuneInfo.Caption := Format(RsTunedBand,
         [FRxWaterfall.TuneHz, Half, Mode])
     else
-      FRxTuneInfo.Caption := Format('同調: %.0f Hz ／ 帯域制限なし',
+      FRxTuneInfo.Caption := Format(RsTunedNoLimit,
         [FRxWaterfall.TuneHz]);
     FRxWaterfall.HalfWidthHz := Half;
   end
   else
   begin
-    FRxTuneInfo.Caption := '同調: なし（受信機の音程のまま）';
+    FRxTuneInfo.Caption := RsTunedNone;
     FRxWaterfall.HalfWidthHz := 0;
   end;
   FRxTuneClear.Enabled := FRxWaterfall.TuneHz > 0;
@@ -6752,13 +6882,13 @@ begin
     GotFrom, GotTo, Rate);
   if Length(Audio) = 0 then
   begin
-    SetStatus('', '', '鳴らせる音がまだありません。受信を始めてからお試しください。');
+    SetStatus('', '', RsMonitorNoAudio);
     Exit;
   end;
   Prepared := PrepareForDecoder(Audio, Rate);
   if Length(Prepared) = 0 then
   begin
-    SetStatus('', '', '復調音を作れませんでした。');
+    SetStatus('', '', RsMonitorNoPrepared);
     Exit;
   end;
   if FPlayback.Running then
@@ -6770,7 +6900,7 @@ begin
   FReviewPlay.Play(Prepared, FDecoder.Metadata.SampleRate);
   if FReviewPlay.LastError <> '' then
   begin
-    LogDiagnostic('復調音', FReviewPlay.LastError);
+    LogDiagnostic(RsCtxMonitorAudio, FReviewPlay.LastError);
     SetStatus('', '', StatusLine(FReviewPlay.LastError));
     Exit;
   end;
@@ -6780,13 +6910,11 @@ begin
     What is sounding is said: **mistaken for the same audio as "listen again",
     the comparison would lose its point.** }
   if FRxWaterfall.TuneHz > 0 then
-    SetStatus('', '', Format(
-      'デコーダが聴いている音を %0:.1f 秒鳴らしています（%1:.0f Hz を %2:.0f Hz へ寄せ、帯域 ±%3:.0f Hz）。',
+    SetStatus('', '', Format(RsMonitorPlayingTuned,
       [GotTo - GotFrom, FRxWaterfall.TuneHz, TUNER_TARGET_TONE_HZ,
        BandwidthHalfWidth(SelectedBandwidth)]))
   else
-    SetStatus('', '', Format(
-      'デコーダが聴いている音を %.1f 秒鳴らしています（同調していないので、受信機の音程のままです）。',
+    SetStatus('', '', Format(RsMonitorPlayingUntuned,
       [GotTo - GotFrom]));
 end;
 
@@ -6850,13 +6978,12 @@ begin
     moved. A click towards the left edge asks for something close to 0, so 0
     must not be excluded here. }
   if (Tuned > 0) and (Abs(Requested - Tuned) > TUNER_STEP_HZ) then
-    SetStatus('', '', Format(
-      '%0:.0f Hz に寄せました。受信機の音程を %1:.0f〜%2:.0f Hz にしてください。',
+    SetStatus('', '', Format(RsTunedSnap,
       [Tuned, FRxWaterfall.LowestHz, FRxWaterfall.HighestHz]))
   else if Tuned > 0 then
-    SetStatus('', '', Format('%.0f Hz の信号に同調しました。', [Tuned]))
+    SetStatus('', '', Format(RsTunedSignal, [Tuned]))
   else
-    SetStatus('', '', '同調を解除しました。受信機の音程のまま読みます。');
+    SetStatus('', '', RsTuneCleared);
 end;
 
 { 入力装置の一覧を作り直します。Preferred と同じ名前の装置があればそれを、
@@ -6888,7 +7015,7 @@ begin
       The first entry is always "let the system choose". Being able to start
       without picking anything is the point of the opening experience, so the
       option of the default must never disappear (requirement FR-A.2). }
-    FRxDevice.Items.Add('既定の装置（おまかせ）');
+    FRxDevice.Items.Add(RsDeviceDefault);
     Choice := 0;
     for I := 0 to High(FDevices) do
     begin
@@ -6896,7 +7023,7 @@ begin
       if FDevices[I].HostApi <> '' then
         Caption_ := Caption_ + '  [' + FDevices[I].HostApi + ']';
       if FDevices[I].IsDefault then
-        Caption_ := Caption_ + '  ← 既定';
+        Caption_ := Caption_ + RsInfoDefaultMark;
       FRxDevice.Items.Add(Caption_);
       if (Preferred <> '') and (FDevices[I].Name = Preferred) then
         Choice := I + 1;
@@ -6907,7 +7034,7 @@ begin
   FRxDevice.ItemIndex := Choice;
   FRxDevice.Enabled := Length(FDevices) > 0;
   if Length(FDevices) = 0 then
-    FRxDevice.Items[0] := '既定の装置（一覧を取得できません）';
+    FRxDevice.Items[0] := RsDeviceNoList;
 end;
 
 function TMainForm.SelectedDeviceIndex: Integer;
@@ -6936,9 +7063,9 @@ begin
   Wanted := SelectedDeviceName;
   RefreshDeviceList(Wanted);
   if Length(FDevices) = 0 then
-    SetStatus('', '', '録音に使える装置が見つかりませんでした。接続と OS 側の設定を確認してください。')
+    SetStatus('', '', RsDeviceNoneFound)
   else
-    SetStatus('', '', Format('入力装置を %d 台見つけました。', [Length(FDevices)]));
+    SetStatus('', '', Format(RsDeviceFound, [Length(FDevices)]));
 end;
 
 { ウォーターフォール上で帯域の境界を引き終えたときの受け口（要件 FR-D.8）。
@@ -7087,7 +7214,7 @@ begin
       Copy the message first: RxStopClick frees FCapture, so LastError cannot
       be read after it. }
     Failure := FCapture.LastError;
-    LogDiagnostic('取り込み', Failure);
+    LogDiagnostic(RsCtxCapture, Failure);
     { 止めてから案内を出します。RxStopClick は「受信を停止しました」を出すため、
       順序が逆だと、なぜ止まったのかという肝心の説明が上書きされて消えます。
 
@@ -7130,8 +7257,8 @@ begin
     FWaiting := False;
     FRetryCount := 0;
     FSaidDeviceAt := 0;
-    SetStatus('', Format('受信中 %d Hz', [FCaptureRate]),
-      '入力装置が戻りました。受信を再開しました。');
+    SetStatus('', Format(RsReceivingHz, [FCaptureRate]),
+      RsDeviceReturned);
   end;
 
   Peak := FRing.PeakLevel(FCaptureRate, 0.2);
@@ -7148,16 +7275,16 @@ begin
     The threshold is the decoder's own squelch. Two of them would let the
     display say "silent" while characters appear, or the other way round. }
   if Peak >= STREAM_SQUELCH_LEVEL then
-    FRxSignal.Caption := '音が届いています'
+    FRxSignal.Caption := RsAudioPresent
   else
-    FRxSignal.Caption := '無音です';
+    FRxSignal.Caption := RsAudioSilent;
 
   { 録音された分をそのまま流し込みます。窓を切り出すのではなく、確定点から
     先を溜め続けるのが流し込み受信です（要件 FR-B.2）。
     Feed everything captured. Streaming keeps the audio since the last split
     point rather than cutting fixed windows. }
   if not FRing.ReadSince(FRingPosition, Fresh) then
-    LogDiagnostic('受信', 'Audio was dropped: the decoder fell behind the ring buffer.');
+    LogDiagnostic(RsCtxReceive, 'Audio was dropped: the decoder fell behind the ring buffer.');
   if Length(Fresh) > 0 then
   begin
     { 帯域制限はここでは掛けません。0.2 秒ごとの細切れに FIR を掛けると継ぎ目
@@ -7208,7 +7335,7 @@ begin
     RefreshBandMap;
     if not FMulti.Ready then
       Exit;
-    FRxBusy.Caption := 'デコード中...';
+    FRxBusy.Caption := RsDecodingBusy;
     FDecodeThread := TDecodeThread.CreateMulti(FMulti, @DecodeFinished);
     Exit;
   end;
@@ -7216,7 +7343,7 @@ begin
   if not FStream.Ready then
     Exit;
   FAppendMode := True;
-  FRxBusy.Caption := 'デコード中...';
+  FRxBusy.Caption := RsDecodingBusy;
   FDecodeThread := TDecodeThread.CreateStreaming(FStream, @DecodeFinished);
 end;
 
@@ -7282,9 +7409,7 @@ begin
      (SecondsBetween(Now, FPaceToldAt) >= 60) then
   begin
     FPaceToldAt := Now;
-    SetStatus('', '', Format(
-      'この機械では解析が追いつきにくいため、確定の間隔を %.0f 秒に緩めています' +
-      '（実時間比 %.1f 倍）。読み落としはしません。',
+    SetStatus('', '', Format(RsPaceEased,
       [FStream.PaceSeconds, FStream.RealTimeRatio]));
   end;
   { 訓練中は、経過した時間を出します。**押しっぱなしで席を立った人が、
@@ -7292,7 +7417,7 @@ begin
     While training, the time so far is shown: **so that someone who left the
     room can see what happened when they come back.** }
   if (FFtCapture <> nil) and (FFtStatus <> nil) then
-    FFtStatus.Caption := Format('訓練中 %s。終わったら「終了して採点」を押してください。',
+    FFtStatus.Caption := Format(RsFtRunningStatus,
       [SecondsAsClock((Now - FFtBegan) * SecsPerDay)]);
   { 解析が塞がっていて出せなかった読み直しを、ここで出します（要件 FR-C.3）。
     A re-reading that could not be issued because the analysis was busy is
