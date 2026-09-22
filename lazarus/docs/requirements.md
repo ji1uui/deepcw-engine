@@ -1326,7 +1326,7 @@ Android・iOS で動作する。**Lazarus 版がモバイルを追うより、�
 | 21 | 待っている局を音でも知らせるか | FR-I.4 | いまは画面だけ。**待機モードは席を外している前提**なので値打ちはあるが、3 本目の PortAudio の流れを開くことになる。再生中の聴き直しとの兼ね合いも要る（付録 T.9） |
 | 22 | macOS のマイク許可と `.app` 化 | FR-A.3、FR-E.8 | **組み立てた（版 2.62）。**`make_bundle.sh` が `.app` を作り、`Info.plist` に `NSMicrophoneUsageDescription` を ja・en で入れる。持ち物は `Contents/Resources/`、実行ファイルと共有ライブラリは `Contents/MacOS/`。**並びは Linux で組んで確かめた**（回帰試験 20 件、変異 6 つ）。**残るのは macOS 実機での起動・許可の表示・`codesign`／`notarytool`／Gatekeeper で、これは確かめていない**（付録 BJ） |
 | 23 | 高 DPI 環境の配置 | NFR-5.1 | **解決（版 2.49）。**`Xvfb -dpi` で画素密度の違う画面を作れる。96／144／192 dpi で破綻 0 件を実測し、回帰試験に 2 つの密度を入れた（付録 AW）。**実機の高 DPI 画面（Retina・Windows 150%）での確認は残る** |
-| 25 | **macOS で画面のアプリがリンクできない** | NFR-3.1 | FPC 3.2.2 が出す Objective-C の並びを Apple のリンカ（ld-1267）が受け付けない。落ちるのは LCL の cocoa で、この木のコードではない。**FPC の最新 release は 3.2.2**（問い合わせて確認）、runner の Xcode は 26 系のみ。逃げ道は「古いリンカが残っていれば使う」「開発版の FPC を組む」「Xcode 15 以前を持つ機械で組む」の 3 つ。**製品の判断が要る**（付録 BK.4） |
+| 25 | **macOS で画面のアプリがリンクできない（3.2.4 待ち）** | NFR-3.1 | FPC 3.2.2 が出す Objective-C の並びを Apple のリンカ（ld-1267）が受け付けない。落ちるのは LCL の cocoa で、この木のコードではない。**原因は特定済み**——FPC のコミット `55b9954619`「objc: fix compatibility with recent Xcode linkers」が直しており、症状（`ltmp5` という一時ラベルを跨ぐ fixup の拒否）と一致する。この修正は `release_3_2_4_rc2` に入っているが**3.2.4 はまだ正式リリースされていない**。**版 2.64 の判断: 3.2.4 の正式版を待ち、FPC は 3.2.2 のまま進める**（付録 BK.4）。正式版が出たら Homebrew formula の更新を待って matrix を再実行する |
 | 24 | Windows で命令行の道具の日本語が化ける | NFR-7.6 | 同じ命令の出力の中で、素の literal は出るのに `Format` で組んだ行が化ける。**プログラムの符号系なのか、コンソールの符号系なのかを切り分けていない。**推測で直さない（付録 BK.9） |
 | 20 | FPC の RTL が読む時間帯の設定元 | FR-E.3、画面の時刻表示 | **ADIF の UTC は 4 つの時間帯で実測して正しい**（付録 R.5）。ただし FPC 3.2.2 は `/etc/localtime` ではなく **`/etc/timezone`** を読む。これが無い機械（Fedora・Arch 等）では地方時が UTC のまま表示される。**記録の UTC は誤らない**が、画面の時刻表示の扱いを決める必要がある |
 
@@ -8342,9 +8342,9 @@ runner の実測。
 | 手 | 使えるか |
 | --- | --- |
 | 古いリンカ（`-ld_classic`） | **試した（版 2.63）。効果が確かめられない。**`ld -ld_classic -v` が通れば `fpc.cfg` に `-k-ld_classic` を足す段を置き、job は 0 秒で通ったが、**その直後の画面アプリのリンクは前回と全く同じ `malformed method list atom` で落ちた。**ログ取得 API の制限で、`ld_classic` が無かったのか・`fpc.cfg` への追記が効かなかったのかは切り分けられていない（**NOT VERIFIED**） |
-| 新しい FPC の release | **無い。**`git ls-remote` で確かめたところ、FPC の最新の release tag は **`release_3_2_2`** である（この容器から問い合わせた） |
+| 新しい FPC の release | **原因の修正は特定できたが、正式リリースがまだ無い。**FPC のソースを追ったところ、コミット `55b9954619`「objc: fix compatibility with recent Xcode linkers」が、まさにこの症状（`ltmp5` という**一時ラベル**を跨ぐ fixup をリンカが拒む）を直している——「generate non-temporary labels for several parts of the Objective-C metadata」。この修正は `release_3_2_4_rc2` と `fixes_3_2` ブランチに入っているが、**3.2.4 はまだ rc2 止まりで正式版が出ていない**。Homebrew の formula も 3.2.2 のまま（版 2.64 で確認）。**版 2.64 の判断: 3.2.4 が正式リリースされるまで待ち、FPC は 3.2.2 のまま進める。** |
 | 古い Xcode を選ぶ | **runner に無い。**`ls /Applications/Xcode*.app` で確認したところ 26.0〜26.6 のみで、15 系以前は無い（実測） |
-| 開発版（trunk）の FPC を組む | 組めるが、**未リリースの処理系に製品を乗せることになる。**ビルド時間も伸び、日によって壊れうる |
+| 開発版（trunk）や rc の FPC を組む | 組めるが、**未リリースの処理系に製品を乗せることになる。**ビルド時間も伸び、日によって壊れうる。**修正コミットは特定できているので、正式リリースを待つほうが筋が良い**（利用者価値・可逆性を損なわない） |
 | 自前の runner（古い macOS・Xcode） | 使える見込みだが、**インフラを持つ判断が要る** |
 
 **これは CI のつまずきではなく、製品の話である。**対象 OS の片方で、画面の

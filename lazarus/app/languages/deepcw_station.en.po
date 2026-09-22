@@ -586,7 +586,7 @@ msgstr "Logged the contact with %0:s on %1:s (%2:s UTC)."
 
 #: frmmain.rslogneedcall
 msgid "相手の符号が読めたら記録できます"
-msgstr "Reads, then can be logged"
+msgstr "Log once the call reads"
 
 #: frmmain.rslogoncenote
 msgid "（1 回だけ）"
@@ -1232,7 +1232,7 @@ msgstr "Add a call sign to be told when heard"
 #: frmmain.rswatchingall
 #, object-pascal-format
 msgid "%d 局を待っています"
-msgstr "%d watched"
+msgstr "Watching %d"
 
 #: frmmain.rswatchingsome
 #, object-pascal-format
