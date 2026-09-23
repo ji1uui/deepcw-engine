@@ -137,6 +137,11 @@ fi
 # it is simply left untranslated**, and that does not show until the screen is
 # opened.
 step "訳の一覧がソースと合っている" ./tools/po_sync_test.sh
+# 画面に出る日本語が `resourcestring` の外に無いこと（要件 NFR-7.6、付録 BP）。
+# **その場で組み立てる文言は、言語の往復検査には映りません。**ソースを見ます。
+# No Japanese for the screen outside a `resourcestring` (NFR-7.6, appendix BP).
+# **Words built on the spot never show in the round trip**, so the source is read.
+step "日本語が resourcestring の外に無い" ./tools/literal_sweep_test.sh
 # 差し込みが 2 つ以上の文言に番号が付いていること（要件 NFR-7.6）。
 # **番号があっても、訳文で並べ替えることはできない**（LCL が黙って捨てる。
 # 付録 BH.9）。番号は、並べ替えが本当に要るときの逃げ道

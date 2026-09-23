@@ -238,8 +238,8 @@ begin
     Target_.FillRect(X, Legend + 5, X + FUnit, Legend + 9);
     Target_.Brush.Style := bsClear;
     Target_.Font.Color := Font.Color;
-    Target_.TextOut(X + FUnit + 3, Legend, FIST_ELEMENT_NAMES[Kinds[K]]);
-    Inc(X, FUnit + 6 + Target_.TextWidth(FIST_ELEMENT_NAMES[Kinds[K]]) + FUnit);
+    Target_.TextOut(X + FUnit + 3, Legend, FIST_ELEMENT_NAMES[Kinds[K]]^);
+    Inc(X, FUnit + 6 + Target_.TextWidth(FIST_ELEMENT_NAMES[Kinds[K]]^) + FUnit);
   end;
 end;
 

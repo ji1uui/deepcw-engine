@@ -2387,7 +2387,7 @@ begin
   FPrKind.SetBounds(14, 28, 200, 28);
   FPrKind.Style := csDropDownList;
   for Kind := Low(TExerciseKind) to High(TExerciseKind) do
-    FPrKind.Items.Add(EXERCISE_NAMES[Kind]);
+    RegisterItem(FPrKind, Ord(Kind), EXERCISE_NAMES[Kind]);
   FPrKind.ItemIndex := 0;
   FPrKind.OnChange := @PrOptionsChanged;
 
@@ -2821,7 +2821,7 @@ begin
   FFtKind.SetBounds(14, 28, 200, 28);
   FFtKind.Style := csDropDownList;
   for Kind := Low(TExerciseKind) to High(TExerciseKind) do
-    FFtKind.Items.Add(EXERCISE_NAMES[Kind]);
+    RegisterItem(FFtKind, Ord(Kind), EXERCISE_NAMES[Kind]);
   FFtKind.ItemIndex := Ord(ekQso);
   FFtKind.OnChange := @FtOptionsChanged;
 
@@ -2838,7 +2838,7 @@ begin
     The order matches `FIST_KEY_KEYS` one for one: **the key is what is
     recorded, the name is what is shown** (NFR-7.6). }
   for KeyKind := Low(FIST_KEY_NAMES) to High(FIST_KEY_NAMES) do
-    FFtKey.Items.Add(FIST_KEY_NAMES[KeyKind]);
+    RegisterItem(FFtKey, KeyKind, FIST_KEY_NAMES[KeyKind]);
   FFtKey.ItemIndex := 0;
   FFtKey.OnChange := @FtOptionsChanged;
 
@@ -2848,7 +2848,7 @@ begin
   FFtBasis.SetBounds(496, 28, 180, 28);
   FFtBasis.Style := csDropDownList;
   for Standard_ := Low(TFistStandard) to High(TFistStandard) do
-    FFtBasis.Items.Add(FIST_STANDARD_NAMES[Standard_]);
+    RegisterItem(FFtBasis, Ord(Standard_), FIST_STANDARD_NAMES[Standard_]);
   FFtBasis.ItemIndex := 0;
   FFtBasis.OnChange := @FtOptionsChanged;
   { 採点の基準のすぐ下に置きます。右隣に置くと行に収まりませんでした。
@@ -2975,8 +2975,10 @@ begin
   FFtTrendItem.Style := csDropDownList;
   RegisterItem(FFtTrendItem, 0, @RsFtOverall);
   RegisterItem(FFtTrendItem, 1, @RsFtAllItems);
+  { 行 0 は総合、行 1 は全項目なので、項目は行 2 から並びます。
+    Row 0 is the overall and row 1 all items, so the items start at row 2. }
   for Item := Succ(Low(TFistItem)) to High(TFistItem) do
-    FFtTrendItem.Items.Add(FIST_ITEM_NAMES[Item]);
+    RegisterItem(FFtTrendItem, Ord(Item) + 1, FIST_ITEM_NAMES[Item]);
   FFtTrendItem.ItemIndex := 0;
   FFtTrendItem.OnChange := @FtTrendChanged;
 
@@ -3248,7 +3250,7 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Add(Format(RsFtOverallLine, [Score.Overall,
-      FIST_STANDARD_NAMES[FistBasis]]));
+      FIST_STANDARD_NAMES[FistBasis]^]));
     Lines.Add(Format(RsFtParts,
       [Score.Speed, Score.Clarity, Score.Separation, Score.Spacing]));
     if Score.HasCopyability then

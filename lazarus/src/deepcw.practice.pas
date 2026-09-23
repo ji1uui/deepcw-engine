@@ -39,6 +39,23 @@ type
     ekQso         { QSO の定型文 / the phrases of a contact }
   );
 
+resourcestring
+  { 受信練習の出題の種類と、間違いのまとめ（要件 FR-F・NFR-7.6）。**表示の側
+    だけです。**記録に書く鍵（`EXERCISE_KEYS`）と凍結した日本語
+    （`EXERCISE_LEGACY_NAMES`）は訳しません。
+    Exercise kinds and the mistake summary of copy practice (requirements FR-F,
+    NFR-7.6). **Only what is shown**: the keys written into records
+    (`EXERCISE_KEYS`) and the frozen Japanese (`EXERCISE_LEGACY_NAMES`) are not
+    translated. }
+  RsExerciseLetters = '欧文（A〜Z）';
+  RsExerciseMixed = '欧文と数字';
+  RsExerciseCallsigns = '呼出符号';
+  RsExerciseQso = 'QSO 定型文';
+  RsMistakeMissed = '%s を落とした';
+  RsMistakeAdded = '%s を足した';
+  RsMistakeCount = '%0:s（%1:d 回）';
+  RsMistakeSeparator = '、';
+
 const
   { 記録に書く鍵です（要件 NFR-7.6）。**表示名とは別にします。**
     表示名は訳されます。訳される文字列を記録に書くと、言語を変えた日から
@@ -53,8 +70,8 @@ const
   { 画面に出す名前です。**訳される側**なので、記録には書きません。
     The names shown on screen. **This is the side that gets translated**, so it
     is never written into a record. }
-  EXERCISE_NAMES: array[TExerciseKind] of string = (
-    '欧文（A〜Z）', '欧文と数字', '呼出符号', 'QSO 定型文');
+  EXERCISE_NAMES: array[TExerciseKind] of PString = (
+    @RsExerciseLetters, @RsExerciseMixed, @RsExerciseCallsigns, @RsExerciseQso);
 
   { 鍵を使う前の記録（`copy.csv`）に書かれていた日本語の名前です。**凍結します。**
     表示名を訳すと `EXERCISE_NAMES` は言語ごとに変わり、古い記録との照合には
@@ -512,8 +529,8 @@ begin
       Continue;
     case Score.Steps[I].Mark of
       cmWrong: Key := Score.Steps[I].Truth + ' → ' + Score.Steps[I].Typed;
-      cmMissed: Key := Score.Steps[I].Truth + ' を落とした';
-      cmExtra: Key := Score.Steps[I].Typed + ' を足した';
+      cmMissed: Key := Format(RsMistakeMissed, [Score.Steps[I].Truth]);
+      cmExtra: Key := Format(RsMistakeAdded, [Score.Steps[I].Typed]);
     else
       Continue;
     end;
@@ -549,9 +566,9 @@ begin
     if BestAt < 0 then
       Break;
     if Result <> '' then
-      Result := Result + '、';
+      Result := Result + RsMistakeSeparator;
     if Best > 1 then
-      Result := Result + Format('%0:s（%1:d 回）', [Keys[BestAt], Best])
+      Result := Result + Format(RsMistakeCount, [Keys[BestAt], Best])
     else
       Result := Result + Keys[BestAt];
     Counts[BestAt] := 0;

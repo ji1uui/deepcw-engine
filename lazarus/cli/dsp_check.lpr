@@ -1451,7 +1451,7 @@ begin
         [Back[0].Measurement.Ratio, Back[0].Measurement.Stats[ekDit].Cv]));
     Check('採点基準が読み戻せる',
       (Length(Back) > 0) and (Back[0].Standard = fsBug),
-      FIST_STANDARD_NAMES[Back[0].Standard]);
+      FIST_STANDARD_NAMES[Back[0].Standard]^);
     { 区切りを含む値は引用して書き、読み戻しても同じであること。
       A field holding a separator is quoted, and comes back as it went in. }
     Check('区切りを含む値も同じものが戻る',
@@ -4242,10 +4242,10 @@ begin
     This catches the two tables being folded back into one. }
   Apart := True;
   for Standard_ := Low(TFistStandard) to High(TFistStandard) do
-    if FIST_STANDARD_NAMES[Standard_] = FIST_STANDARD_KEYS[Standard_] then
+    if FIST_STANDARD_NAMES[Standard_]^ = FIST_STANDARD_KEYS[Standard_] then
       Apart := False;
   for Kind := Low(TExerciseKind) to High(TExerciseKind) do
-    if EXERCISE_NAMES[Kind] = EXERCISE_KEYS[Kind] then
+    if EXERCISE_NAMES[Kind]^ = EXERCISE_KEYS[Kind] then
       Apart := False;
   Check('表示名と鍵は別のもの', Apart, '');
 
@@ -4328,7 +4328,7 @@ begin
       Check('送信訓練の記録に書かれるのは鍵',
         Pos(',' + FIST_STANDARD_KEYS[fsBug] + ',', Text_) > 0, Text_);
       Check('送信訓練の記録に表示名は書かれない',
-        Pos(FIST_STANDARD_NAMES[fsBug], Text_) = 0, Text_);
+        Pos(FIST_STANDARD_NAMES[fsBug]^, Text_) = 0, Text_);
     finally
       Lines.Free;
     end;
@@ -4379,16 +4379,16 @@ begin
       translating it would split one hand's history in two. }
     for I := Low(FIST_KEY_KEYS) to High(FIST_KEY_KEYS) do
     begin
-      Check('鍵の種類は表示名から鍵に直る（' + FIST_KEY_NAMES[I] + '）',
-        FistKeyToKey(FIST_KEY_NAMES[I]) = FIST_KEY_KEYS[I],
-        FistKeyToKey(FIST_KEY_NAMES[I]));
+      Check('鍵の種類は表示名から鍵に直る（' + FIST_KEY_NAMES[I]^ + '）',
+        FistKeyToKey(FIST_KEY_NAMES[I]^) = FIST_KEY_KEYS[I],
+        FistKeyToKey(FIST_KEY_NAMES[I]^));
       Check('鍵の種類は鍵を渡しても鍵のまま（' + FIST_KEY_KEYS[I] + '）',
         FistKeyToKey(FIST_KEY_KEYS[I]) = FIST_KEY_KEYS[I], '');
       Check('鍵の種類は鍵から表示名に戻る（' + FIST_KEY_KEYS[I] + '）',
-        FistKeyCaption(FIST_KEY_KEYS[I]) = FIST_KEY_NAMES[I], '');
+        FistKeyCaption(FIST_KEY_KEYS[I]) = FIST_KEY_NAMES[I]^, '');
       Check('鍵の種類の鍵は訳されない綴り（' + FIST_KEY_KEYS[I] + '）',
         PlainKey(FIST_KEY_KEYS[I]) and
-        (FIST_KEY_KEYS[I] <> FIST_KEY_NAMES[I]), FIST_KEY_KEYS[I]);
+        (FIST_KEY_KEYS[I] <> FIST_KEY_NAMES[I]^), FIST_KEY_KEYS[I]);
     end;
 
     { **利用者が自分で書いた鍵の名前は捨てません。**一覧に無いものを打つ人は
@@ -4439,7 +4439,7 @@ begin
         Text_ := Text_ + Lines[I];
       Check('受信練習の記録に書かれるのは鍵',
         (Pos(',' + EXERCISE_KEYS[ekCallsigns] + ',', Text_) > 0) and
-        (Pos(EXERCISE_NAMES[ekCallsigns], Text_) = 0), Text_);
+        (Pos(EXERCISE_NAMES[ekCallsigns]^, Text_) = 0), Text_);
     finally
       Lines.Free;
     end;

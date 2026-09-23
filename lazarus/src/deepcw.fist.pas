@@ -125,9 +125,53 @@ type
     Advice: string;
   end;
 
+resourcestring
+  { 送信訓練の表示名と知らせ（要件 FR-H・NFR-7.6）。**表示の側だけです。**
+    記録に書く鍵（`*_KEYS`）と、鍵より前の記録を読むための凍結した日本語
+    （`*_LEGACY_NAMES`）は訳しません。採点も助言も画面のスレッドで組み立てます
+    （`TMainForm.FtScore`・`FtFinish`）。
+    Names and messages of sending practice (requirements FR-H, NFR-7.6). **Only
+    what is shown.** The keys written into records (`*_KEYS`) and the frozen
+    Japanese kept to read records older than the keys (`*_LEGACY_NAMES`) are not
+    translated. Measuring, scoring and advice all run on the UI thread
+    (`TMainForm.FtScore`, `FtFinish`). }
+  RsElementDit = '短点';
+  RsElementDah = '長点';
+  RsElementIntra = '符号内';
+  RsElementChar = '文字間';
+  RsElementWord = '語間';
+  RsStandardStandard = '標準';
+  RsStandardFarnsworth = 'ファンズワース';
+  RsStandardBug = 'バグキー';
+  RsStandardOwn = '自分の過去';
+  RsKeyStraight = '縦振り';
+  RsKeyPaddle = 'パドル';
+  RsKeyBug = 'バグ';
+  RsKeyKeyer = 'エレキー';
+  RsNoteNoCode = '課題文に送れる符号がありません。';
+  RsNoteNoTone = '音が見つかりません。入力の音量を確かめてください。';
+  RsNoteCountDiffers = '課題文は符号 %0:d 個ですが、送られたのは %1:d 個です。抜けたか、くっついたようです。';
+  RsNoteTooFew = '音が足りません。';
+  RsNoteNoDit = '短点の長さを見当づけられません。';
+  RsNoteFree = '課題文なしで測りました。間隔の種別はしきい値で分けています。**参考値です。**';
+  RsAdviceNotMeasured = '測れていません。%s';
+  RsAdviceKeep = '直すところは見当たりません。速度を上げるより、この安定を保つことです。';
+  RsAdviceSpeed = '同じ速さで送ることを意識してください。短点の長さがばらついています。';
+  RsAdviceClarity = '短点と長点の差をはっきりつけてください。長点は短点の %s 倍が目安です。';
+  RsAdviceSeparation = '文字と文字の間を、符号の中の間よりはっきり長く取ってください。写しやすさはここで決まります。';
+  RsAdviceSpacing = '間隔の比を基準に近づけてください（符号内 %0:s・文字間 %1:s・語間 %2:s）。';
+  RsAdviceReadable = 'まず、読み取れる符号を送ることを目指してください。速さは後からついてきます。';
+
 const
-  FIST_ELEMENT_NAMES: array[TElementKind] of string = (
-    '短点', '長点', '符号内', '文字間', '語間');
+  { 表示名は `resourcestring` を指します。**指す先を読むので、稼働中に言語を
+    変えても追随します**（要件 NFR-7.6）。選択肢の行は `UiText.RegisterItem`
+    にそのまま控えられます。
+    The names shown point at `resourcestring`s. **Reading through the pointer
+    follows a language change while running** (requirement NFR-7.6), and a list
+    row can be noted with `UiText.RegisterItem` as it is. }
+  FIST_ELEMENT_NAMES: array[TElementKind] of PString = (
+    @RsElementDit, @RsElementDah, @RsElementIntra, @RsElementChar,
+    @RsElementWord);
   { 記録に書く鍵です（要件 NFR-7.6）。**表示名とは別にします。**
 
     表示名は訳されます。記録に書いたものが訳されると、**日本語で貯めた記録は、
@@ -146,8 +190,8 @@ const
   { 画面に出す名前です。**訳される側**なので、記録には書きません。
     The names shown on screen. **This is the side that gets translated**, so it
     is never written into a record. }
-  FIST_STANDARD_NAMES: array[TFistStandard] of string = (
-    '標準', 'ファンズワース', 'バグキー', '自分の過去');
+  FIST_STANDARD_NAMES: array[TFistStandard] of PString = (
+    @RsStandardStandard, @RsStandardFarnsworth, @RsStandardBug, @RsStandardOwn);
 
   { 鍵を使う前の記録に書かれていた日本語の名前です。**凍結します。**
 
@@ -171,8 +215,8 @@ const
     three things: the key, the name shown, and the frozen Japanese. }
   FIST_KEY_KEYS: array[0..3] of string = (
     'straight', 'paddle', 'bug', 'keyer');
-  FIST_KEY_NAMES: array[0..3] of string = (
-    '縦振り', 'パドル', 'バグ', 'エレキー');
+  FIST_KEY_NAMES: array[0..3] of PString = (
+    @RsKeyStraight, @RsKeyPaddle, @RsKeyBug, @RsKeyKeyer);
   FIST_KEY_LEGACY_NAMES: array[0..3] of string = (
     '縦振り', 'パドル', 'バグ', 'エレキー');
 
@@ -1009,14 +1053,14 @@ begin
   Kinds := ExpectedKinds(Text);
   if Length(Kinds) = 0 then
   begin
-    Result.Note := '課題文に送れる符号がありません。';
+    Result.Note := RsNoteNoCode;
     Exit;
   end;
   Env := ToneEnvelope(Samples, SampleRate, ToneHz);
   Spans := LongEnough(KeyedSpans(Env, SampleRate));
   if Length(Spans) = 0 then
   begin
-    Result.Note := '音が見つかりません。入力の音量を確かめてください。';
+    Result.Note := RsNoteNoTone;
     Exit;
   end;
   Tones := 0;
@@ -1030,9 +1074,7 @@ begin
       **Nothing is lined up when the counts differ**: carried on one out of
       step, a dit would be measured as a dah and the result scored as if it
       meant something. }
-    Result.Note := Format(
-      '課題文は符号 %0:d 個ですが、送られたのは %1:d 個です。' +
-      '抜けたか、くっついたようです。', [Tones, Length(Spans)]);
+    Result.Note := Format(RsNoteCountDiffers, [Tones, Length(Spans)]);
     Exit;
   end;
   Result := BuildMeasurement(ToneRuns(Env, SampleRate, Spans), Kinds, False);
@@ -1055,13 +1097,13 @@ begin
   Spans := LongEnough(KeyedSpans(Env, SampleRate));
   if Length(Spans) < 2 then
   begin
-    Result.Note := '音が足りません。';
+    Result.Note := RsNoteTooFew;
     Exit;
   end;
   Runs := ToneRuns(Env, SampleRate, Spans);
   if Length(Runs) < 2 then
   begin
-    Result.Note := '音が足りません。';
+    Result.Note := RsNoteTooFew;
     Exit;
   end;
 
@@ -1085,7 +1127,7 @@ begin
     Dit := Value / Count;
   if Dit <= 0 then
   begin
-    Result.Note := '短点の長さを見当づけられません。';
+    Result.Note := RsNoteNoDit;
     Exit;
   end;
 
@@ -1116,8 +1158,7 @@ begin
   end;
 
   Result := BuildMeasurement(Runs, Kinds, True);
-  Result.Note := '課題文なしで測りました。間隔の種別はしきい値で分けています。' +
-    '**参考値です。**';
+  Result.Note := RsNoteFree;
 end;
 
 function FistTargetFor(Standard: TFistStandard; const Own: TFistTarget): TFistTarget;
@@ -1189,7 +1230,7 @@ var
 begin
   Result := Text_;
   for I := Low(FIST_KEY_KEYS) to High(FIST_KEY_KEYS) do
-    if (FIST_KEY_KEYS[I] = Text_) or (FIST_KEY_NAMES[I] = Text_) or
+    if (FIST_KEY_KEYS[I] = Text_) or (FIST_KEY_NAMES[I]^ = Text_) or
        (FIST_KEY_LEGACY_NAMES[I] = Text_) then
       Exit(FIST_KEY_KEYS[I]);
 end;
@@ -1201,7 +1242,7 @@ begin
   Result := Key;
   for I := Low(FIST_KEY_KEYS) to High(FIST_KEY_KEYS) do
     if FIST_KEY_KEYS[I] = Key then
-      Exit(FIST_KEY_NAMES[I]);
+      Exit(FIST_KEY_NAMES[I]^);
 end;
 
 { 分離度を点数にします。**重なりが無くなる手前から、はっきり離れるまでを
@@ -1236,7 +1277,7 @@ begin
   Result := Default(TFistScore);
   if not M.Ok then
   begin
-    Result.Advice := '測れていません。' + M.Note;
+    Result.Advice := Format(RsAdviceNotMeasured, [M.Note]);
     Exit;
   end;
   Target := FistTargetFor(Standard, Own);
@@ -1332,23 +1373,19 @@ begin
     One piece of advice (FR-H.8): **five things to fix is no help in deciding
     which to begin with.** }
   if Result.Overall >= 90 then
-    Result.Advice := '直すところは見当たりません。速度を上げるより、' +
-      'この安定を保つことです。'
+    Result.Advice := RsAdviceKeep
   else
     case Lowest of
-      0: Result.Advice := '同じ速さで送ることを意識してください。' +
-           '短点の長さがばらついています。';
-      1: Result.Advice := '短点と長点の差をはっきりつけてください。' +
-           '長点は短点の ' + FormatFloat('0.#', Target.Ratio) + ' 倍が目安です。';
-      2: Result.Advice := '文字と文字の間を、符号の中の間より' +
-           'はっきり長く取ってください。写しやすさはここで決まります。';
-      3: Result.Advice := '間隔の比を基準に近づけてください' +
-           '（符号内 ' + FormatFloat('0.#', Target.IntraRatio) +
-           '・文字間 ' + FormatFloat('0.#', Target.CharRatio) +
-           '・語間 ' + FormatFloat('0.#', Target.WordRatio) + '）。';
+      0: Result.Advice := RsAdviceSpeed;
+      1: Result.Advice := Format(RsAdviceClarity,
+           [FormatFloat('0.#', Target.Ratio)]);
+      2: Result.Advice := RsAdviceSeparation;
+      3: Result.Advice := Format(RsAdviceSpacing,
+           [FormatFloat('0.#', Target.IntraRatio),
+            FormatFloat('0.#', Target.CharRatio),
+            FormatFloat('0.#', Target.WordRatio)]);
     else
-      Result.Advice := 'まず、読み取れる符号を送ることを目指してください。' +
-        '速さは後からついてきます。';
+      Result.Advice := RsAdviceReadable;
     end;
 end;
 

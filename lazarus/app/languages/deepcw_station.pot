@@ -91,6 +91,149 @@ msgstr ""
 msgid "DeepCW 診断情報の控え"
 msgstr ""
 
+#: deepcw.fist.rsadviceclarity
+#, object-pascal-format
+msgid "短点と長点の差をはっきりつけてください。長点は短点の %s 倍が目安です。"
+msgstr ""
+
+#: deepcw.fist.rsadvicekeep
+msgid "直すところは見当たりません。速度を上げるより、この安定を保つことです。"
+msgstr ""
+
+#: deepcw.fist.rsadvicenotmeasured
+#, object-pascal-format
+msgid "測れていません。%s"
+msgstr ""
+
+#: deepcw.fist.rsadvicereadable
+msgid "まず、読み取れる符号を送ることを目指してください。速さは後からついてきます。"
+msgstr ""
+
+#: deepcw.fist.rsadviceseparation
+msgid "文字と文字の間を、符号の中の間よりはっきり長く取ってください。写しやすさはここで決まります。"
+msgstr ""
+
+#: deepcw.fist.rsadvicespacing
+#, object-pascal-format
+msgid "間隔の比を基準に近づけてください（符号内 %0:s・文字間 %1:s・語間 %2:s）。"
+msgstr ""
+
+#: deepcw.fist.rsadvicespeed
+msgid "同じ速さで送ることを意識してください。短点の長さがばらついています。"
+msgstr ""
+
+#: deepcw.fist.rselementchar
+msgid "文字間"
+msgstr ""
+
+#: deepcw.fist.rselementdah
+msgid "長点"
+msgstr ""
+
+#: deepcw.fist.rselementdit
+msgid "短点"
+msgstr ""
+
+#: deepcw.fist.rselementintra
+msgid "符号内"
+msgstr ""
+
+#: deepcw.fist.rselementword
+msgid "語間"
+msgstr ""
+
+#: deepcw.fist.rskeybug
+msgid "バグ"
+msgstr ""
+
+#: deepcw.fist.rskeykeyer
+msgid "エレキー"
+msgstr ""
+
+#: deepcw.fist.rskeypaddle
+msgid "パドル"
+msgstr ""
+
+#: deepcw.fist.rskeystraight
+msgid "縦振り"
+msgstr ""
+
+#: deepcw.fist.rsnotecountdiffers
+#, object-pascal-format
+msgid "課題文は符号 %0:d 個ですが、送られたのは %1:d 個です。抜けたか、くっついたようです。"
+msgstr ""
+
+#: deepcw.fist.rsnotefree
+msgid "課題文なしで測りました。間隔の種別はしきい値で分けています。**参考値です。**"
+msgstr ""
+
+#: deepcw.fist.rsnotenocode
+msgid "課題文に送れる符号がありません。"
+msgstr ""
+
+#: deepcw.fist.rsnotenodit
+msgid "短点の長さを見当づけられません。"
+msgstr ""
+
+#: deepcw.fist.rsnotenotone
+msgid "音が見つかりません。入力の音量を確かめてください。"
+msgstr ""
+
+#: deepcw.fist.rsnotetoofew
+msgid "音が足りません。"
+msgstr ""
+
+#: deepcw.fist.rsstandardbug
+msgid "バグキー"
+msgstr ""
+
+#: deepcw.fist.rsstandardfarnsworth
+msgid "ファンズワース"
+msgstr ""
+
+#: deepcw.fist.rsstandardown
+msgid "自分の過去"
+msgstr ""
+
+#: deepcw.fist.rsstandardstandard
+msgctxt "deepcw.fist.rsstandardstandard"
+msgid "標準"
+msgstr ""
+
+#: deepcw.fistlog.rsfistrecord
+#, object-pascal-format
+msgid "%0:s  %1:s  総合 %2:.0f（速度 %3:.0f / 短長 %4:.0f / 区切り %5:.0f / 間隔 %6:.0f）  %7:.1f WPM  %8:s"
+msgstr ""
+
+#: deepcw.fistlog.rsfistreference
+msgid "（参考値）"
+msgstr ""
+
+#: deepcw.fistlog.rsitemclarity
+msgid "短長の明瞭"
+msgstr ""
+
+#: deepcw.fistlog.rsitemcopyability
+msgid "写しやすさ"
+msgstr ""
+
+#: deepcw.fistlog.rsitemoverall
+msgctxt "deepcw.fistlog.rsitemoverall"
+msgid "総合"
+msgstr ""
+
+#: deepcw.fistlog.rsitemseparation
+msgid "区切りの明瞭"
+msgstr ""
+
+#: deepcw.fistlog.rsitemspacing
+msgid "間隔の正確"
+msgstr ""
+
+#: deepcw.fistlog.rsitemspeed
+msgid "速度の安定"
+msgstr ""
+
 #: deepcw.journal.rsjournalcannotwrite
 #, object-pascal-format
 msgid "記録を書けません: %s"
@@ -141,6 +284,42 @@ msgstr ""
 #: deepcw.platform.rslicencefile
 #, object-pascal-format
 msgid "%0:s（%1:d バイト）"
+msgstr ""
+
+#: deepcw.practice.rsexercisecallsigns
+msgid "呼出符号"
+msgstr ""
+
+#: deepcw.practice.rsexerciseletters
+msgid "欧文（A〜Z）"
+msgstr ""
+
+#: deepcw.practice.rsexercisemixed
+msgid "欧文と数字"
+msgstr ""
+
+#: deepcw.practice.rsexerciseqso
+msgid "QSO 定型文"
+msgstr ""
+
+#: deepcw.practice.rsmistakeadded
+#, object-pascal-format
+msgid "%s を足した"
+msgstr ""
+
+#: deepcw.practice.rsmistakecount
+#, object-pascal-format
+msgid "%0:s（%1:d 回）"
+msgstr ""
+
+#: deepcw.practice.rsmistakemissed
+#, object-pascal-format
+msgid "%s を落とした"
+msgstr ""
+
+#: deepcw.practice.rsmistakeseparator
+msgctxt "deepcw.practice.rsmistakeseparator"
+msgid "、"
 msgstr ""
 
 #: deepcw.recorder.rsreccannotstart
@@ -593,6 +772,7 @@ msgid "※ 10 分を超えた分は保持から落ちました。最後の 10 �
 msgstr ""
 
 #: frmmain.rsftoverall
+msgctxt "frmmain.rsftoverall"
 msgid "総合"
 msgstr ""
 
@@ -1279,6 +1459,7 @@ msgid "文字が決まるまで"
 msgstr ""
 
 #: frmmain.rsrxsettlenormal
+msgctxt "frmmain.rsrxsettlenormal"
 msgid "標準"
 msgstr ""
 

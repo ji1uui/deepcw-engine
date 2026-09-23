@@ -81,9 +81,27 @@ type
   );
   TFistItems = set of TFistItem;
 
+resourcestring
+  { 推移の項目名と、記録 1 件の表示（要件 FR-H.9・NFR-7.6）。**表示の側だけ
+    です。**`fist.csv` に書く欄名は別で、訳しません。
+    Item names of the trend and how one record is shown (requirements FR-H.9,
+    NFR-7.6). **Only what is shown**: the column names written to `fist.csv`
+    are separate and never translated. }
+  RsItemOverall = '総合';
+  RsItemSpeed = '速度の安定';
+  RsItemClarity = '短長の明瞭';
+  RsItemSeparation = '区切りの明瞭';
+  RsItemSpacing = '間隔の正確';
+  RsItemCopyability = '写しやすさ';
+  RsFistRecord = '%0:s  %1:s  総合 %2:.0f（速度 %3:.0f / 短長 %4:.0f / 区切り %5:.0f / 間隔 %6:.0f）  %7:.1f WPM  %8:s';
+  RsFistReference = '（参考値）';
+
 const
-  FIST_ITEM_NAMES: array[TFistItem] of string = (
-    '総合', '速度の安定', '短長の明瞭', '区切りの明瞭', '間隔の正確', '写しやすさ');
+  { 表示名は `resourcestring` を指します（`FIST_STANDARD_NAMES` と同じ）。
+    The names shown point at `resourcestring`s (as `FIST_STANDARD_NAMES` does). }
+  FIST_ITEM_NAMES: array[TFistItem] of PString = (
+    @RsItemOverall, @RsItemSpeed, @RsItemClarity, @RsItemSeparation,
+    @RsItemSpacing, @RsItemCopyability);
   FIST_ALL_ITEMS = [fiOverall, fiSpeed, fiClarity, fiSeparation, fiSpacing,
     fiCopyability];
 
@@ -363,13 +381,13 @@ end;
 
 function FistRecordCaption(const Item: TFistRecord): string;
 begin
-  Result := Format('%0:s  %1:s  総合 %2:.0f（速度 %3:.0f / 短長 %4:.0f / 区切り %5:.0f / 間隔 %6:.0f）  %7:.1f WPM  %8:s',
+  Result := Format(RsFistRecord,
     [FormatDateTime('mm"/"dd" "hh":"nn', Item.When_), FistKeyCaption(Item.Key),
      Item.Score.Overall, Item.Score.Speed, Item.Score.Clarity,
      Item.Score.Separation, Item.Score.Spacing,
-     Item.Measurement.EffectiveWpm, FIST_STANDARD_NAMES[Item.Standard]]);
+     Item.Measurement.EffectiveWpm, FIST_STANDARD_NAMES[Item.Standard]^]);
   if Item.Reference then
-    Result := Result + '（参考値）';
+    Result := Result + RsFistReference;
 end;
 
 

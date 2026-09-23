@@ -321,7 +321,7 @@ begin
   begin
     if not (Which in FShown) then
       Continue;
-    Width_ := Target.TextWidth(FIST_ITEM_NAMES[Which]);
+    Width_ := Target.TextWidth(FIST_ITEM_NAMES[Which]^);
     if X + Width_ + 3 * FUnit > PlotRight then
       Break;
     Target.Brush.Color := ItemColor(Which);
@@ -329,7 +329,7 @@ begin
     Target.FillRect(X, Y + 5, X + FUnit, Y + 9);
     Target.Brush.Style := bsClear;
     Target.Font.Color := Font.Color;
-    Target.TextOut(X + FUnit + 4, Y, FIST_ITEM_NAMES[Which]);
+    Target.TextOut(X + FUnit + 4, Y, FIST_ITEM_NAMES[Which]^);
     Inc(X, FUnit + 6 + Width_ + FUnit);
   end;
 end;
