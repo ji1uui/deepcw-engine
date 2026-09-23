@@ -20,7 +20,7 @@ uses
   { 録音は別スレッドで行うため、スレッド支援を最初に取り込みます。
     Capture runs on its own thread, so thread support comes first. }
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  SysUtils, Math, DeepCW.Types, DeepCW.Audio;
+  SysUtils, Math, DeepCW.Types, DeepCW.Audio, DeepCW.Platform;
 
 { 指定した装置から少しのあいだ録音し、届いた音の大きさを報告します。
   「音が届いているか」の表示（要件 FR-A.3）のしきい値を、思い込みではなく
@@ -91,12 +91,12 @@ begin
   ListenDevice := AUDIO_DEFAULT_DEVICE;
   ListenRate := 8000;
   Index := 1;
-  while Index <= ParamCount do
+  while Index <= CommandLineArgCount do
   begin
-    Key := ParamStr(Index);
+    Key := CommandLineArg(Index);
     Value := '';
-    if Index < ParamCount then
-      Value := ParamStr(Index + 1);
+    if Index < CommandLineArgCount then
+      Value := CommandLineArg(Index + 1);
     if Key = '--abi' then
     begin
       Verbose := True;

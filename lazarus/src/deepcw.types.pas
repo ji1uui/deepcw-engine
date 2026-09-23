@@ -81,6 +81,13 @@ function ResourceDirectory: string;
 
 implementation
 
+uses
+  { 実行ファイルの置き場所は、OS の境界（`DeepCW.Platform`）から受け取ります
+    （Windows で UTF-8 にするため。付録 BQ）。
+    Where the executable is comes from the platform boundary
+    (`DeepCW.Platform`), which makes it UTF-8 on Windows (appendix BQ). }
+  DeepCW.Platform;
+
 function ClampInt(Value, Low, High: Integer): Integer;
 begin
   if Value < Low then Result := Low
@@ -99,7 +106,7 @@ function ResourceDirectory: string;
 var
   Base, Contents: string;
 begin
-  Base := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
+  Base := IncludeTrailingPathDelimiter(ExtractFilePath(ExecutablePath));
   Contents := ExtractFilePath(ExcludeTrailingPathDelimiter(Base));
   if (ExtractFileName(ExcludeTrailingPathDelimiter(Base)) = 'MacOS') and
      FileExists(Contents + 'Info.plist') then
@@ -116,7 +123,7 @@ var
   Candidates: array[0..4] of string;
   I: Integer;
 begin
-  Base := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
+  Base := IncludeTrailingPathDelimiter(ExtractFilePath(ExecutablePath));
   { `.app` の中では、実行ファイルの隣ではなく `Contents/Resources/` に在ります。
     入れ物の外ではここは実行ファイルの隣と同じなので、候補が 1 つ増えるだけです。
     Inside a `.app` these live in `Contents/Resources/`, not beside the

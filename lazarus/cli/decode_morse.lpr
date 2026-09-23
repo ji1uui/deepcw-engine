@@ -9,7 +9,8 @@ program decode_morse;
 {$mode objfpc}{$H+}
 
 uses
-  SysUtils, DeepCW.Types, DeepCW.Onnx, DeepCW.Decoder, DeepCW.Wave;
+  SysUtils, DeepCW.Types, DeepCW.Onnx, DeepCW.Decoder, DeepCW.Wave,
+  DeepCW.Platform;
 
 procedure WriteUsage;
 begin
@@ -35,9 +36,9 @@ var
   Started: TDateTime;
 begin
   Index := 1;
-  while Index <= ParamCount do
+  while Index <= CommandLineArgCount do
   begin
-    Key := ParamStr(Index);
+    Key := CommandLineArg(Index);
     if (Key = '--help') or (Key = '-h') then
     begin
       WriteUsage;
@@ -57,8 +58,8 @@ begin
     end;
 
     Value := '';
-    if Index < ParamCount then
-      Value := ParamStr(Index + 1);
+    if Index < CommandLineArgCount then
+      Value := CommandLineArg(Index + 1);
     if Value = '' then
     begin
       WriteLn(StdErr, 'Missing value for ', Key);

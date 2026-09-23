@@ -86,6 +86,14 @@ echo
 # ---- 音声装置の要らない検証 ----
 echo "== 数値と部品 / numeric and component checks =="
 step "dsp_check（数値・記録・読み取り・待ち符号）" ./cli/dsp_check
+# 命令行の道具が、日本語を UTF-8 のまま出し、日本語の名前の場所と引数を扱えること
+# （未解決 #24、付録 BQ）。**化けるのは Windows ですが、同じ試験をここでも走らせ、
+# 検査そのものが壊れていないことを毎回確かめます。**
+# The command-line tools write Japanese out as UTF-8 and handle Japanese folder
+# and argument names (open question #24, appendix BQ). **The garbling is a
+# Windows matter, but the same test runs here so that the check itself is known
+# to work every time.**
+step "日本語の出力・置き場所・引数（命令行）" ./tools/text_output_test.sh
 if command -v xvfb-run >/dev/null 2>&1; then
   step "gui_probe（画面部品）" gui_env xvfb-run -a ./app/gui_probe
 else

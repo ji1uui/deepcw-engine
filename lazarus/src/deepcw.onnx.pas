@@ -277,6 +277,13 @@ function DefaultOnnxRuntimeNames: TStringArray;
 
 implementation
 
+uses
+  { 実行ファイルの置き場所は、OS の境界（`DeepCW.Platform`）から受け取ります
+    （Windows で UTF-8 にするため。付録 BQ）。
+    Where the executable is comes from the platform boundary
+    (`DeepCW.Platform`), which makes it UTF-8 on Windows (appendix BQ). }
+  DeepCW.Platform;
+
 var
   GHandle: TLibHandle = NilHandle;
   GApi: POrtApi = nil;
@@ -357,7 +364,7 @@ begin
     begin
       if GetEnvironmentVariable('DEEPCW_ONNXRUNTIME') <> '' then
         Candidates.Add(GetEnvironmentVariable('DEEPCW_ONNXRUNTIME'));
-      ExeDir := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
+      ExeDir := IncludeTrailingPathDelimiter(ExtractFilePath(ExecutablePath));
       Names := DefaultOnnxRuntimeNames;
       for Name in Names do
         Candidates.Add(ExeDir + Name);

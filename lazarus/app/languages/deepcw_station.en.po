@@ -803,7 +803,7 @@ msgstr "Overall"
 #: frmmain.rsftoverallline
 #, object-pascal-format
 msgid "総合 %0:.0f 点（%1:s の基準）"
-msgstr "%0:.0f overall (%1:s standard)"
+msgstr "%0:.0f overall (basis: %1:s)"
 
 #: frmmain.rsftparts
 #, object-pascal-format
@@ -818,7 +818,7 @@ msgstr "  Readable %0:3.0f (character error %1:.1f%%)"
 #: frmmain.rsftrecords
 #, object-pascal-format
 msgid "%0:d 件 ／ 自己ベスト 総合 %1:.0f 点 ／ %2:s"
-msgstr "%0:d sessions / best %1:.0f overall / %2:s"
+msgstr "Sessions: %0:d / best %1:.0f overall / %2:s"
 
 #: frmmain.rsftrunning
 #, object-pascal-format
@@ -863,7 +863,7 @@ msgstr "Press New text, then Start with the rig's monitor tone reaching the inpu
 #: frmmain.rsftstreak
 #, object-pascal-format
 msgid "%d 日続いています"
-msgstr "%d days in a row"
+msgstr "Days in a row: %d"
 
 #: frmmain.rsfttab
 msgid "送信訓練"
@@ -1224,7 +1224,7 @@ msgstr "Speed (WPM)"
 #: frmmain.rsrate
 #, object-pascal-format
 msgid "直近 1 時間: %0:d 局 ／ 記録全体: %1:d 局"
-msgstr "Last hour: %0:d stations / whole log: %1:d"
+msgstr "Stations, last hour: %0:d / whole log: %1:d"
 
 #: frmmain.rsreceivestarted
 msgid "受信を開始しました。"
@@ -1370,7 +1370,7 @@ msgstr "Clear"
 #: frmmain.rsrxcopied
 #, object-pascal-format
 msgid "受信テキスト %d 文字をコピーしました。"
-msgstr "Copied %d characters of received text."
+msgstr "Copied the received text (length %d)."
 
 #: frmmain.rsrxcopy
 msgid "コピー"

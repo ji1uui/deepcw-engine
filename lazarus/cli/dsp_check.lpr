@@ -3857,7 +3857,7 @@ begin
     だからです。試験が済んだら片付けます。
     Put **beside the test executable**, that being where `LicenceDirectory`
     looks; cleared away afterwards. }
-  Beside := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
+  Beside := IncludeTrailingPathDelimiter(ExtractFilePath(CommandLineArg(0)));
   Folder := Beside + 'licences' + PathDelim;
 
   { [1] 置き場所が無いときは、無いと言うこと。**在るふりをすると、配っても
@@ -4844,43 +4844,49 @@ begin
   WriteLn('PROBE-HEX-FMT ', Hex(Built));
   WriteLn('PROBE-OUT-LIT ', SAMPLE);
   WriteLn('PROBE-OUT-FMT ', Built);
+  { 実行ファイルの置き場所と、2 番目の引数。**日本語の名前の場所に置いて、
+    日本語の引数を渡して**確かめます（`tools/text_output_test.sh`）。
+    Where the executable is, and the second argument: checked **from a folder
+    with a Japanese name, with a Japanese argument** (`text_output_test.sh`). }
+  WriteLn('PROBE-EXE ', ExecutablePath);
+  WriteLn('PROBE-ARG ', CommandLineArg(2));
   Flush(Output);
 end;
 
 begin
   MetadataPath := '';
-  if ParamStr(1) = '--text-probe' then
+  if CommandLineArg(1) = '--text-probe' then
   begin
     TextProbe;
     Halt(0);
   end;
-  if ParamStr(1) = '--record-until-killed' then
+  if CommandLineArg(1) = '--record-until-killed' then
   begin
-    RecordUntilKilled(ParamStr(2));
+    RecordUntilKilled(CommandLineArg(2));
     Halt(0);
   end;
-  if ParamStr(1) = '--fist-wav' then
+  if CommandLineArg(1) = '--fist-wav' then
   begin
-    WriteFistWav(ParamStr(2), ParamStr(3),
-      ParamStr(4) + ParamStr(5) + ParamStr(6));
+    WriteFistWav(CommandLineArg(2), CommandLineArg(3),
+      CommandLineArg(4) + CommandLineArg(5) + CommandLineArg(6));
     Halt(0);
   end;
-  if ParamStr(1) = '--wav-check' then
+  if CommandLineArg(1) = '--wav-check' then
   begin
-    CheckWavFile(ParamStr(2));
+    CheckWavFile(CommandLineArg(2));
     Halt(0);
   end;
-  if ParamStr(1) = '--journal-until-killed' then
+  if CommandLineArg(1) = '--journal-until-killed' then
   begin
-    RunUntilKilled(ParamStr(2));
+    RunUntilKilled(CommandLineArg(2));
     Halt(0);
   end;
-  if ParamStr(1) = '--log-until-killed' then
+  if CommandLineArg(1) = '--log-until-killed' then
   begin
-    LogUntilKilled(ParamStr(2));
+    LogUntilKilled(CommandLineArg(2));
     Halt(0);
   end;
-  if ParamCount >= 1 then MetadataPath := ParamStr(1);
+  if CommandLineArgCount >= 1 then MetadataPath := CommandLineArg(1);
   if MetadataPath = '' then MetadataPath := LocateDataFile('model.onnx.json');
 
   Meta := TDeepCWMetadata.Create;

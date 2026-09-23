@@ -149,7 +149,59 @@ function AsLines(const Text_: string): string;
   translations** (lesson 10.11). One place now. }
 function LanguageDirectory: string;
 
+{ この実行ファイルの置き場所（UTF-8）。**`ParamStr(0)` の代わりに使います。**
+
+  Windows の FPC 3.2.2 は `ParamStr(0)` を `GetModuleFileNameA`（ANSI）から
+  作ります。一方この木は、画面のアプリ（LCL）でも命令行の道具（この単位の
+  初期化）でも、文字列を UTF-8 として扱います。**ANSI のバイト列を UTF-8 と
+  読むことになり、置き場所に ASCII 以外の文字（日本語の利用者名など）があると
+  別の場所を指します。**モデル・ライブラリ・訳を探す起点がここなので、見つから
+  なくなります（未解決 #24、付録 BQ）。Windows では `GetModuleFileNameW` から
+  UTF-8 にします。他の OS では `ParamStr(0)` のままです（もともと UTF-8）。
+
+  Where this executable is (UTF-8). **Use it instead of `ParamStr(0)`.**
+
+  On Windows FPC 3.2.2 builds `ParamStr(0)` from `GetModuleFileNameA` (ANSI),
+  while this tree treats strings as UTF-8 -- the GUI through the LCL, the
+  command-line tools through this unit's initialization. **ANSI bytes read as
+  UTF-8 point somewhere else when the location holds anything outside ASCII**
+  (a Japanese user name, say), and this is where the model, the libraries and
+  the translations are searched from (open question #24, appendix BQ). On
+  Windows it comes from `GetModuleFileNameW`; elsewhere it is `ParamStr(0)`,
+  which is UTF-8 already. }
+function ExecutablePath: string;
+
+{ 命令行の引数（UTF-8）と、その数。**`ParamStr`・`ParamCount` の代わりに
+  使います。**Windows の `ParamStr` も ANSI（`GetCommandLineA`）なので、
+  `ExecutablePath` と同じ理由で、日本語のファイル名を渡すと開けません。
+  Windows では `GetCommandLineW` を `CommandLineToArgvW` で分けます。**数が
+  `ParamCount` と食い違ったら、RTL の分け方に戻します**（LazUtils の
+  `ParamStrUTF8` と同じ用心）。0 番は `ExecutablePath` です。
+
+  A command-line argument (UTF-8), and how many there are. **Use them instead
+  of `ParamStr` and `ParamCount`.** On Windows `ParamStr` is ANSI too
+  (`GetCommandLineA`), so for the same reason as `ExecutablePath` a Japanese
+  file name passed in cannot be opened. On Windows `GetCommandLineW` is split
+  with `CommandLineToArgvW`; **should the count disagree with `ParamCount`, the
+  RTL's split is used instead** (the same caution as LazUtils'
+  `ParamStrUTF8`). Number 0 is `ExecutablePath`. }
+function CommandLineArg(Index: Integer): string;
+function CommandLineArgCount: Integer;
+
 implementation
+
+{$IFDEF WINDOWS}
+uses
+  Windows;
+
+function CommandLineToArgvW(CmdLine: PWideChar; out NumArgs: LongInt): PPWideChar;
+  stdcall; external 'shell32.dll' name 'CommandLineToArgvW';
+{$ENDIF}
+
+var
+  { 起動のときに 1 度だけ読みます。/ Read once, at start-up. }
+  GExecutablePath: string;
+  GArgs: array of string;
 
 resourcestring
   { 同梱の許諾条項の 1 行（要件 NFR-8.2・NFR-7.6）。
@@ -234,7 +286,7 @@ var
   Candidates: array[0..3] of string;
   I: Integer;
 begin
-  Base := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
+  Base := IncludeTrailingPathDelimiter(ExtractFilePath(ExecutablePath));
   { 配布物では実行ファイルの隣（`.app` では `Contents/Resources/`）。
     開発の木では 1 つ上（`lazarus/app/` から
     `lazarus/`）も見ます。`LocateDataFile` と同じ考え方です。
@@ -293,6 +345,60 @@ begin
   Result.Sort;
 end;
 
+function ExecutablePath: string;
+begin
+  Result := GExecutablePath;
+end;
+
+function CommandLineArgCount: Integer;
+begin
+  Result := ParamCount;
+end;
+
+function CommandLineArg(Index: Integer): string;
+begin
+  if Index = 0 then
+    Exit(GExecutablePath);
+  if (Index >= 1) and (Index < Length(GArgs)) then
+    Result := GArgs[Index]
+  else
+    Result := ParamStr(Index);
+end;
+
+procedure ReadStartUp;
+{$IFDEF WINDOWS}
+var
+  Buffer: array[0..32767] of WideChar;
+  Length_: DWORD;
+  Wide: UnicodeString;
+  Argv: PPWideChar;
+  Count, I: LongInt;
+{$ENDIF}
+begin
+  GExecutablePath := ParamStr(0);
+  GArgs := nil;
+  {$IFDEF WINDOWS}
+  Length_ := GetModuleFileNameW(0, @Buffer[0], Length(Buffer));
+  if (Length_ > 0) and (Length_ < Length(Buffer)) then
+  begin
+    SetString(Wide, PWideChar(@Buffer[0]), Length_);
+    GExecutablePath := UTF8Encode(Wide);
+  end;
+  Argv := CommandLineToArgvW(GetCommandLineW, Count);
+  if Argv <> nil then
+  try
+    if Count - 1 = ParamCount then
+    begin
+      SetLength(GArgs, Count);
+      for I := 0 to Count - 1 do
+        GArgs[I] := UTF8Encode(UnicodeString(Argv[I]));
+    end;
+  finally
+    LocalFree(HLOCAL(Argv));
+  end;
+  {$ENDIF}
+end;
+
 function MemoryUseCaption(const Use: TMemoryUse): string;
 begin
   case Use.Kind of
@@ -303,4 +409,22 @@ begin
   end;
 end;
 
+initialization
+  { **Windows では、RTL の既定の符号系を UTF-8 にします**（未解決 #24、付録 BQ）。
+    既定のままだと 1252 などの ANSI で、`Format` の結果が「1252 の文字列」と
+    札を付けられます。中身は UTF-8 のバイト列なので、出力の段で 1252 → UTF-8 と
+    変換されて化けていました（CI で実測）。画面のアプリは LCL（LazUtils の
+    `fpcadds`）が同じことをしているので、命令行の道具だけが化けていました。
+    ファイル名の符号系も揃えます。
+    **On Windows the RTL's default code page becomes UTF-8** (open question #24,
+    appendix BQ). Left at an ANSI page such as 1252, a `Format` result is
+    labelled as 1252 while holding UTF-8 bytes, and the output stage converted
+    it from 1252 to UTF-8 and garbled it (measured in CI). The GUI escaped this
+    because the LCL (LazUtils' `fpcadds`) does the same; only the command-line
+    tools were garbled. The file-name code page is set to match. }
+  {$IFDEF WINDOWS}
+  SetMultiByteConversionCodePage(CP_UTF8);
+  SetMultiByteRTLFileSystemCodePage(CP_UTF8);
+  {$ENDIF}
+  ReadStartUp;
 end.

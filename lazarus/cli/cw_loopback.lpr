@@ -17,7 +17,7 @@ program cw_loopback;
 
 uses
   SysUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Morse, DeepCW.Decoder,
-  DeepCW.Wave;
+  DeepCW.Wave, DeepCW.Platform;
 
 const
   MESSAGES: array[0..5] of string = (
@@ -58,10 +58,10 @@ end;
 
 begin
   Index := 1;
-  while Index < ParamCount do
+  while Index < CommandLineArgCount do
   begin
-    Key := ParamStr(Index);
-    Value := ParamStr(Index + 1);
+    Key := CommandLineArg(Index);
+    Value := CommandLineArg(Index + 1);
     case Key of
       '--model': ModelPath := Value;
       '--metadata': MetadataPath := Value;

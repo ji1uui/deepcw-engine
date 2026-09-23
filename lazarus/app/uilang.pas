@@ -121,11 +121,11 @@ var
   Arg: string;
 begin
   Result := '';
-  for I := 1 to ParamCount do
+  for I := 1 to CommandLineArgCount do
   begin
-    Arg := ParamStr(I);
-    if ((Arg = '-l') or (LowerCase(Arg) = '--lang')) and (I < ParamCount) then
-      Exit(ParamStr(I + 1));
+    Arg := CommandLineArg(I);
+    if ((Arg = '-l') or (LowerCase(Arg) = '--lang')) and (I < CommandLineArgCount) then
+      Exit(CommandLineArg(I + 1));
     if Copy(LowerCase(Arg), 1, 7) = '--lang=' then
       Exit(Copy(Arg, 8, Length(Arg)));
   end;

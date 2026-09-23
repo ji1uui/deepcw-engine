@@ -1072,7 +1072,7 @@ begin
 end;
 
 begin
-  OutDir := ParamStr(1);
+  OutDir := CommandLineArg(1);
   if OutDir = '' then
     OutDir := GetTempDir;
   Rate := 8000;

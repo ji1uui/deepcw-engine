@@ -13,7 +13,7 @@ program cw_stream;
 
 uses
   SysUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave, DeepCW.Decoder,
-  DeepCW.Morse, DeepCW.Stream;
+  DeepCW.Morse, DeepCW.Stream, DeepCW.Platform;
 
 const
   { 要件 NFR-1.1・NFR-1.2 の目標。**数字をここに名前で置くのは、判定と表示が
@@ -80,9 +80,9 @@ end;
 
 begin
   Index := 1;
-  while Index <= ParamCount do
+  while Index <= CommandLineArgCount do
   begin
-    Key := ParamStr(Index);
+    Key := CommandLineArg(Index);
     if Key = '--quiet' then
     begin
       Quiet := True;
@@ -102,8 +102,8 @@ begin
       Continue;
     end;
     Value := '';
-    if Index < ParamCount then
-      Value := ParamStr(Index + 1);
+    if Index < CommandLineArgCount then
+      Value := CommandLineArg(Index + 1);
     case Key of
       '--model': ModelPath := Value;
       '--metadata': MetadataPath := Value;

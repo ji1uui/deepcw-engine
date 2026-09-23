@@ -3879,12 +3879,12 @@ var
   Key, Value: string;
 begin
   Index := 1;
-  while Index <= ParamCount do
+  while Index <= CommandLineArgCount do
   begin
-    Key := ParamStr(Index);
+    Key := CommandLineArg(Index);
     Value := '';
-    if Index < ParamCount then
-      Value := ParamStr(Index + 1);
+    if Index < CommandLineArgCount then
+      Value := CommandLineArg(Index + 1);
     case Key of
       '--model': ModelPath := Value;
       '--metadata': MetadataPath := Value;

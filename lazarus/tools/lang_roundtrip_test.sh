@@ -98,6 +98,61 @@ if [ "$OK" -ne 0 ]; then
   exit 1
 fi
 
+# **英語で起動し、既定でない選択肢を覚えている状態でも見ます**（付録 BQ）。
+# 上の走りは日本語で起動し、選択肢も既定のままです。**設定を読むあいだに書かれる
+# 文言**（「課題文なしで送る」の案内など）は、既定のままでは書かれず、日本語で
+# 起動すれば切替の `ApplyTexts` が出し直してしまうので、どちらの誤りも映りません。
+# 覚えた言語（`--lang` ではなく設定ファイル）から英語で起動させ、切り替える前に
+# 見させます（`ReportLanguage` の頭）。
+# **It is also run started in English, with non-default options remembered**
+# (appendix BQ). The run above starts in Japanese with every option at its
+# default: **words written while the settings are read** (the "send freely"
+# note, for one) are never written at the defaults, and a Japanese start lets the
+# switch's `ApplyTexts` redo them, so neither fault shows. This starts in English
+# from the remembered language (the settings file, not `--lang`) and is looked
+# at before any switching (the head of `ReportLanguage`).
+# 既定でない選択肢を覚えた設定を、日本語と英語の 2 通りの起動で使います。
+# **日本語で起動すれば切替の出し直しの漏れが、英語で起動すれば起動の順序の
+# 誤りが映ります。**片方だけでは、もう片方を見逃します（付録 BQ）。
+# The settings with non-default options are used for two starts, Japanese and
+# English. **A Japanese start shows a switch that fails to redo something; an
+# English start shows a start-up ordering fault.** Either alone misses the
+# other (appendix BQ).
+states_config() {
+  mkdir -p "$1"
+  cat >"$1/DeepCW Morse Station.cfg" <<CFG
+[receive]
+mode=2
+bandwidth=2
+[practice]
+kind=2
+[fist]
+kind=1
+key=1
+standard=2
+free=1
+[ui]
+language=$2
+CFG
+}
+run_states() {
+  states_config "$WORK/config-$1" "$1"
+  if XDG_CONFIG_HOME="$WORK/config-$1" DEEPCW_LANG_CHECK=1 \
+     xvfb-run -a "$WORK/deepcw_station" >"$WORK/out-$1.txt" 2>/dev/null; then
+    RUN_OK=0
+  else
+    RUN_OK=1
+  fi
+  grep -v -e '^ALSA lib' -e '^Cannot connect' -e '^jack server' -e '^JackShm' \
+    "$WORK/out-$1.txt" | sed "s/^/  （$2）/" || true
+  if [ "$RUN_OK" -ne 0 ]; then
+    echo "$2 の文言に問題があります"
+    exit 1
+  fi
+}
+run_states ja "選択肢を変えて日本語で起動"
+run_states en "選択肢を変えて英語で起動"
+
 # **命令行の `--lang` は 1 度きりです**（`UiLangFromCommandLine`）。覚えてある
 # 言語を上書きしないこと、覚えてあるものが無ければ何も書かないことを見ます。
 # 設定ファイルが書かれたことも確かめます。**書かれていなければ、この確認は

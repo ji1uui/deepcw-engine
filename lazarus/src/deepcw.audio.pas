@@ -253,6 +253,13 @@ function CheckStructureLayout(out Report: string): Boolean;
 
 implementation
 
+uses
+  { 実行ファイルの置き場所は、OS の境界（`DeepCW.Platform`）から受け取ります
+    （Windows で UTF-8 にするため。付録 BQ）。
+    Where the executable is comes from the platform boundary
+    (`DeepCW.Platform`), which makes it UTF-8 on Windows (appendix BQ). }
+  DeepCW.Platform;
+
 resourcestring
   { 装置を待つあいだの短い札（要件 NFR-4.4・NFR-7.6）。画面のスレッドで読みます。
     The short label while waiting for the device (NFR-4.4, NFR-7.6); read on
@@ -437,7 +444,7 @@ begin
     begin
       if GetEnvironmentVariable('DEEPCW_PORTAUDIO') <> '' then
         Candidates.Add(GetEnvironmentVariable('DEEPCW_PORTAUDIO'));
-      ExeDir := IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
+      ExeDir := IncludeTrailingPathDelimiter(ExtractFilePath(ExecutablePath));
       Names := DefaultPortAudioNames;
       for Name in Names do
         Candidates.Add(ExeDir + Name);

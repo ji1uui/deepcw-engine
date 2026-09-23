@@ -606,6 +606,18 @@ type
 
     function ConfigFileName: string;
     procedure LoadSettings;
+    { 設定ファイルに覚えてある言語の鍵。無ければ空です。**画面を組む前に**読む
+      ためのものです（`LoadSettings` は画面の部品を触るので、その前には呼べません）。
+      The language key remembered in the settings file, or empty. **Read before
+      the screen is built** (`LoadSettings` touches controls, so it cannot run
+      that early). }
+    function RememberedUiLang: string;
+    { 診断情報の記録の 1 行か。**起きたときの言語のまま残る記録**なので、切替の
+      検査から除きます（状態欄と同じ扱い。付録 BQ）。
+      Whether a line is a diagnostics record. **A record stays in the language it
+      was made in**, so the switch checks leave it out (as with the status bar;
+      appendix BQ). }
+    function IsDiagnosticRecord(const Line: string): Boolean;
     procedure SaveSettings;
     procedure MarkSettingsDirty;
     procedure ApplySettings(Sender: TObject);
@@ -1413,6 +1425,21 @@ begin
   FJournal := TTranscriptJournal.Create(JournalDirectory);
   FLog := TContactLog.Create(LogFileName);
   FMode := rmContact;
+
+  { **言語は、画面を組む前に決めて入れます**（要件 NFR-7.6、付録 BQ）。
+    画面を組み、設定を読むあいだに、選択肢の手続き（`FtOptionsChanged` など）が
+    文言を書き込みます。言語をそのあとで入れると、**書き込まれた文言は起動した
+    ときの日本語のまま残ります**——「課題文なしで送る」を覚えていると、英語でも
+    課題文の欄が日本語でした（実画面で見つけた）。先に入れれば、読み込みの途中で
+    書かれる文言はすべて、最初から選んだ言語で出ます。
+    **The language is decided and put in before the screen is built**
+    (requirement NFR-7.6, appendix BQ). While the screen is built and the
+    settings read, option handlers (`FtOptionsChanged` and others) write words
+    into it. Put in afterwards, **whatever they wrote stays in the Japanese it
+    started in** -- with "send freely" remembered, the exercise box was Japanese
+    even in English (found on the real screen). Put in first, everything written
+    during loading comes out in the chosen language from the start. }
+  UseUiLang(StartingUiLang(RememberedUiLang));
 
   BuildUI;
   LoadSettings;
@@ -3760,6 +3787,32 @@ begin
   Result := GetAppConfigFile(False);
 end;
 
+function TMainForm.IsDiagnosticRecord(const Line: string): Boolean;
+begin
+  Result := (FDiagnostics <> nil) and (FDiagnostics.IndexOf(Line) >= 0);
+end;
+
+function TMainForm.RememberedUiLang: string;
+var
+  Ini: TIniFile;
+begin
+  Result := '';
+  if not FileExists(ConfigFileName) then
+    Exit;
+  try
+    Ini := TIniFile.Create(ConfigFileName);
+    try
+      Result := Ini.ReadString('ui', 'language', '');
+    finally
+      Ini.Free;
+    end;
+  except
+    { 読めなければ既定の決め方に任せます。設定の読み込みで改めて知らせます。
+      Unreadable, the usual decision applies; loading the settings reports it. }
+    Result := '';
+  end;
+end;
+
 procedure TMainForm.LoadSettings;
 var
   Ini: TIniFile;
@@ -4064,6 +4117,10 @@ begin
     Added in version 2.66: the transmit summary, the rate, the waterfall note. }
   UpdateTxSummary;
   UpdateRate(True);
+  { 「課題文なしで送る」の案内は、課題文の欄に**文言として**書かれます。
+    The "send freely" notice is written **as text** into the exercise box. }
+  if (FFtFree <> nil) and FFtFree.Checked and (FFtText <> nil) then
+    FFtText.Text := RsFtFreeText;
   if (FRxWaterfall <> nil) and (FWfMessage <> nil) then
   begin
     FRxWaterfall.Message_ := FWfMessage^;
@@ -4121,10 +4178,18 @@ begin
       Exit(True);
 end;
 
-{ 窓のすべての `TLabel` の文言を集めます（入れ子をたどります）。**登録できない
-  実行時の札も、ここには必ず出ます。**
-  Collects the caption of every `TLabel` on the form, descending into nested
-  controls. **Even a runtime label that cannot be registered shows up here.** }
+{ 窓のすべての `TLabel` の文言と、入力欄（`TEdit`・`TMemo`）の中身を集めます
+  （入れ子をたどります）。**登録できない実行時の札も、ここには必ず出ます。**
+  入力欄も見るのは、案内を**欄の中身として**書く所があるからです（「課題文なしで
+  送る」の案内。付録 BQ）。選択肢（combo）は見ません。装置の名前は OS が付ける
+  ので、日本語の装置名が偽の穴に見えます（付録 BM）。
+  Collects the caption of every `TLabel` and the contents of every entry box
+  (`TEdit`, `TMemo`) on the form, descending into nested controls. **Even a
+  runtime label that cannot be registered shows up here.** Entry boxes are
+  included because some notes are written **as a box's contents** (the "send
+  freely" note; appendix BQ). Lists (combos) are not: the operating system
+  names the devices, and a Japanese device name would look like a gap
+  (appendix BM). }
 procedure CollectFormLabels(Root: TWinControl; Into: TStrings);
 var
   I: Integer;
@@ -4134,7 +4199,13 @@ begin
   begin
     C := Root.Controls[I];
     if C is TLabel then
-      Into.Add(TLabel(C).Caption);
+      Into.Add(TLabel(C).Caption)
+    else if C is TCustomMemo then
+      { 行ごとに集めます。落ちたときに**どの行か**を名指しできます。
+        Line by line, so that a failure names **which line**. }
+      Into.AddStrings(TCustomMemo(C).Lines)
+    else if C is TCustomEdit then
+      Into.Add(TCustomEdit(C).Text);
     if C is TWinControl then
       CollectFormLabels(TWinControl(C), Into);
   end;
@@ -4142,7 +4213,7 @@ end;
 
 function TMainForm.ReportLanguage: TStringList;
 var
-  Before, After, Back, Labels: TStringList;
+  Before, After, Back, Labels, Current: TStringList;
   Pairs: TTextWidthList;
   Started: TDateTime;
   Spent: Int64;
@@ -4155,7 +4226,27 @@ begin
   After := TStringList.Create;
   Back := TStringList.Create;
   Labels := TStringList.Create;
+  Current := TStringList.Create;
   try
+    { **英語で起動したなら、切り替える前に一度見ます**（付録 BQ）。切り替えれば
+      `ApplyTexts` が出し直すので、**起動の順序の誤り**（言語を入れる前に書かれた
+      文言）はそこで隠れてしまいます。登録済みの札（両言語で同じ「画面の言葉 /
+      Language」）は除きます。
+      **When started in English, look once before any switching** (appendix
+      BQ). A switch runs `ApplyTexts`, which would hide **a start-up ordering
+      fault** (words written before the language went in). The registered
+      labels (only the bilingual "画面の言葉 / Language") are excluded. }
+    if (FSetLanguage <> nil) and
+       (FSetLanguage.ItemIndex = UiLangIndexOf('en')) then
+    begin
+      UiText.CollectTexts(Current);
+      CollectFormLabels(Self, Labels);
+      for I := 0 to Labels.Count - 1 do
+        if HasCjk(Labels[I]) and (Current.IndexOf(Labels[I]) < 0) and
+           not IsDiagnosticRecord(Labels[I]) then
+          Result.Add(Format('英語で起動したのに日本語の札: 「%s」', [Labels[I]]));
+      Labels.Clear;
+    end;
     { **控えに載らない組み直しも、別枠で名指しします。**`FRxSubdivisionInfo`
       と `FRxDevice` は `UiText` に登録できない（付録 BE.6）ので、`Before`・
       `After`・`Back` の数には入りません。それでも `ApplyTexts` が呼び忘れれば
@@ -4293,7 +4384,8 @@ begin
       deliberately bilingual "画面の言葉 / Language". }
     Leaks := 0;
     for I := 0 to Labels.Count - 1 do
-      if HasCjk(Labels[I]) and (After.IndexOf(Labels[I]) < 0) then
+      if HasCjk(Labels[I]) and (After.IndexOf(Labels[I]) < 0) and
+         not IsDiagnosticRecord(Labels[I]) then
       begin
         Inc(Leaks);
         Result.Add(Format('英語なのに日本語が残っている札: 「%s」', [Labels[I]]));
@@ -4308,6 +4400,7 @@ begin
     if Moved = 0 then
       Result.Add('英語に切り替えても 1 つも変わりませんでした');
   finally
+    Current.Free;
     Labels.Free;
     Back.Free;
     After.Free;
