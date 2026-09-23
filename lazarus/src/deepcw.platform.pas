@@ -336,7 +336,12 @@ begin
       Result.Add(Format(RsLicenceFile, [Search.Name, Search.Size]));
     until FindNext(Search) <> 0;
   finally
-    FindClose(Search);
+    { **`SysUtils.` と書きます。**Windows では実装部で `Windows` を使うので、
+      そちらの `FindClose(QWord)` が前に出て、組み立てが落ちます（CI で実測）。
+      **Written `SysUtils.`**: on Windows the implementation uses `Windows`,
+      whose `FindClose(QWord)` would take precedence and fail the build
+      (seen in CI). }
+    SysUtils.FindClose(Search);
   end;
   { 並びを決めておきます。**ファイルの並ぶ順は環境で変わるので、決めないと
     診断情報が実行のたびに違って見えます。**
