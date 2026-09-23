@@ -488,6 +488,11 @@ msgstr "Recording"
 msgid "聴き直し"
 msgstr "Replay"
 
+#: frmmain.rsctxrig
+msgctxt "frmmain.rsctxrig"
+msgid "無線機"
+msgstr "Rig"
+
 #: frmmain.rsctxroster
 msgctxt "frmmain.rsctxroster"
 msgid "呼出符号の一覧"
@@ -1326,6 +1331,93 @@ msgstr "%0:s: audio at %1:d min %2:d s from the start (%3:.1f s)"
 msgid "聴き直せる長さを %d 分にしました。それまでに保管していた音は消えました。"
 msgstr "Replay window set to %d min. Audio held until now was cleared."
 
+#: frmmain.rsrigcannotstop
+msgid "（途中で止められない機種）"
+msgstr " (cannot stop mid-text)"
+
+#: frmmain.rsrigcannotstopnote
+msgid "この機種は送出の途中で止められません。止めると、無線機に渡した語の終わりで止まります。"
+msgstr "This rig cannot stop mid-text: a stop takes effect after the words already handed to it."
+
+#: frmmain.rsrigconnect
+msgid "繋ぐ"
+msgstr "Connect"
+
+#: frmmain.rsrigconnecting
+msgid "繋いでいます…"
+msgstr "Connecting..."
+
+#: frmmain.rsrigdisconnect
+msgid "切る"
+msgstr "Disconnect"
+
+#: frmmain.rsrigfailconnect
+msgid "失敗: 無線機に繋げません。機種番号・口・通信速度を確かめてください。"
+msgstr "Failed: rig unreachable. Check model number, port and baud."
+
+#: frmmain.rsrigfailed
+msgid "失敗（状態欄を見てください）"
+msgstr "Failed (see the status bar)"
+
+#: frmmain.rsrigfailnolibrary
+msgid "失敗: Hamlib が見つかりません。Hamlib を入れるか、アプリと同じ場所に置いてください。"
+msgstr "Failed: Hamlib not found. Install Hamlib or place it next to the application."
+
+#: frmmain.rsrigfailsend
+msgid "失敗: 送出の途中で無線機との繋がりが切れました。送信は止めました。繋ぎ直してください。"
+msgstr "Failed: the rig was lost while sending. Sending stopped; connect again."
+
+#: frmmain.rsrigfailstop
+msgid "失敗: 止める命令が通りませんでした。無線機の電源か繋がりを確かめてください。"
+msgstr "Failed: the stop command did not go through. Check the rig's power and cable."
+
+#: frmmain.rsriggroup
+msgctxt "frmmain.rsriggroup"
+msgid "無線機"
+msgstr "Rig"
+
+#: frmmain.rsrignomodel
+msgid "設定タブで無線機の機種番号を入れてください。"
+msgstr "Set the rig's model number on Settings."
+
+#: frmmain.rsrignotready
+msgid "無線機が待機中ではありません。繋いでから送ってください。"
+msgstr "The rig is not ready. Connect before sending."
+
+#: frmmain.rsrigoff
+msgid "繋いでいません"
+msgstr "Not connected"
+
+#: frmmain.rsrigready
+#, object-pascal-format
+msgid "待機（%d WPM）"
+msgstr "Ready (%d WPM)"
+
+#: frmmain.rsrigreadynospeed
+msgid "待機（速度は無線機の設定）"
+msgstr "Ready (speed set on the rig)"
+
+#: frmmain.rsrigsend
+msgid "無線機で送る"
+msgstr "Send via rig"
+
+#: frmmain.rsrigsending
+#, object-pascal-format
+msgid "送信中 %0:d / %1:d 文字"
+msgstr "Sending %0:d / %1:d"
+
+#: frmmain.rsrigstarted
+msgid "無線機で送り始めました。止めるときは Esc。"
+msgstr "Sending via the rig. Press Esc to stop."
+
+#: frmmain.rsrigstop
+msgid "止める（Esc）"
+msgstr "Stop (Esc)"
+
+#: frmmain.rsrigstopped
+msgid "送信を止めました。"
+msgstr "Sending stopped."
+
 #: frmmain.rsrosteropentitle
 msgid "呼出符号の一覧を開く"
 msgstr "Open a call sign list"
@@ -1553,6 +1645,18 @@ msgstr "Import ADIF"
 msgid "詳細・診断"
 msgstr "Advanced"
 
+#: frmmain.rssetalphabet
+msgid "文字の種類"
+msgstr "Alphabet"
+
+#: frmmain.rssetalphabetintl
+msgid "欧文"
+msgstr "International"
+
+#: frmmain.rssetalphabetwabun
+msgid "和文（準備中）"
+msgstr "Wabun (later)"
+
 #: frmmain.rssetapply
 msgid "設定を適用してエンジンを読み込み直す"
 msgstr "Apply and reload the engine"
@@ -1595,8 +1699,25 @@ msgid "ファイルの場所の利用者名は ~ に置き換えます。"
 msgstr "The account name in paths is replaced by ~."
 
 #: frmmain.rssetdontuse
+msgctxt "frmmain.rssetdontuse"
 msgid "使わない"
 msgstr "None"
+
+#: frmmain.rssetextgroup
+msgid "拡張（準備中）"
+msgstr "Extras (later)"
+
+#: frmmain.rssetexthint
+msgid "和文と AI のノイズ低減は準備中で、まだ選べません。"
+msgstr "Wabun and AI noise reduction are not ready yet."
+
+#: frmmain.rssetextpending
+msgid "この項目は準備中で、まだ選べません。元の選択に戻しました。"
+msgstr "Not ready yet; the previous choice was restored."
+
+#: frmmain.rssetextrawhint
+msgid "ノイズ低減は復号へ渡す音だけに掛け、聴き直しと録音は生の音のままです。"
+msgstr "Reduction only affects the decoder input; replay and recordings stay raw."
 
 #: frmmain.rssethighcontrast
 msgid "高コントラスト表示（薄い文字を濃くする）"
@@ -1630,6 +1751,23 @@ msgstr "Metadata (model.onnx.json)"
 #: frmmain.rssetmodel
 msgid "モデル (model.onnx)"
 msgstr "Model (model.onnx)"
+
+#: frmmain.rssetmycall
+msgid "自局の符号"
+msgstr "My call"
+
+#: frmmain.rssetnoise
+msgid "ノイズ低減"
+msgstr "Noise reduction"
+
+#: frmmain.rssetnoiseai
+msgid "AI（準備中）"
+msgstr "AI (later)"
+
+#: frmmain.rssetnoiseoff
+msgctxt "frmmain.rssetnoiseoff"
+msgid "使わない"
+msgstr "Off"
 
 #: frmmain.rssetoperating
 msgid "運用設定"
@@ -1676,6 +1814,30 @@ msgstr "5 min"
 msgid "受信テキストの文字を押して音を聴き直せる範囲です。長くするほど記憶を使います。"
 msgstr "How far back you can press a character to hear it again. Longer uses more memory."
 
+#: frmmain.rssetrigbaud
+msgid "通信速度"
+msgstr "Baud"
+
+#: frmmain.rssetrigbauddefault
+msgid "機種の既定"
+msgstr "Model default"
+
+#: frmmain.rssetriggroup
+msgid "無線機（送信）"
+msgstr "Rig (sending)"
+
+#: frmmain.rssetrighint
+msgid "番号は Hamlib の rigctl -l で確かめられます（例: IC-7300 は 3073、FT-991 は 1035）。口は COM3・/dev/ttyUSB0 など。"
+msgstr "Find the number with Hamlib's rigctl -l (IC-7300 is 3073, FT-991 is 1035). Port: COM3, /dev/ttyUSB0 etc."
+
+#: frmmain.rssetrigmodel
+msgid "機種番号"
+msgstr "Model no."
+
+#: frmmain.rssetrigport
+msgid "口"
+msgstr "Port"
+
 #: frmmain.rssetroster
 msgctxt "frmmain.rssetroster"
 msgid "呼出符号の一覧"
@@ -1688,6 +1850,10 @@ msgstr "ONNX Runtime library (blank to search)"
 #: frmmain.rssettab
 msgid "設定"
 msgstr "Settings"
+
+#: frmmain.rssettemplates
+msgid "定型（1 行に 1 つ。MYCALL・CALL・RST を波括弧で囲むと差し込み）"
+msgstr "Templates (one per line; MYCALL, CALL, RST in braces are filled in)"
 
 #: frmmain.rssetthreads
 msgid "推論スレッド"
@@ -1747,13 +1913,45 @@ msgstr "Tuned to %0:.0f Hz, contact mode.%1:s%2:s"
 msgid "手動"
 msgstr "Manual"
 
+#: frmmain.rstxautoanswer
+msgid "自動: 呼び返し"
+msgstr "Auto: answer"
+
+#: frmmain.rstxautocq
+msgid "自動: CQ"
+msgstr "Auto: CQ"
+
+#: frmmain.rstxautofinal
+msgid "自動: 終わりの挨拶"
+msgstr "Auto: sign-off"
+
+#: frmmain.rstxautoreport
+msgid "自動: レポート"
+msgstr "Auto: report"
+
 #: frmmain.rstxcharwpm
 msgid "文字速度 (WPM)"
 msgstr "Char (WPM)"
 
+#: frmmain.rstxcomposed
+msgid "送信文を作りました。確かめてから「無線機で送る」を押してください。"
+msgstr "Text composed. Check it, then press \"Send via rig\"."
+
+#: frmmain.rstxcomposelabel
+msgid "送信文を作る"
+msgstr "Compose"
+
 #: frmmain.rstxdone
 msgid "送信完了"
 msgstr "Sent"
+
+#: frmmain.rstxfromrx
+msgid "受信から"
+msgstr "From Rx"
+
+#: frmmain.rstxmake
+msgid "作る"
+msgstr "Make"
 
 #: frmmain.rstxmorse
 msgid "モールス符号"
@@ -1763,9 +1961,50 @@ msgstr "Morse code"
 msgid "受信練習用ノイズ"
 msgstr "Practice noise"
 
+#: frmmain.rstxnorxcall
+msgid "受信タブで、まだ相手の符号が読めていません。"
+msgstr "No call sign read on the Receive tab yet."
+
+#: frmmain.rstxnotemplates
+msgid "定型は設定タブで書けます"
+msgstr "Templates: see Settings"
+
 #: frmmain.rstxnothing
 msgid "送信できる文字がありません。"
 msgstr "Nothing to send."
+
+#: frmmain.rstxproblemempty
+msgid "送信文が空です。"
+msgstr "The text is empty."
+
+#: frmmain.rstxproblemmissing
+#, object-pascal-format
+msgid "%s の値がありません。自局の符号は設定タブ、相手の符号は送信タブに入れてください。"
+msgstr "No value for %s. Set your call on Settings, theirs on this tab."
+
+#: frmmain.rstxproblemtoolong
+#, object-pascal-format
+msgid "長すぎます（%0:s 文字）。%1:d 文字・%2:d 秒までにしてください。"
+msgstr "Too long (%0:s chars). Keep it within %1:d chars and %2:d s."
+
+#: frmmain.rstxproblemunexpanded
+#, object-pascal-format
+msgid "展開されていない差し込みがあります: %s"
+msgstr "Unfilled placeholder: %s"
+
+#: frmmain.rstxproblemunknown
+#, object-pascal-format
+msgid "知らない差し込みです: %s（使えるのは MYCALL・CALL・RST）"
+msgstr "Unknown placeholder: %s (MYCALL, CALL, RST only)"
+
+#: frmmain.rstxproblemunsendable
+#, object-pascal-format
+msgid "送れない文字があります: 「%s」"
+msgstr "Cannot send: \"%s\""
+
+#: frmmain.rstxrst
+msgid "RST"
+msgstr "RST"
 
 #: frmmain.rstxsavetitle
 msgid "モールス音声を保存"
@@ -1777,8 +2016,8 @@ msgstr "Save WAV"
 
 #: frmmain.rstxsend
 msgctxt "frmmain.rstxsend"
-msgid "送信"
-msgstr "Send"
+msgid "音で鳴らす"
+msgstr "Play"
 
 #: frmmain.rstxsending
 msgid "送信中の文字"
@@ -1812,6 +2051,10 @@ msgctxt "frmmain.rstxtab"
 msgid "送信"
 msgstr "Transmit"
 
+#: frmmain.rstxtemplatelabel
+msgid "定型"
+msgstr "Template"
+
 #: frmmain.rstxtextlabel
 msgid "送信する文（A-Z 0-9 . , ? / と空白）"
 msgstr "Text to send (A-Z 0-9 . , ? / space)"
@@ -1820,9 +2063,17 @@ msgstr "Text to send (A-Z 0-9 . , ? / space)"
 msgid "実効速度 (WPM)"
 msgstr "Effective (WPM)"
 
+#: frmmain.rstxtheircall
+msgid "相手"
+msgstr "Call"
+
 #: frmmain.rstxtonehz
 msgid "音程 (Hz)"
 msgstr "Tone (Hz)"
+
+#: frmmain.rstxusetemplate
+msgid "使う"
+msgstr "Use"
 
 #: frmmain.rstxverify
 msgid "自己デコード確認"

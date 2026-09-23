@@ -427,9 +427,16 @@ initialization
     it from 1252 to UTF-8 and garbled it (measured in CI). The GUI escaped this
     because the LCL (LazUtils' `fpcadds`) does the same; only the command-line
     tools were garbled. The file-name code page is set to match. }
-  {$IFDEF WINDOWS}
+  { **Windows だけでなく、どの OS でも**です（版 2.70、付録 BR）。Lazarus は
+    `UTF8_RTL` をどの OS でも既定にしており、画面のアプリはどこでも UTF-8 で
+    動きます。命令行の道具と `src/` だけが違うと、Linux でも `fpjson` が和文の
+    モデルのカナを `?` にしました（`dsp_check` で実測）。
+    **On every OS, not only Windows** (version 2.70, appendix BR). Lazarus makes
+    `UTF8_RTL` the default everywhere, so the GUI runs in UTF-8 on every
+    platform; with only the command-line tools and `src/` differing, `fpjson`
+    turned a Wabun model's kana into `?` even on Linux (measured in
+    `dsp_check`). }
   SetMultiByteConversionCodePage(CP_UTF8);
   SetMultiByteRTLFileSystemCodePage(CP_UTF8);
-  {$ENDIF}
   ReadStartUp;
 end.

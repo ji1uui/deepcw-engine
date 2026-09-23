@@ -36,6 +36,8 @@ uses
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
   DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster, DeepCW.CopyLog,
+  DeepCW.Hamlib, DeepCW.RigKeyer, DeepCW.TxMessage, DeepCW.NoiseReduction,
+  DeepCW.Alphabet,
   DeepCW.Platform,
   TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView,
   ViewColors, LayoutCheck, TextCheck, UiText, UiLang;
@@ -350,6 +352,36 @@ type
     { 滝に出している案内（`RsWfIdle` か `RsWfWaiting`）。
       The note the waterfall shows (`RsWfIdle` or `RsWfWaiting`). }
     FWfMessage: PResString;
+    { 無線機で送る（要件 FR-T）。**鍵を触るのは `FKeyer` のスレッドだけ**で、
+      画面は `Snapshot` を読むだけです。
+      Sending through the rig (requirement FR-T). **Only `FKeyer`'s thread
+      touches the key**; the screen only reads `Snapshot`. }
+    FKeyer: TRigKeyer;
+    FTxStage: TComboBox;
+    FTxTemplate: TComboBox;
+    FTxTheirCall: TEdit;
+    FTxRst: TEdit;
+    FRigConnect: TButton;
+    FRigDisconnect: TButton;
+    FRigSend: TButton;
+    FRigStop: TButton;
+    FRigStatus: TLabel;
+    { 同じ失敗を診断へ 2 度書かないため。/ Not to log the same failure twice. }
+    FRigFaultLogged: Boolean;
+    FRigStopNoted: Boolean;
+    FSetRigModel: TSpinEdit;
+    FSetRigPort: TEdit;
+    FSetRigBaud: TComboBox;
+    FSetMyCall: TEdit;
+    FSetTemplates: TMemo;
+    { 拡張の受け口（要件 FR-W・FR-N）。中身は保留。
+      The extension seats (FR-W, FR-N); their contents are pending. }
+    FSetAlphabet: TComboBox;
+    FSetNoise: TComboBox;
+    { 復号へ渡す音に掛けるノイズ低減。**画面のスレッドだけが使います。**
+      The noise reduction applied to audio handed to the decoder. **Used on the
+      UI thread only.** }
+    FReducer: TNoiseReducer;
 
     { 受信タブ / receive tab }
     FRxFile: TEdit;
@@ -636,6 +668,22 @@ type
     procedure TxOptionsChanged(Sender: TObject);
     procedure RenderTransmit;
     procedure UpdateTxSummary;
+    procedure TxAutoClick(Sender: TObject);
+    procedure TxTemplateClick(Sender: TObject);
+    procedure TxFromRxClick(Sender: TObject);
+    procedure ComposeInto(const Template: string);
+    procedure RefreshTemplates;
+    procedure SetTemplatesChanged(Sender: TObject);
+    function RigSettings: TRigSettings;
+    procedure RigConnectClick(Sender: TObject);
+    procedure RigDisconnectClick(Sender: TObject);
+    procedure RigSendClick(Sender: TObject);
+    procedure RigStopClick(Sender: TObject);
+    procedure UpdateRigStatus;
+    procedure FormKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure SettingChanged(Sender: TObject);
+    procedure ExtensionChanged(Sender: TObject);
+    function ForDecoderAudio(const Samples: TSingleArray; SampleRate: Integer): TSingleArray;
     procedure TxSendClick(Sender: TObject);
     procedure TxStopClick(Sender: TObject);
     procedure TxSaveClick(Sender: TObject);
@@ -892,7 +940,12 @@ resourcestring
   RsTxToneHz = '音程 (Hz)';
   RsTxVolume = '音量';
   RsTxNoise = '受信練習用ノイズ';
-  RsTxSend = '送信';
+  { **電波は出しません。**PC で音を鳴らすだけです。無線機で送るボタンが
+    隣に来たので「送信」から改めました（取り違えると危ないため）。
+    **No signal goes on air**: this only plays the sound on the PC. Renamed
+    from "送信" (send) once a real transmit button stood beside it, since
+    confusing the two is dangerous. }
+  RsTxSend = '音で鳴らす';
   RsTxStop = '停止';
   RsTxSaveWav = 'WAV に保存';
   RsTxVerify = '自己デコード確認';
@@ -1278,12 +1331,97 @@ resourcestring
   RsRosterOpenTitle = '呼出符号の一覧を開く';
   RsInRoster = '手元の一覧';
 
+  { 無線機で送る（要件 FR-T）。**送る文そのもの（CQ・DE…）は訳しません**
+    （CW の運用の言葉）。訳すのは画面の札と知らせだけです。
+    Sending through the rig (requirement FR-T). **The text sent (CQ, DE...) is
+    not translated** -- it is CW operating language; only the labels and
+    messages are. }
+  RsTxComposeLabel = '送信文を作る';
+  RsTxAutoCq = '自動: CQ';
+  RsTxAutoAnswer = '自動: 呼び返し';
+  RsTxAutoReport = '自動: レポート';
+  RsTxAutoFinal = '自動: 終わりの挨拶';
+  RsTxMake = '作る';
+  RsTxTheirCall = '相手';
+  RsTxRst = 'RST';
+  RsTxFromRx = '受信から';
+  RsTxTemplateLabel = '定型';
+  RsTxUseTemplate = '使う';
+  RsTxNoTemplates = '定型は設定タブで書けます';
+  RsTxComposed = '送信文を作りました。確かめてから「無線機で送る」を押してください。';
+  RsTxNoRxCall = '受信タブで、まだ相手の符号が読めていません。';
+  RsRigGroup = '無線機';
+  RsRigConnect = '繋ぐ';
+  RsRigDisconnect = '切る';
+  RsRigSend = '無線機で送る';
+  RsRigStop = '止める（Esc）';
+  RsRigOff = '繋いでいません';
+  RsRigConnecting = '繋いでいます…';
+  RsRigReady = '待機（%d WPM）';
+  RsRigReadyNoSpeed = '待機（速度は無線機の設定）';
+  RsRigSending = '送信中 %0:d / %1:d 文字';
+  { 札は短く、詳しい案内は状態欄へ（札の後ろには幅が無い）。
+    The label stays short and the full advice goes to the status bar (there is
+    no room after the label). }
+  RsRigCannotStop = '（途中で止められない機種）';
+  RsRigCannotStopNote = 'この機種は送出の途中で止められません。止めると、無線機に渡した語の終わりで止まります。';
+  RsRigFailed = '失敗（状態欄を見てください）';
+  RsRigFailNoLibrary = '失敗: Hamlib が見つかりません。Hamlib を入れるか、アプリと同じ場所に置いてください。';
+  RsRigFailConnect = '失敗: 無線機に繋げません。機種番号・口・通信速度を確かめてください。';
+  RsRigFailSend = '失敗: 送出の途中で無線機との繋がりが切れました。送信は止めました。繋ぎ直してください。';
+  RsRigFailStop = '失敗: 止める命令が通りませんでした。無線機の電源か繋がりを確かめてください。';
+  RsRigNoModel = '設定タブで無線機の機種番号を入れてください。';
+  RsRigNotReady = '無線機が待機中ではありません。繋いでから送ってください。';
+  RsRigStarted = '無線機で送り始めました。止めるときは Esc。';
+  RsRigStopped = '送信を止めました。';
+  RsCtxRig = '無線機';
+  RsTxProblemEmpty = '送信文が空です。';
+  RsTxProblemUnsendable = '送れない文字があります: 「%s」';
+  RsTxProblemTooLong = '長すぎます（%0:s 文字）。%1:d 文字・%2:d 秒までにしてください。';
+  RsTxProblemUnexpanded = '展開されていない差し込みがあります: %s';
+  RsTxProblemMissing = '%s の値がありません。自局の符号は設定タブ、相手の符号は送信タブに入れてください。';
+  RsTxProblemUnknown = '知らない差し込みです: %s（使えるのは MYCALL・CALL・RST）';
+  RsSetRigGroup = '無線機（送信）';
+  RsSetRigModel = '機種番号';
+  RsSetRigPort = '口';
+  RsSetRigBaud = '通信速度';
+  RsSetRigBaudDefault = '機種の既定';
+  RsSetRigHint = '番号は Hamlib の rigctl -l で確かめられます（例: IC-7300 は 3073、FT-991 は 1035）。口は COM3・/dev/ttyUSB0 など。';
+  RsSetMyCall = '自局の符号';
+  RsSetTemplates = '定型（1 行に 1 つ。MYCALL・CALL・RST を波括弧で囲むと差し込み）';
+  RsSetExtGroup = '拡張（準備中）';
+  RsSetAlphabet = '文字の種類';
+  RsSetAlphabetIntl = '欧文';
+  RsSetAlphabetWabun = '和文（準備中）';
+  RsSetNoise = 'ノイズ低減';
+  RsSetNoiseOff = '使わない';
+  RsSetNoiseAi = 'AI（準備中）';
+  RsSetExtHint = '和文と AI のノイズ低減は準備中で、まだ選べません。';
+  RsSetExtRawHint = 'ノイズ低減は復号へ渡す音だけに掛け、聴き直しと録音は生の音のままです。';
+  RsSetExtPending = 'この項目は準備中で、まだ選べません。元の選択に戻しました。';
+
 
 
 { 改行の直し（`AsLines`）は `DeepCW.Platform` に在ります。**OS で振る舞いが
   変わるものは 1 か所へ。**
   The line-ending fix (`AsLines`) lives in `DeepCW.Platform`: **what behaves
   differently by platform goes in one place.** }
+
+{ ノイズ低減の選択肢の鍵。**画面の項目と同じ順**です（要件 FR-N）。
+  The noise-reduction keys, **in the order of the items on screen** (FR-N). }
+const
+  NOISE_ITEMS: array[0..1] of string = (NOISE_KEY_OFF, NOISE_KEY_AI);
+
+{ 鍵の項目の番号。知らない鍵は -1。/ The item index of a key; -1 if unknown. }
+function NoiseItemIndex(const Key: string): Integer;
+var
+  I: Integer;
+begin
+  for I := Low(NOISE_ITEMS) to High(NOISE_ITEMS) do
+    if NOISE_ITEMS[I] = Key then
+      Exit(I);
+  Result := -1;
+end;
 
 { 実装の後方で定義します。/ Defined further down. }
 function UserMessageFor(const Raw: string): string; forward;
@@ -1442,6 +1580,14 @@ begin
   UseUiLang(StartingUiLang(RememberedUiLang));
 
   BuildUI;
+  { 無線機の鍵のスレッド。**繋ぐのも送るのも、利用者が押したときだけ**です。
+    The rig key's thread. **It connects and sends only when the operator
+    presses.** }
+  FKeyer := TRigKeyer.Create;
+  { 設定を読む前は素通しです（要件 FR-N）。/ Pass-through until settings load. }
+  FReducer := TBypassReducer.Create;
+  KeyPreview := True;
+  OnKeyDown := @FormKeyDown;
   LoadSettings;
   { 覚えていた言語を入れ直します（要件 NFR-7.6）。**覚えていても、渡さなければ
     効きません**——高コントラストと同じ話です。`LoadSettings` は選択肢を合わせる
@@ -1533,6 +1679,11 @@ end;
 destructor TMainForm.Destroy;
 begin
   FClosing := True;
+  { **送信を真っ先に止めます**（fail-safe）。`TRigKeyer.Destroy` は止め、
+    無線機の口を閉じてから戻ります。
+    **Sending is stopped first** (fail-safe): `TRigKeyer.Destroy` stops and
+    closes the rig before it returns. }
+  FreeAndNil(FKeyer);
   if FPollTimer <> nil then
     FPollTimer.Enabled := False;
   if FCapture <> nil then
@@ -1573,6 +1724,7 @@ begin
   FreeAndNil(FCompletedThread);
   SaveSettings;
   FStream.Free;
+  FReducer.Free;
   FDiagnostics.Free;
   FCapture.Free;
   FFtRing.Free;
@@ -1790,11 +1942,46 @@ function TMainForm.BuildTransmitTab: TTabSheet;
 var
   Sheet: TTabSheet;
   Options: TGroupBox;
-  Buttons, Current: TPanel;
+  Buttons, Current, Compose, Rig: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
   RegisterCaption(Sheet, @RsTxTab);
   Result := Sheet;
+  { 送信文の作り方は 3 つ（要件 FR-T.1）: 自動・定型・下の欄への手入力。
+    **どれも下の欄へ最終の文として入り、送るのはその欄の文そのもの**です。
+    The text comes from one of three places (FR-T.1): automatic, a template,
+    or typed into the box below. **All of them end up in that box as the final
+    text, and what is sent is exactly the box.** }
+  Compose := AddTopPanel(Sheet, 36);
+  AddLabel(Compose, @RsTxComposeLabel, 12, 8);
+  FTxStage := TComboBox.Create(Compose);
+  FTxStage.Parent := Compose;
+  FTxStage.SetBounds(120, 4, 170, 28);
+  FTxStage.Style := csDropDownList;
+  RegisterItem(FTxStage, Ord(tsCq), @RsTxAutoCq);
+  RegisterItem(FTxStage, Ord(tsAnswer), @RsTxAutoAnswer);
+  RegisterItem(FTxStage, Ord(tsReport), @RsTxAutoReport);
+  RegisterItem(FTxStage, Ord(tsFinal), @RsTxAutoFinal);
+  FTxStage.ItemIndex := 0;
+  AddLabel(Compose, @RsTxTheirCall, 300, 8);
+  FTxTheirCall := TEdit.Create(Compose);
+  FTxTheirCall.Parent := Compose;
+  FTxTheirCall.SetBounds(340, 4, 100, 28);
+  FTxTheirCall.CharCase := ecUppercase;
+  AddLabel(Compose, @RsTxRst, 450, 8);
+  FTxRst := TEdit.Create(Compose);
+  FTxRst.Parent := Compose;
+  FTxRst.SetBounds(486, 4, 50, 28);
+  FTxRst.Text := '599';
+  AddButton(Compose, @RsTxFromRx, 544, 4, 90, @TxFromRxClick);
+  AddButton(Compose, @RsTxMake, 642, 4, 70, @TxAutoClick);
+  AddLabel(Compose, @RsTxTemplateLabel, 726, 8);
+  FTxTemplate := TComboBox.Create(Compose);
+  FTxTemplate.Parent := Compose;
+  FTxTemplate.SetBounds(796, 4, 176, 28);
+  FTxTemplate.Style := csDropDownList;
+  AddButton(Compose, @RsTxUseTemplate, 980, 4, 70, @TxTemplateClick);
+
 
   AddTopLabel(Sheet, @RsTxTextLabel);
   FTxText := TMemo.Create(Sheet);
@@ -1852,6 +2039,17 @@ begin
   FTxStop := AddButton(Buttons, @RsTxStop, 130, 4, 110, @TxStopClick);
   FTxSave := AddButton(Buttons, @RsTxSaveWav, 248, 4, 130, @TxSaveClick);
   FTxVerify := AddButton(Buttons, @RsTxVerify, 386, 4, 160, @TxVerifyClick);
+
+  { 無線機で送る（要件 FR-T.2・T.3）。**止めるボタンは決して無効にしません。**
+    Sending through the rig (FR-T.2, T.3). **The stop button is never
+    disabled.** }
+  Rig := AddTopPanel(Sheet, 40);
+  AddLabel(Rig, @RsRigGroup, 12, 12);
+  FRigConnect := AddButton(Rig, @RsRigConnect, 70, 4, 80, @RigConnectClick);
+  FRigDisconnect := AddButton(Rig, @RsRigDisconnect, 156, 4, 96, @RigDisconnectClick);
+  FRigSend := AddButton(Rig, @RsRigSend, 262, 4, 140, @RigSendClick);
+  FRigStop := AddButton(Rig, @RsRigStop, 410, 4, 130, @RigStopClick);
+  FRigStatus := AddLabel(Rig, '', 552, 12);
 
   FTxProgress := TProgressBar.Create(Sheet);
   FTxProgress.Parent := Sheet;
@@ -3484,7 +3682,7 @@ function TMainForm.BuildSettingsTab: TTabSheet;
 var
   Sheet: TTabSheet;
   Scroller: TScrollBox;
-  Operating, Advanced: TGroupBox;
+  Operating, Advanced, RigGroup, ExtGroup: TGroupBox;
   Row, Apply: TPanel;
   Choice: TTunerBandwidth;
   Language_: Integer;
@@ -3696,6 +3894,81 @@ begin
   FSetLanguage.OnChange := @SetLanguageChanged;
   FSetLanguageInfo := AddLabel(Operating, '', 380, 278);
 
+  { ── 無線機（送信）: 要件 FR-T ──
+    The rig (sending): requirement FR-T. }
+  RigGroup := TGroupBox.Create(Scroller);
+  RigGroup.Parent := Scroller;
+  RegisterCaption(RigGroup, @RsSetRigGroup);
+  RigGroup.Height := 210;
+  Stretch(RigGroup, alTop);
+  AddLabel(RigGroup, @RsSetRigModel, 14, 10);
+  FSetRigModel := AddSpin(RigGroup, 100, 6, 0, 99999, 0, @SettingChanged);
+  AddLabel(RigGroup, @RsSetRigPort, 220, 10);
+  FSetRigPort := TEdit.Create(RigGroup);
+  FSetRigPort.Parent := RigGroup;
+  FSetRigPort.SetBounds(260, 6, 200, 28);
+  FSetRigPort.OnChange := @SettingChanged;
+  AddLabel(RigGroup, @RsSetRigBaud, 476, 10);
+  FSetRigBaud := TComboBox.Create(RigGroup);
+  FSetRigBaud.Parent := RigGroup;
+  FSetRigBaud.SetBounds(560, 6, 140, 28);
+  FSetRigBaud.Style := csDropDownList;
+  RegisterItem(FSetRigBaud, 0, @RsSetRigBaudDefault);
+  FSetRigBaud.Items.Add('4800');
+  FSetRigBaud.Items.Add('9600');
+  FSetRigBaud.Items.Add('19200');
+  FSetRigBaud.Items.Add('38400');
+  FSetRigBaud.Items.Add('57600');
+  FSetRigBaud.Items.Add('115200');
+  FSetRigBaud.ItemIndex := 0;
+  FSetRigBaud.OnChange := @SettingChanged;
+  AddLabel(RigGroup, @RsSetRigHint, 14, 40);
+  AddLabel(RigGroup, @RsSetMyCall, 14, 70);
+  FSetMyCall := TEdit.Create(RigGroup);
+  FSetMyCall.Parent := RigGroup;
+  FSetMyCall.SetBounds(120, 66, 140, 28);
+  FSetMyCall.CharCase := ecUppercase;
+  FSetMyCall.OnChange := @SettingChanged;
+  AddLabel(RigGroup, @RsSetTemplates, 14, 100);
+  FSetTemplates := TMemo.Create(RigGroup);
+  FSetTemplates.Parent := RigGroup;
+  FSetTemplates.SetBounds(14, 120, 700, 70);
+  FSetTemplates.ScrollBars := ssAutoVertical;
+  FSetTemplates.OnChange := @SetTemplatesChanged;
+
+  { ── 拡張（準備中）: 要件 FR-W・FR-N ──
+    **受け口だけ**です。準備中の項目も見せますが、選べません
+    （`ExtensionChanged`）。項目の並びは `ALPHABET_ITEMS`・`NOISE_ITEMS` と
+    同じ順です。
+    Extensions (pending): FR-W, FR-N. **Only the seats**: pending items are
+    shown but cannot be chosen (`ExtensionChanged`). The items follow the order
+    of `ALPHABET_ITEMS` and `NOISE_ITEMS`. }
+  ExtGroup := TGroupBox.Create(Scroller);
+  ExtGroup.Parent := Scroller;
+  RegisterCaption(ExtGroup, @RsSetExtGroup);
+  ExtGroup.Height := 110;
+  Stretch(ExtGroup, alTop);
+  AddLabel(ExtGroup, @RsSetAlphabet, 14, 10);
+  FSetAlphabet := TComboBox.Create(ExtGroup);
+  FSetAlphabet.Parent := ExtGroup;
+  FSetAlphabet.SetBounds(140, 6, 180, 28);
+  FSetAlphabet.Style := csDropDownList;
+  RegisterItem(FSetAlphabet, 0, @RsSetAlphabetIntl);
+  RegisterItem(FSetAlphabet, 1, @RsSetAlphabetWabun);
+  FSetAlphabet.ItemIndex := 0;
+  FSetAlphabet.OnChange := @ExtensionChanged;
+  AddLabel(ExtGroup, @RsSetNoise, 360, 10);
+  FSetNoise := TComboBox.Create(ExtGroup);
+  FSetNoise.Parent := ExtGroup;
+  FSetNoise.SetBounds(490, 6, 180, 28);
+  FSetNoise.Style := csDropDownList;
+  RegisterItem(FSetNoise, 0, @RsSetNoiseOff);
+  RegisterItem(FSetNoise, 1, @RsSetNoiseAi);
+  FSetNoise.ItemIndex := 0;
+  FSetNoise.OnChange := @ExtensionChanged;
+  AddLabel(ExtGroup, @RsSetExtHint, 14, 44);
+  AddLabel(ExtGroup, @RsSetExtRawHint, 14, 70);
+
   { ── 詳細・診断：困ったときだけ見るもの ──
     Advanced and diagnostics: only looked at when something is wrong. }
   Advanced := TGroupBox.Create(Scroller);
@@ -3842,6 +4115,36 @@ begin
     FTxToneHz.Value := Ini.ReadInteger('transmit', 'tone_hz', 700);
     FTxVolume.Position := Ini.ReadInteger('transmit', 'volume', 60);
     FTxText.Text := Ini.ReadString('transmit', 'text', FTxText.Text);
+    { 無線機と自局の符号・定型（要件 FR-T）。**足した鍵なので、古い設定
+      ファイルには無く、既定で読みます。**
+      The rig, own call and templates (FR-T). **New keys: older settings files
+      lack them and the defaults are read.** }
+    FSetRigModel.Value := Ini.ReadInteger('rig', 'model', 0);
+    FSetRigPort.Text := Ini.ReadString('rig', 'port', '');
+    Index := FSetRigBaud.Items.IndexOf(IntToStr(Ini.ReadInteger('rig', 'baud', 0)));
+    if Index < 0 then
+      Index := 0;
+    FSetRigBaud.ItemIndex := Index;
+    FSetMyCall.Text := Ini.ReadString('transmit', 'my_call', '');
+    FSetTemplates.Lines.Clear;
+    for Index := 1 to 8 do
+      if Ini.ReadString('transmit', 'template' + IntToStr(Index), '') <> '' then
+        FSetTemplates.Lines.Add(Ini.ReadString('transmit', 'template' + IntToStr(Index), ''));
+    RefreshTemplates;
+    { 拡張の受け口（要件 FR-W・FR-N）。**知らない鍵・準備中の項目は既定へ
+      戻します**（fail-soft）。
+      The extension seats (FR-W, FR-N). **An unknown key or a pending item
+      falls back to the default** (fail-soft). }
+    if AlphabetAvailable(AlphabetFromKey(Ini.ReadString('receive', 'alphabet',
+      ALPHABET_KEY_INTERNATIONAL))) then
+      FSetAlphabet.ItemIndex := Ord(AlphabetFromKey(Ini.ReadString('receive',
+        'alphabet', ALPHABET_KEY_INTERNATIONAL)))
+    else
+      FSetAlphabet.ItemIndex := Ord(caInternational);
+    FReducer.Free;
+    FReducer := CreateNoiseReducer(Ini.ReadString('receive', 'noise_reduction',
+      NOISE_KEY_OFF));
+    FSetNoise.ItemIndex := Max(0, NoiseItemIndex(FReducer.Key));
 
     FRxConfirmSpeed.ItemIndex := ClampInt(
       Ini.ReadInteger('receive', 'confirm_speed', 1), 0, 2);
@@ -3940,6 +4243,7 @@ end;
 procedure TMainForm.SaveSettings;
 var
   Ini: TIniFile;
+  Index: Integer;
 begin
   FSettingsDirty := False;
   FSettingsSavedAt := Now;
@@ -3958,6 +4262,20 @@ begin
       Ini.WriteInteger('transmit', 'tone_hz', FTxToneHz.Value);
       Ini.WriteInteger('transmit', 'volume', FTxVolume.Position);
       Ini.WriteString('transmit', 'text', FTxText.Text);
+      Ini.WriteInteger('rig', 'model', FSetRigModel.Value);
+      Ini.WriteString('rig', 'port', FSetRigPort.Text);
+      Ini.WriteInteger('rig', 'baud', StrToIntDef(
+        FSetRigBaud.Items[Max(0, FSetRigBaud.ItemIndex)], 0));
+      Ini.WriteString('transmit', 'my_call', FSetMyCall.Text);
+      Ini.WriteString('receive', 'alphabet',
+        AlphabetKey(TCwAlphabet(Max(0, FSetAlphabet.ItemIndex))));
+      Ini.WriteString('receive', 'noise_reduction', FReducer.Key);
+      for Index := 1 to 8 do
+        if Index <= FSetTemplates.Lines.Count then
+          Ini.WriteString('transmit', 'template' + IntToStr(Index),
+            Trim(FSetTemplates.Lines[Index - 1]))
+        else
+          Ini.DeleteKey('transmit', 'template' + IntToStr(Index));
       Ini.WriteInteger('receive', 'confirm_speed', FRxConfirmSpeed.ItemIndex);
       Ini.WriteBool('receive', 'anti_alias', FRxAntiAlias.Checked);
       Ini.WriteBool('receive', 'show_doubt', FRxShowDoubt.Checked);
@@ -4117,6 +4435,7 @@ begin
     Added in version 2.66: the transmit summary, the rate, the waterfall note. }
   UpdateTxSummary;
   UpdateRate(True);
+  UpdateRigStatus;
   { 「課題文なしで送る」の案内は、課題文の欄に**文言として**書かれます。
     The "send freely" notice is written **as text** into the exercise box. }
   if (FFtFree <> nil) and FFtFree.Checked and (FFtText <> nil) then
@@ -4825,6 +5144,10 @@ begin
   Farnsworth only makes sense when the effective speed is the slower one. }
   if FTxTextWpm.Value > FTxCharWpm.Value then
     FTxTextWpm.Value := FTxCharWpm.Value;
+  { 無線機のキーヤーの速度は、文字速度に合わせます。
+    The rig keyer's speed follows the character speed. }
+  if FKeyer <> nil then
+    FKeyer.SetWpm(FTxCharWpm.Value);
   RenderTransmit;
 end;
 
@@ -4839,6 +5162,285 @@ begin
     Exit;
   FTxSummary.Caption := Format(RsTxSummary,
     [Length(FTxNormalized), Length(FTxSamples) / FTxSampleRate]);
+end;
+
+procedure TMainForm.SettingChanged(Sender: TObject);
+begin
+  MarkSettingsDirty;
+end;
+
+{ 拡張の選択（要件 FR-W・FR-N）。**準備中の項目は選べず、元へ戻して
+  そう言います。**ノイズ低減は、作る側（`CreateNoiseReducer`）が使えないものを
+  素通しにするので、**選べるかの判定はそこ 1 か所**です。
+  An extension choice (FR-W, FR-N). **A pending item cannot be chosen: the
+  choice goes back and the operator is told.** The factory
+  (`CreateNoiseReducer`) turns an unavailable reducer into pass-through, so
+  **whether it can be chosen is decided there alone.** }
+procedure TMainForm.ExtensionChanged(Sender: TObject);
+var
+  Fresh: TNoiseReducer;
+begin
+  if Sender = FSetAlphabet then
+  begin
+    if not AlphabetAvailable(TCwAlphabet(Max(0, FSetAlphabet.ItemIndex))) then
+    begin
+      FSetAlphabet.ItemIndex := Ord(caInternational);
+      SetStatus('', '', RsSetExtPending);
+      Exit;
+    end;
+  end
+  else if Sender = FSetNoise then
+  begin
+    Fresh := CreateNoiseReducer(NOISE_ITEMS[Max(0, FSetNoise.ItemIndex)]);
+    if Fresh.Key <> NOISE_ITEMS[Max(0, FSetNoise.ItemIndex)] then
+    begin
+      Fresh.Free;
+      FSetNoise.ItemIndex := Max(0, NoiseItemIndex(FReducer.Key));
+      SetStatus('', '', RsSetExtPending);
+      Exit;
+    end;
+    FReducer.Free;
+    FReducer := Fresh;
+  end;
+  MarkSettingsDirty;
+end;
+
+{ 復号へ渡す音（要件 FR-N）。**受信の入口はすべてここを通します。**生の音は
+  変えません（使わないときは同じ配列が返ります）。
+  The audio handed to the decoder (FR-N). **Every receive entry point goes
+  through here.** The raw audio is never changed (off returns the same array). }
+function TMainForm.ForDecoderAudio(const Samples: TSingleArray;
+  SampleRate: Integer): TSingleArray;
+begin
+  Result := ForDecoder(FReducer, Samples, SampleRate);
+end;
+
+{ 送信文を作り、下の欄へ入れます（要件 FR-T.1）。**差し込みの値が無ければ
+  作らず**、何が足りないかを言います（抜けたまま送らない）。
+  Composes the text into the box below (FR-T.1). **With a macro value
+  missing nothing is composed**; what is missing is said instead (never send
+  with a gap). }
+procedure TMainForm.ComposeInto(const Template: string);
+var
+  Context: TTxContext;
+  Composed, Detail: string;
+  Problem: TTxProblem;
+begin
+  Context.MyCall := Trim(FSetMyCall.Text);
+  Context.TheirCall := Trim(FTxTheirCall.Text);
+  Context.Rst := Trim(FTxRst.Text);
+  if not ExpandTemplate(Template, Context, Composed, Problem, Detail) then
+  begin
+    case Problem of
+      tpMissingValue: SetStatus('', '', Format(RsTxProblemMissing, [Detail]));
+    else
+      SetStatus('', '', Format(RsTxProblemUnknown, [Detail]));
+    end;
+    Exit;
+  end;
+  FTxText.Text := Composed;
+  SetStatus('', '', RsTxComposed);
+end;
+
+procedure TMainForm.TxAutoClick(Sender: TObject);
+begin
+  if (FTxStage.ItemIndex < Ord(Low(TTxStage))) or
+     (FTxStage.ItemIndex > Ord(High(TTxStage))) then
+    Exit;
+  ComposeInto(AutoTemplate(TTxStage(FTxStage.ItemIndex)));
+end;
+
+procedure TMainForm.TxTemplateClick(Sender: TObject);
+begin
+  if (FTxTemplate.ItemIndex < 0) or
+     (FTxTemplate.ItemIndex >= FSetTemplates.Lines.Count) then
+  begin
+    SetStatus('', '', RsTxNoTemplates);
+    Exit;
+  end;
+  ComposeInto(Trim(FSetTemplates.Lines[FTxTemplate.ItemIndex]));
+end;
+
+{ 受信タブで読めた相手の符号を持ってきます（要件 FR-T.1）。**押したときだけ**
+  です。勝手に書き換えると、確かめた文と送る文が食い違います。
+  Takes the call sign read on the Receive tab (FR-T.1). **Only when pressed**:
+  changing it on its own would make the checked text differ from the sent one. }
+procedure TMainForm.TxFromRxClick(Sender: TObject);
+var
+  Call: string;
+begin
+  Call := CallsignToLog;
+  if Call = '' then
+  begin
+    SetStatus('', '', RsTxNoRxCall);
+    Exit;
+  end;
+  FTxTheirCall.Text := Call;
+end;
+
+{ 定型の一覧を、設定タブの欄から作り直します。定型は利用者の文そのもの
+  なので訳しません。/ Rebuilds the template list from the settings box; the
+  templates are the operator's own words and are not translated. }
+procedure TMainForm.RefreshTemplates;
+var
+  I, Was: Integer;
+begin
+  if (FTxTemplate = nil) or (FSetTemplates = nil) then
+    Exit;
+  Was := FTxTemplate.ItemIndex;
+  FTxTemplate.Items.BeginUpdate;
+  try
+    FTxTemplate.Items.Clear;
+    for I := 0 to Min(FSetTemplates.Lines.Count, 8) - 1 do
+      FTxTemplate.Items.Add(Trim(FSetTemplates.Lines[I]));
+  finally
+    FTxTemplate.Items.EndUpdate;
+  end;
+  if (Was >= 0) and (Was < FTxTemplate.Items.Count) then
+    FTxTemplate.ItemIndex := Was
+  else if FTxTemplate.Items.Count > 0 then
+    FTxTemplate.ItemIndex := 0;
+end;
+
+procedure TMainForm.SetTemplatesChanged(Sender: TObject);
+begin
+  RefreshTemplates;
+  MarkSettingsDirty;
+end;
+
+function TMainForm.RigSettings: TRigSettings;
+begin
+  Result.Model := FSetRigModel.Value;
+  Result.Port := Trim(FSetRigPort.Text);
+  Result.Baud := StrToIntDef(FSetRigBaud.Items[Max(0, FSetRigBaud.ItemIndex)], 0);
+end;
+
+procedure TMainForm.RigConnectClick(Sender: TObject);
+begin
+  if FSetRigModel.Value <= 0 then
+  begin
+    SetStatus('', '', RsRigNoModel);
+    Exit;
+  end;
+  FRigFaultLogged := False;
+  FKeyer.Connect(RigSettings, FTxCharWpm.Value);
+  UpdateRigStatus;
+end;
+
+procedure TMainForm.RigDisconnectClick(Sender: TObject);
+begin
+  FKeyer.Stop;
+  FKeyer.Disconnect;
+  UpdateRigStatus;
+end;
+
+{ 無線機で送ります（要件 FR-T.2）。**送るのは欄の文そのもの**で、確かめて
+  通らなければ送りません（落とさずに断る）。
+  Sends through the rig (FR-T.2). **Exactly the box's text is sent**, and
+  only if it passes the check (refused, never trimmed). }
+procedure TMainForm.RigSendClick(Sender: TObject);
+var
+  Clean, Detail: string;
+  Problem: TTxProblem;
+begin
+  if not CheckTransmitText(FTxText.Text, FTxCharWpm.Value, Clean, Problem,
+    Detail) then
+  begin
+    case Problem of
+      tpEmpty: SetStatus('', '', RsTxProblemEmpty);
+      tpUnsendable: SetStatus('', '', Format(RsTxProblemUnsendable, [Detail]));
+      tpTooLong: SetStatus('', '', Format(RsTxProblemTooLong,
+        [Detail, TX_MAX_CHARS, TX_MAX_SECONDS]));
+      tpUnexpanded: SetStatus('', '', Format(RsTxProblemUnexpanded, [Detail]));
+    end;
+    Exit;
+  end;
+  if not FKeyer.Send(Clean) then
+  begin
+    SetStatus('', '', RsRigNotReady);
+    Exit;
+  end;
+  SetStatus('', '', RsRigStarted);
+  UpdateRigStatus;
+end;
+
+procedure TMainForm.RigStopClick(Sender: TObject);
+begin
+  FKeyer.Stop;
+  SetStatus('', '', RsRigStopped);
+  UpdateRigStatus;
+end;
+
+{ Esc は、どこにいても送信を止めます（要件 FR-T.3）。
+  Esc stops sending wherever the focus is (FR-T.3). }
+procedure TMainForm.FormKeyDown(Sender: TObject; var Key: Word;
+  Shift: TShiftState);
+begin
+  if (Key = VK_ESCAPE) and (FKeyer <> nil) and
+     (FKeyer.Snapshot.State in [ksSending, ksConnecting]) then
+  begin
+    FKeyer.Stop;
+    SetStatus('', '', RsRigStopped);
+    Key := 0;
+  end;
+end;
+
+{ 無線機の様子を札とボタンに映します。`PollTimer` と `ApplyTexts` が呼びます。
+  **止めるボタンは無効にしません。**
+  Shows the rig's state on the label and buttons; called by `PollTimer` and
+  `ApplyTexts`. **The stop button is never disabled.** }
+procedure TMainForm.UpdateRigStatus;
+var
+  Status: TKeyerStatus;
+  Caption_: string;
+begin
+  if (FKeyer = nil) or (FRigStatus = nil) then
+    Exit;
+  Status := FKeyer.Snapshot;
+  case Status.State of
+    ksOff: Caption_ := RsRigOff;
+    ksConnecting: Caption_ := RsRigConnecting;
+    ksReady:
+      if Status.SpeedSet then
+        Caption_ := Format(RsRigReady, [Status.Wpm])
+      else
+        Caption_ := RsRigReadyNoSpeed;
+    ksSending: Caption_ := Format(RsRigSending, [Status.Handed, Length(Status.Text)]);
+  else
+    Caption_ := RsRigFailed;
+  end;
+  if Status.Stop = ssNo then
+    Caption_ := Caption_ + RsRigCannotStop;
+  if FRigStatus.Caption <> Caption_ then
+    FRigStatus.Caption := Caption_;
+  FRigConnect.Enabled := Status.State in [ksOff, ksFailed];
+  FRigDisconnect.Enabled := Status.State <> ksOff;
+  FRigSend.Enabled := Status.State = ksReady;
+  FRigStop.Enabled := True;
+  { 失敗の原文は診断へ 1 度だけ。**送った文は書きません**（診断の控えは、
+    受信した文章や符号を含まないと約束しているため）。
+    The failure's original text goes to the diagnostics once. **The text sent
+    is never written there** -- the diagnostics copy promises to hold no
+    received text or call signs. }
+  if (Status.State = ksFailed) and not FRigFaultLogged then
+  begin
+    FRigFaultLogged := True;
+    LogDiagnostic(RsCtxRig, Status.Detail);
+    case Status.Fault of
+      kfNoLibrary: SetStatus('', '', RsRigFailNoLibrary);
+      kfConnect: SetStatus('', '', RsRigFailConnect);
+      kfStop: SetStatus('', '', RsRigFailStop);
+    else
+      SetStatus('', '', RsRigFailSend);
+    end;
+  end;
+  { 止められないと分かったときも、状態欄で 1 度だけ詳しく言います。
+    Once it is known the rig cannot stop, the status bar says so in full, once. }
+  if (Status.Stop = ssNo) and not FRigStopNoted then
+  begin
+    FRigStopNoted := True;
+    SetStatus('', '', RsRigCannotStopNote);
+  end;
 end;
 
 procedure TMainForm.RenderTransmit;
@@ -4898,6 +5500,12 @@ end;
 
 procedure TMainForm.TxStopClick(Sender: TObject);
 begin
+  { **どの「止める」も無線機を止めます。**押した人が、どちらを止めたつもりか
+    分からないためです。
+    **Every stop stops the rig too**: which one the operator meant to stop
+    cannot be known. }
+  if FKeyer <> nil then
+    FKeyer.Stop;
   FPlayback.Stop;
   FTxPlaying := False;
   FTxProgress.Position := 0;
@@ -5071,6 +5679,7 @@ begin
     FStream.Reset;
   if FMulti <> nil then
     FMulti.Reset;
+  FReducer.Reset;
   FRxBandMap.Clear;
   FReviewPlay.Stop;
   { ファイルの復号は実時刻を持ちません。記録は実時刻の記録なので、ここでは
@@ -5116,12 +5725,12 @@ begin
     if FMulti = nil then
       FMulti := TMultiStationDecoder.Create(FDecoder);
     FRxBusy.Caption := RsDecodingBusy;
-    FDecodeThread := TDecodeThread.CreateMultiFile(FMulti, Samples, SampleRate,
-      @DecodeFinished);
+    FDecodeThread := TDecodeThread.CreateMultiFile(FMulti,
+      ForDecoderAudio(Samples, SampleRate), SampleRate, @DecodeFinished);
     UpdateTranscriptMessage;
     Exit;
   end;
-  StartDecode(PrepareForDecoder(Samples, SampleRate),
+  StartDecode(PrepareForDecoder(ForDecoderAudio(Samples, SampleRate), SampleRate),
     FDecoder.Metadata.SampleRate);
 end;
 
@@ -5374,6 +5983,7 @@ begin
     FStream.Reset;
   if FMulti <> nil then
     FMulti.Reset;
+  FReducer.Reset;
   FRxBandMap.Clear;
   { 受信テキストを消したら、そこを指していた音も手放します。残しておくと、
     次の受信の時刻と噛み合わない音が保管庫に居座ります（要件 FR-E.10）。
@@ -6232,6 +6842,9 @@ begin
     if FStream <> nil then
       FStream.Reset;
   end;
+  { 復号器と同じく、ノイズ低減の内側の状態も捨てます（要件 FR-N）。
+    Like the decoders, noise reduction drops its inner state (FR-N). }
+  FReducer.Reset;
 
   { どちらのモードでも、時計の出どころが変わったので保管庫と記録を改めます。
     Either way the clock has a new origin, so the store and the journal start
@@ -7082,7 +7695,7 @@ begin
     呼ぶことはできません。**
     The same tuning and band limit are applied as reception uses: **reading a
     different sound and calling it a re-reading would not be one.** }
-  Prepared := PrepareForDecoder(Audio, Rate);
+  Prepared := PrepareForDecoder(ForDecoderAudio(Audio, Rate), Rate);
   FRecheckSent := FRecheckWord;
   FRecheckSentAt := FRecheckAt;
   FRxBusy.Caption := RsRecheckBusy;
@@ -7284,7 +7897,9 @@ begin
     SetStatus('', '', RsMonitorNoAudio);
     Exit;
   end;
-  Prepared := PrepareForDecoder(Audio, Rate);
+  { 「モデルが聴いている音」なので、ノイズ低減も同じに通します（要件 FR-N）。
+    This is "what the model hears", so it goes through noise reduction too. }
+  Prepared := PrepareForDecoder(ForDecoderAudio(Audio, Rate), Rate);
   if Length(Prepared) = 0 then
   begin
     SetStatus('', '', RsMonitorNoPrepared);
@@ -7709,10 +8324,13 @@ begin
       FClockOrigin := Now;
       FJournal.StartSession(FClockOrigin);
     end;
+    { 復号へはノイズ低減を通した音を、保管庫とウォーターフォールには生の音を
+      渡します（要件 FR-N）。/ The decoder gets the audio through noise
+      reduction; the store and the waterfall get the raw audio (FR-N). }
     if FMode = rmWatch then
-      FMulti.Append(Fresh, FCaptureRate)
+      FMulti.Append(ForDecoderAudio(Fresh, FCaptureRate), FCaptureRate)
     else
-      FStream.Append(Fresh, FCaptureRate);
+      FStream.Append(ForDecoderAudio(Fresh, FCaptureRate), FCaptureRate);
     FHistory.Append(Fresh, FCaptureRate, StartAt);
     { ウォーターフォールには、同調も帯域制限も掛ける前の音を見せます。まだ
       選んでいない信号も見えていなければ、選びようがないためです。
@@ -7766,6 +8384,7 @@ end;
 
 procedure TMainForm.PollTimer(Sender: TObject);
 begin
+  UpdateRigStatus;
   { タイマーが動く時点でスレッドは Synchronize を抜けているため安全です。
   Safe here: the thread has left Synchronize by the time the timer runs. }
   if FCompletedThread <> nil then

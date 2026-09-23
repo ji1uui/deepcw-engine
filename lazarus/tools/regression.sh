@@ -78,7 +78,7 @@ gui_env() {
 # ---- 組み立て ----
 echo "== 組み立て / build =="
 for p in app/deepcw_station app/gui_probe cli/cw_devices cli/cw_loopback \
-         cli/cw_stream cli/cw_tune cli/decode_morse cli/dsp_check; do
+         cli/cw_stream cli/cw_tune cli/decode_morse cli/dsp_check cli/rig_check; do
   step "$p" lazbuild -B "$p.lpi"
 done
 echo
@@ -100,6 +100,17 @@ else
   skip "gui_probe（画面部品）" "xvfb-run がありません"
 fi
 step "強制終了しても記録が残る" ./tools/kill_safety_test.sh
+# 無線機の鍵の操作が fail-safe であること（要件 FR-T.2・FR-T.3、付録 BR）。
+# **無線機は要りません**が、Hamlib の `rigctld` が要ります（ダミーの無線機を
+# 立てるため）。無ければ飛ばします。
+# Keying the rig is fail-safe (requirements FR-T.2, FR-T.3, appendix BR).
+# **No rig is needed**, but Hamlib's `rigctld` is (it runs the dummy rig);
+# without it the step is skipped.
+if command -v rigctld >/dev/null 2>&1; then
+  step "無線機の鍵の操作が fail-safe" ./cli/rig_check --work "$GUI_HOME"
+else
+  skip "無線機の鍵の操作が fail-safe" "rigctld がありません"
+fi
 # 配布物に許諾条項が入ること、入らないときは止まること（要件 NFR-8.2）。
 # **配ってしまってからでは直せないものは、回帰試験に入れる。**
 # A distribution carries the licence texts, and stops when it cannot

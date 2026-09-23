@@ -68,6 +68,13 @@ type
 
 implementation
 
+uses
+  { 文字列を UTF-8 として扱う初期化を、モデルを読むどのプログラムにも効かせます
+    （`DeepCW.Platform` の初期化。付録 BR）。
+    Makes the UTF-8 string set-up (`DeepCW.Platform`'s initialization) apply to
+    every program that loads a model (appendix BR). }
+  DeepCW.Platform;
+
 function TDeepCWMetadata.GetChars(Index: Integer): string;
 begin
   if (Index < 0) or (Index > High(FChars)) then

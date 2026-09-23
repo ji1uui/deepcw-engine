@@ -241,10 +241,14 @@ jobs:
         run: |
           set -e
           for p in cli/cw_devices cli/cw_loopback cli/cw_stream cli/cw_tune \
-                   cli/decode_morse cli/dsp_check; do
+                   cli/decode_morse cli/dsp_check cli/rig_check; do
             echo "== $p =="
             lazbuild -B "$p.lpi"
           done
+          # `rig_check` は Hamlib の `rigctld` が要るので、ここでは組むだけです
+          # （Hamlib を動的に結ぶ単位が、どの OS でも組めることを確かめる）。
+          # `rig_check` needs Hamlib's `rigctld`, so here it is only built
+          # (proving the dynamically bound Hamlib unit compiles on every OS).
 
       # 外部ライブラリを要りません。**数百件の数値がここで確かめられます。**
       #

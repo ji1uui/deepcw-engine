@@ -26,7 +26,8 @@ uses
   DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.CopyLog, DeepCW.Callsign,
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
-  DeepCW.Reference, DeepCW.Roster, DeepCW.Platform, FistCases;
+  DeepCW.Reference, DeepCW.Roster, DeepCW.Platform, DeepCW.TxMessage,
+  DeepCW.NoiseReduction, DeepCW.Alphabet, FistCases;
 
 var
   Meta: TDeepCWMetadata;
@@ -4145,6 +4146,190 @@ end;
   Three things: a string with no break is unchanged; `#10` becomes **this
   platform's** ending; and **applying it twice equals applying it once** (a rule
   a comment used to keep, up to version 2.62). }
+{ 無線機で送る文（要件 FR-T.1）。**送る文は見えている文と同じでなければ
+  なりません。**差し込みの抜け・送れない文字・長すぎる文は、落とさずに断ることを
+  確かめます。
+  The text sent by the rig (requirement FR-T.1). **What is sent must be what is
+  shown**: a missing macro value, an unsendable character, or an over-long text
+  must be refused, never silently dropped. }
+procedure TestTxMessage;
+var
+  Context: TTxContext;
+  Text, Clean, Detail: string;
+  Problem: TTxProblem;
+  Words: TStringArray;
+  Ok: Boolean;
+begin
+  WriteLn;
+  WriteLn('DeepCW.TxMessage（要件 FR-T.1）');
+  Context.MyCall := 'JA1ABC';
+  Context.TheirCall := 'JH2XYZ';
+  Context.Rst := '599';
+
+  Ok := ExpandTemplate(AutoTemplate(tsCq), Context, Text, Problem, Detail);
+  Check('CQ の型が自局の符号で展開される',
+    Ok and (Text = 'CQ CQ CQ DE JA1ABC JA1ABC JA1ABC K'), Text);
+  Ok := ExpandTemplate(AutoTemplate(tsReport), Context, Text, Problem, Detail);
+  Check('レポートの型に相手の符号と RST が入る',
+    Ok and (Text = 'JH2XYZ DE JA1ABC UR RST 599 599 BK'), Text);
+
+  Context.TheirCall := '';
+  Ok := ExpandTemplate(AutoTemplate(tsAnswer), Context, Text, Problem, Detail);
+  Check('相手の符号が無ければ組み立てを断る（抜けたまま送らない）',
+    (not Ok) and (Problem = tpMissingValue) and (Detail = '{CALL}'), Detail);
+  Context.TheirCall := 'JH2XYZ';
+  Ok := ExpandTemplate('{CALL} {QTH}', Context, Text, Problem, Detail);
+  Check('知らない差し込みは断る', (not Ok) and (Problem = tpUnknownMacro) and
+    (Detail = '{QTH}'), Detail);
+  Ok := ExpandTemplate('{call} de {mycall}', Context, Text, Problem, Detail);
+  Check('差し込みの名前は大文字小文字を問わない',
+    Ok and (Text = 'JH2XYZ de JA1ABC'), Text);
+
+  Ok := CheckTransmitText('  cq  de ja1abc   k ', 20, Clean, Problem, Detail);
+  Check('空白をそろえ大文字にする（文字は落とさない）',
+    Ok and (Clean = 'CQ DE JA1ABC K'), Clean);
+  Ok := CheckTransmitText('CQ DE JA1ABC 73!', 20, Clean, Problem, Detail);
+  Check('送れない文字は落とさずに断る', (not Ok) and (Problem = tpUnsendable) and
+    (Pos('!', Detail) > 0), Detail);
+  Ok := CheckTransmitText('CQ DE ハム', 20, Clean, Problem, Detail);
+  Check('日本語も送れない文字として断る', (not Ok) and (Problem = tpUnsendable),
+    Detail);
+  Ok := CheckTransmitText('{CALL} DE JA1ABC', 20, Clean, Problem, Detail);
+  Check('展開されていない差し込みは断る', (not Ok) and (Problem = tpUnexpanded),
+    Detail);
+  Ok := CheckTransmitText('   ', 20, Clean, Problem, Detail);
+  Check('空の文は断る', (not Ok) and (Problem = tpEmpty));
+  Ok := CheckTransmitText(StringOfChar('E', TX_MAX_CHARS + 1), 20, Clean,
+    Problem, Detail);
+  Check('長すぎる文は断る', (not Ok) and (Problem = tpTooLong), Detail);
+  Ok := CheckTransmitText(StringOfChar('0', 100), 5, Clean, Problem, Detail);
+  Check('送出の見積もりが長すぎる文は断る（遅い速度）',
+    (not Ok) and (Problem = tpTooLong),
+    Format('%.0f 秒', [EstimateTransmitSeconds(StringOfChar('0', 100), 5)]));
+
+  { PARIS の 50 短点は末尾の語間 7 を含みます。1 語だけなら 43 短点。
+    PARIS's 50 dits include the trailing word gap of 7; a lone word is 43. }
+  Check('PARIS 1 語は 20 WPM で 43 短点（2.58 秒）',
+    Abs(EstimateTransmitSeconds('PARIS', 20) - 43 * 0.06) < 0.005,
+    Format('%.2f 秒', [EstimateTransmitSeconds('PARIS', 20)]));
+  Words := SplitForKeying('CQ DE JA1ABC K');
+  Check('語ごとに分け、最後の語以外は空白を持つ', (Length(Words) = 4) and
+    (Words[0] = 'CQ ') and (Words[2] = 'JA1ABC ') and (Words[3] = 'K'),
+    string.Join('|', Words));
+end;
+
+type
+  { 試験のための低減（振幅を半分にする）。**中身を足したときに守る取り決め**
+    （生の音を変えない）を、今のうちに確かめるためです。
+    A reducer for the test (halves the amplitude), so that **the rule the real
+    contents must keep** (raw audio is never changed) is checked already. }
+  THalvingReducer = class(TNoiseReducer)
+  public
+    function Key: string; override;
+    function Available: Boolean; override;
+    function Active: Boolean; override;
+    procedure Process(var Samples: TSingleArray; SampleRate: Integer); override;
+  end;
+
+function THalvingReducer.Key: string;
+begin
+  Result := 'test-halving';
+end;
+
+function THalvingReducer.Available: Boolean;
+begin
+  Result := True;
+end;
+
+function THalvingReducer.Active: Boolean;
+begin
+  Result := True;
+end;
+
+procedure THalvingReducer.Process(var Samples: TSingleArray; SampleRate: Integer);
+var
+  I: Integer;
+begin
+  for I := 0 to High(Samples) do
+    Samples[I] := Samples[I] * 0.5;
+end;
+
+{ 和文とノイズ低減の受け口（要件 FR-W・FR-N）。**中身は保留**なので、確かめる
+  のは「選べないものは選べない」「知らない鍵は既定に戻る」「使わないときは
+  写しも作らない」「カナの文字集合なら和文のモデルと分かる」の 4 つです。
+  The seats for Wabun and noise reduction (requirements FR-W, FR-N). **The
+  contents are pending**, so what is checked: what cannot be chosen cannot be,
+  an unknown key falls back to the default, "off" makes no copy, and a kana
+  character set identifies a Wabun model. }
+procedure TestExtensionSeats;
+var
+  Reducer: TNoiseReducer;
+  Raw, Given: TSingleArray;
+  Json: TStringList;
+  Path, Text: string;
+  Kana: TDeepCWMetadata;
+begin
+  WriteLn;
+  WriteLn('和文とノイズ低減の受け口（要件 FR-W・FR-N）');
+  Reducer := CreateNoiseReducer(NOISE_KEY_AI);
+  try
+    Check('AI の低減は、中身が無いうちは選べず素通しになる',
+      Reducer.Key = NOISE_KEY_OFF, Reducer.Key);
+  finally
+    Reducer.Free;
+  end;
+  Reducer := CreateNoiseReducer('something-new');
+  try
+    Check('知らない鍵は素通しになる', Reducer.Key = NOISE_KEY_OFF, Reducer.Key);
+    SetLength(Raw, 4);
+    Raw[0] := 0.5;
+    Given := ForDecoder(Reducer, Raw, 8000);
+    Check('使わないときは写しも作らない（同じ配列を渡す）',
+      Pointer(Given) = Pointer(Raw));
+  finally
+    Reducer.Free;
+  end;
+  Reducer := THalvingReducer.Create;
+  try
+    Given := ForDecoder(Reducer, Raw, 8000);
+    Check('使うときは、復号へ渡す音にだけ掛かる', Abs(Given[0] - 0.25) < 1e-6,
+      FloatToStr(Given[0]));
+    Check('使っても、生の音は変わらない（聴き直し・録音は生のまま）',
+      (Pointer(Given) <> Pointer(Raw)) and (Abs(Raw[0] - 0.5) < 1e-6),
+      FloatToStr(Raw[0]));
+  finally
+    Reducer.Free;
+  end;
+
+  Check('欧文は選べる', AlphabetAvailable(caInternational));
+  Check('和文は中身が揃うまで選べない', not AlphabetAvailable(caWabun));
+  Check('知らない文字の種類の鍵は欧文', AlphabetFromKey('kana-v2') = caInternational);
+  Check('鍵は往復する', AlphabetFromKey(AlphabetKey(caWabun)) = caWabun);
+  Check('同梱のモデルは欧文と分かる', ModelAlphabet(Meta) = caInternational);
+
+  { 同梱のメタデータの文字を 3 つカナに替えた写しを読ませます。
+    A copy of the bundled metadata with three characters swapped for kana. }
+  Json := TStringList.Create;
+  Kana := TDeepCWMetadata.Create;
+  try
+    Json.LoadFromFile(MetadataPath);
+    Text := Json.Text;
+    Text := StringReplace(Text, '",",', '"ア",', []);
+    Text := StringReplace(Text, '".",', '"イ",', []);
+    Text := StringReplace(Text, '"/",', '"ウ",', []);
+    Json.Text := Text;
+    Path := GetTempDir + 'deepcw_wabun_meta.json';
+    Json.SaveToFile(Path);
+    Kana.LoadFromFile(Path);
+    Check('カナの文字集合のモデルは和文と分かる', ModelAlphabet(Kana) = caWabun,
+      Kana.Chars[0]);
+    DeleteFile(Path);
+  finally
+    Kana.Free;
+    Json.Free;
+  end;
+end;
+
 procedure TestLineEndings;
 var
   Once, Twice: string;
@@ -4944,6 +5129,8 @@ begin
     TestJapanSubdivision;
     TestRecordKeys;
     TestLineEndings;
+    TestTxMessage;
+    TestExtensionSeats;
   finally
     Meta.Free;
   end;
