@@ -123,6 +123,15 @@ type
 
 implementation
 
+resourcestring
+  { 局の一覧の文言（要件 FR-J・NFR-7.6）。描くときに読みます。
+    The station list's words (FR-J, NFR-7.6), read when drawing. }
+  RsBandMapEmpty = '受信を始めると、聞こえている局がここに並びます。';
+  RsAgeNow = 'いま';
+  RsAgeSeconds = '%.0f秒';
+  RsAgeMinutes = '%.0f分';
+  RsCut = '休止';
+
 const
   { 桁の幅を、文字の高さの何倍で取るか。日本語と英数字が混じるので、等幅の桁数
     ではなく高さを基準にします。
@@ -148,7 +157,11 @@ begin
   Font.Name := 'Monospace';
   Font.Size := 10;
   FSelected := 0;
-  FEmptyMessage := '受信を始めると、聞こえている局がここに並びます。';
+  { 空のまま置きます。**描くときに決まった文言を読む**ので、稼働中に言語を
+    変えても追随します（要件 NFR-7.6）。
+    Left empty: **the fixed words are read when drawing**, so a language change
+    while running is followed (requirement NFR-7.6). }
+  FEmptyMessage := '';
 
   FMeasure := TBitmap.Create;
   FMeasure.SetSize(1, 1);
@@ -277,11 +290,11 @@ begin
   if Age < 0 then
     Age := 0;
   if Age < 10 then
-    Result := 'いま'
+    Result := RsAgeNow
   else if Age < 60 then
-    Result := Format('%.0f秒', [Age])
+    Result := Format(RsAgeSeconds, [Age])
   else
-    Result := Format('%.0f分', [Age / 60]);
+    Result := Format(RsAgeMinutes, [Age / 60]);
 end;
 
 function TBandMapView.NameCaption(Index: Integer): string;
@@ -352,7 +365,7 @@ begin
     apply, since a station that was cut is not analysed and so it is not known
     whether it is calling. }
   if FEntries[Index].Cut then
-    Canvas.TextOut(X, AtY + 3, '休止')
+    Canvas.TextOut(X, AtY + 3, RsCut)
   else if FEntries[Index].Calling then
     Canvas.TextOut(X, AtY + 3, 'CQ');
   Inc(X, Round(COLUMN_STATE * FUnit));
@@ -403,7 +416,10 @@ begin
   begin
     Canvas.Brush.Style := bsClear;
     Canvas.Font.Color := BlendColor(Color, Font.Color, 0.55);
-    Canvas.TextOut(6, 6, FEmptyMessage);
+    if FEmptyMessage <> '' then
+      Canvas.TextOut(6, 6, FEmptyMessage)
+    else
+      Canvas.TextOut(6, 6, RsBandMapEmpty);
     Exit;
   end;
 

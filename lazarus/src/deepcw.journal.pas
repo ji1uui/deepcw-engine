@@ -106,6 +106,13 @@ function JournalFileFor(const Directory: string; When: TDateTime): string;
 
 implementation
 
+resourcestring
+  { 受信テキストの記録の知らせ（要件 FR-B.6・NFR-7.6）。書くのは画面のスレッドです。
+    Messages of the received-text journal (FR-B.6, NFR-7.6); written on the UI
+    thread. }
+  RsJournalNoDirectory = '記録の保存先を作れません: %s';
+  RsJournalCannotWrite = '記録を書けません: %s';
+
 function JournalFileFor(const Directory: string; When: TDateTime): string;
 begin
   Result := IncludeTrailingPathDelimiter(Directory) +
@@ -142,13 +149,13 @@ begin
     if not DirectoryExists(FDirectory) then
       if not ForceDirectories(FDirectory) then
       begin
-        FLastError := '記録の保存先を作れません: ' + FDirectory;
+        FLastError := Format(RsJournalNoDirectory, [FDirectory]);
         Exit;
       end;
   except
     on E: Exception do
     begin
-      FLastError := '記録の保存先を作れません: ' + E.Message;
+      FLastError := Format(RsJournalNoDirectory, [E.Message]);
       Exit;
     end;
   end;
@@ -204,7 +211,7 @@ begin
     end;
   except
     on E: Exception do
-      FLastError := '記録を書けません: ' + E.Message;
+      FLastError := Format(RsJournalCannotWrite, [E.Message]);
   end;
   FLine := '';
 end;

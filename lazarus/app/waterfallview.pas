@@ -322,6 +322,10 @@ type
 
 implementation
 
+resourcestring
+  { 何も流れていないときの案内（要件 NFR-7.6）。/ The note while nothing flows. }
+  RsWaterfallIdle = '受信を開始すると、ここに信号が流れます。読みたい信号をクリックしてください。';
+
 { 振幅 0..255 を色に写します。暗いところから、青、緑、黄、白へ移ります。
   数値の大小が明るさの順に並ぶため、色覚特性によらず読み取れます。
 
@@ -374,7 +378,13 @@ begin
   FTuneHz := 0;
   FTracking := True;
   FAutoTuned := False;
-  FMessage := '受信を開始すると、ここに信号が流れます。読みたい信号をクリックしてください。';
+  { 空のまま置き、描くときに決まった文言を読みます（要件 NFR-7.6）。画面では
+    `TMainForm` が案内を入れますが、部品だけで使うとき（`gui_probe`）にも
+    日本語で固まらないようにします。
+    Left empty; the fixed words are read when drawing (NFR-7.6). On screen
+    `TMainForm` puts its own note in, but used alone (`gui_probe`) the part
+    should not be frozen in Japanese either. }
+  FMessage := '';
   FBitmap := TBitmap.Create;
   Configure(8000);
 end;
@@ -883,7 +893,10 @@ begin
   if FFilled = 0 then
   begin
     Canvas.Font.Color := clSilver;
-    Canvas.TextOut(8, 8, FMessage);
+    if FMessage <> '' then
+      Canvas.TextOut(8, 8, FMessage)
+    else
+      Canvas.TextOut(8, 8, RsWaterfallIdle);
   end
   else
   begin

@@ -138,6 +138,14 @@ function BandwidthHalfWidth(Bandwidth: TTunerBandwidth): Double;
 { 設定画面に出す表示名です。/ Display name for the settings panel. }
 function BandwidthCaption(Bandwidth: TTunerBandwidth): string;
 
+{ 同じ表示名を、**訳の差し替えに追随する形で**返します（要件 NFR-7.6）。
+  選択肢の行を `UiText.RegisterItem` に控えるために使います。控えておけば、
+  稼働中に言語を変えたとき、選んでいる行を保ったまま入れ替わります。
+  The same display name, **in a form that follows a change of translation**
+  (requirement NFR-7.6): used to note a list row with `UiText.RegisterItem`, so
+  that a language change while running replaces it and keeps the selection. }
+function BandwidthCaptionRef(Bandwidth: TTunerBandwidth): PString;
+
 { 画面で引いた幅を、選べる帯域幅のどれかに寄せます（要件 FR-D.8）。
 
   **自動は返しません。**画面で幅を引くのは手で選ぶという意思表示であり、
@@ -500,15 +508,28 @@ begin
   Result := Best;
 end;
 
-function BandwidthCaption(Bandwidth: TTunerBandwidth): string;
+resourcestring
+  { 帯域幅の表示名（要件 FR-D.3・NFR-7.6）。
+    Display names of the bandwidths (requirements FR-D.3, NFR-7.6). }
+  RsBandwidthAuto = '自動（推奨）';
+  RsBandwidthNarrow = '狭い（±125 Hz）';
+  RsBandwidthNormal = '標準（±250 Hz）';
+  RsBandwidthWide = '広い（±400 Hz）';
+
+function BandwidthCaptionRef(Bandwidth: TTunerBandwidth): PString;
 begin
   case Bandwidth of
-    tbNarrow: Result := '狭い（±125 Hz）';
-    tbNormal: Result := '標準（±250 Hz）';
-    tbWide: Result := '広い（±400 Hz）';
+    tbNarrow: Result := @RsBandwidthNarrow;
+    tbNormal: Result := @RsBandwidthNormal;
+    tbWide: Result := @RsBandwidthWide;
   else
-    Result := '自動（推奨）';
+    Result := @RsBandwidthAuto;
   end;
+end;
+
+function BandwidthCaption(Bandwidth: TTunerBandwidth): string;
+begin
+  Result := BandwidthCaptionRef(Bandwidth)^;
 end;
 
 end.

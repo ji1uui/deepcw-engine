@@ -84,6 +84,13 @@ function ElementColor(Kind: TElementKind): TColor;
 
 implementation
 
+resourcestring
+  { 分布の文言（要件 FR-F・NFR-7.6）。描くときに読みます。
+    The histogram's words (FR-F, NFR-7.6), read when drawing. }
+  RsHistogramEmpty = '訓練を 1 回終えると、ここに符号の長さの分布が出ます。';
+  RsToneLengths = '音の長さ（短点いくつぶん）';
+  RsGapLengths = '間隔の長さ（短点いくつぶん）';
+
 const
   { 目盛りの縦線を引く位置（短点いくつぶんか）。
     Where the marks go, in dits. }
@@ -108,8 +115,9 @@ begin
   inherited Create(AOwner);
   ControlStyle := ControlStyle + [csOpaque];
   Color := clWindow;
-  FEmptyMessage :=
-    '訓練を 1 回終えると、ここに符号の長さの分布が出ます。';
+  { 空のまま置き、描くときに決まった文言を読みます（要件 NFR-7.6）。
+    Left empty; the fixed words are read when drawing (NFR-7.6). }
+  FEmptyMessage := '';
   FMeasure := TBitmap.Create;
   FMeasure.SetSize(1, 1);
   MeasureFont;
@@ -257,14 +265,17 @@ begin
     if (Length(FMeasurement.Elements) = 0) or (FMeasurement.DitSeconds <= 0) then
     begin
       Target_.Font.Color := BlendColor(Color, Font.Color, 0.55);
-      Target_.TextOut(6, 6, FEmptyMessage);
+      if FEmptyMessage <> '' then
+        Target_.TextOut(6, 6, FEmptyMessage)
+      else
+        Target_.TextOut(6, 6, RsHistogramEmpty);
       Exit;
     end;
 
     Middle := FWidth div 2;
-    DrawPanel(8, Middle - 12, '音の長さ（短点いくつぶん）',
+    DrawPanel(8, Middle - 12, RsToneLengths,
       [ekDit, ekDah], TONE_MARKS);
-    DrawPanel(Middle + 8, FWidth - 8, '間隔の長さ（短点いくつぶん）',
+    DrawPanel(Middle + 8, FWidth - 8, RsGapLengths,
       [ekIntra, ekChar, ekWord], GAP_MARKS);
   finally
     FTarget := nil;

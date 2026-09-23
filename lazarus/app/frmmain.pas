@@ -3704,7 +3704,7 @@ begin
   FSetBandwidth.SetBounds(648, 8, 160, 28);
   FSetBandwidth.Style := csDropDownList;
   for Choice := Low(TTunerBandwidth) to High(TTunerBandwidth) do
-    FSetBandwidth.Items.Add(BandwidthCaption(Choice));
+    RegisterItem(FSetBandwidth, Ord(Choice), BandwidthCaptionRef(Choice));
   FSetBandwidth.ItemIndex := 0;
   FSetBandwidth.OnChange := @RxConfirmSpeedChanged;
 
@@ -4067,6 +4067,19 @@ begin
     FRxWaterfall.Message_ := FWfMessage^;
     FRxWaterfall.Invalidate;
   end;
+  { 描くときに文言を読む部品（版 2.67）。**描き直さなければ、次に何かが動く
+    まで前の言語のまま見えます。**局の一覧の根拠の名前（`TrustSource`）は、
+    一覧が 1 秒ごとに作り直すときに入れ替わります。
+    Parts that read their words when drawing (version 2.67). **Unless redrawn
+    they show the previous language until something moves.** The evidence name
+    in the station list (`TrustSource`) changes when the list is rebuilt, once
+    a second. }
+  if FRxBandMap <> nil then
+    FRxBandMap.Invalidate;
+  if FFtTrend <> nil then
+    FFtTrend.Invalidate;
+  if FFtHistogram <> nil then
+    FFtHistogram.Invalidate;
   { **これも控えに載らない組み直しです。**`FRxSubdivisionInfo` の文言は
     `RxSubdivisionChanged` が都度組み立てるので、控えには載せられません
     （空欄なら案内、埋まっていれば読みの札）。呼ばなければ、起動したときの

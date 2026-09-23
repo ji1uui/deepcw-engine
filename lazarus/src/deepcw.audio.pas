@@ -253,6 +253,13 @@ function CheckStructureLayout(out Report: string): Boolean;
 
 implementation
 
+resourcestring
+  { 装置を待つあいだの短い札（要件 NFR-4.4・NFR-7.6）。画面のスレッドで読みます。
+    The short label while waiting for the device (NFR-4.4, NFR-7.6); read on
+    the UI thread. }
+  RsWaitingForDevice = '装置待ち';
+  RsWaitingForDeviceTry = '装置待ち %d 回目';
+
 function WaitingForDeviceCaption(Attempts: Integer): string;
 begin
   { **短くします。**出す先は状態の欄（幅 140）で、長い文は入りません。長いまま
@@ -262,9 +269,9 @@ begin
     fit. Left long, measurement showed **the number -- the one part that
     matters -- falling off the end.** The explanation is given separately. }
   if Attempts <= 0 then
-    Result := '装置待ち'
+    Result := RsWaitingForDevice
   else
-    Result := Format('装置待ち %d 回目', [Attempts]);
+    Result := Format(RsWaitingForDeviceTry, [Attempts]);
 end;
 
 

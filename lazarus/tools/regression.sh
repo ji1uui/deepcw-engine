@@ -110,6 +110,11 @@ step "配布物に許諾条項が入る" ./tools/bundle_licence_test.sh
 # can be checked here (running and signing on macOS are NOT VERIFIED;
 # appendix BJ).
 step "macOS の .app が配れる形になる" ./tools/bundle_macos_test.sh
+# CI の macOS が、**分かっている 1 つの失敗（#25）だけ**を通すこと（付録 BO）。
+# 見分けが甘ければ、ずっと赤かった CI がずっと緑になるだけです。
+# The CI's macOS job lets through **only the one known failure (#25)**
+# (appendix BO); a loose match would just turn always-red into always-green.
+step "CI が通すのは #25 のリンク失敗だけ" ./tools/known_link_failure_test.sh
 # 画素密度の違う画面で、窓の組み方が破綻しないこと（要件 NFR-5.1）。
 # **1 つの画面で見て回るだけでは、高 DPI の破綻は見つからない。**
 # The layout holds on screens of different pixel density (requirement NFR-5.1).

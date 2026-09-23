@@ -271,14 +271,47 @@ jobs:
         working-directory: lazarus
         run: ./cli/cw_devices${{ runner.os == 'Windows' && '.exe' || '' }} --abi-only
 
+      # macOS では、**分かっている 1 つの失敗（未解決 #25）だけ**を通します。
+      # FPC 3.2.2 と新しい Apple のリンカの食い違いで、3.2.4 を待つと決めて
+      # います（付録 BK.4）。**ずっと赤い CI は新しい失敗を知らせられない**ので、
+      # 印を見分けて警告に変え、ほかの失敗（コンパイルの誤りを含む）はすべて
+      # 落とします（`tools/known_link_failure.sh`、付録 BO）。リンクできた
+      # ときだけ、次の段で `.app` を組みます。
+      #
+      # On macOS **only the one known failure (open question #25)** is let
+      # through: FPC 3.2.2 against Apple's newer linker, waiting for 3.2.4 by
+      # decision (appendix BK.4). **A CI that is always red cannot announce a
+      # new failure**, so the signature is recognised and turned into a warning,
+      # and every other failure -- a compile error included -- still fails
+      # (`tools/known_link_failure.sh`, appendix BO). The `.app` step runs only
+      # when linking succeeded.
       - name: 画面のアプリを組み立てる
+        id: gui
         working-directory: lazarus
+        shell: bash
         run: |
           set -e
+          linked=true
           for p in app/deepcw_station app/gui_probe; do
             echo "== $p =="
-            lazbuild -B "$p.lpi"
+            if [ "$RUNNER_OS" != "macOS" ]; then
+              lazbuild -B "$p.lpi"
+              continue
+            fi
+            log="$RUNNER_TEMP/$(basename "$p").log"
+            if lazbuild -B "$p.lpi" >"$log" 2>&1; then
+              tail -5 "$log"
+              continue
+            fi
+            tail -40 "$log"
+            if ./tools/known_link_failure.sh "$log" "$(fpc -iV)"; then
+              echo "::warning title=#25 macOS link::$p はリンクできません（FPC 3.2.2 と新しいリンカ。3.2.4 待ち）。コンパイルは通っています"
+              linked=false
+            else
+              exit 1
+            fi
           done
+          echo "linked=$linked" >>"$GITHUB_OUTPUT"
 
       # macOS だけ。**`.app` を組み、署名が通るかを確かめます。**版 2.62 で
       # 並びは Linux で確かめましたが、`codesign` は macOS でしか走りません
@@ -294,7 +327,7 @@ jobs:
       # `-s -` signs ad-hoc: distribution needs a certificate, but **whether the
       # bundle's shape passes signing at all** is answered here.
       - name: .app を組んで署名を通す（macOS）
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.gui.outputs.linked == 'true'
         working-directory: lazarus
         run: |
           set -e

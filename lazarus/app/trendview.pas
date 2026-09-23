@@ -90,6 +90,10 @@ function ItemColor(Which: TFistItem): TColor;
 
 implementation
 
+resourcestring
+  { 推移の空の案内（要件 FR-F・NFR-7.6）。/ The trend's empty note. }
+  RsTrendEmpty = 'まだ記録がありません。訓練を 1 回終えると、ここに推移が出ます。';
+
 const
   { 目盛りは 0 から 100 まで。**点数の幅に合わせて伸び縮みさせません。**
     伸ばすと、1 点の違いが大きな山に見えます。
@@ -123,7 +127,9 @@ begin
   ControlStyle := ControlStyle + [csOpaque];
   Color := clWindow;
   FShown := [fiOverall];
-  FEmptyMessage := 'まだ記録がありません。訓練を 1 回終えると、ここに推移が出ます。';
+  { 空のまま置き、描くときに決まった文言を読みます（要件 NFR-7.6）。
+    Left empty; the fixed words are read when drawing (NFR-7.6). }
+  FEmptyMessage := '';
   FMeasure := TBitmap.Create;
   FMeasure.SetSize(1, 1);
   MeasureFont;
@@ -350,7 +356,10 @@ begin
   if Length(FItems) = 0 then
   begin
     Target.Font.Color := BlendColor(Color, Font.Color, 0.55);
-    Target.TextOut(6, 6, FEmptyMessage);
+    if FEmptyMessage <> '' then
+      Target.TextOut(6, 6, FEmptyMessage)
+    else
+      Target.TextOut(6, 6, RsTrendEmpty);
     Exit;
   end;
 

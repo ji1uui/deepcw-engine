@@ -245,6 +245,21 @@ function EntryCaption(const Entry: TBandEntry): string;
 
 implementation
 
+resourcestring
+  { 局の一覧の札（要件 FR-J・FR-K・NFR-7.6）。一覧は画面のスレッドで作ります。
+    **根拠の名前（`TrustSource`）は差し込みで付けます**——言語によって語順が
+    違うためです（日本語は「交信記録あり」、英語は前に置く）。
+    Labels of the station list (FR-J, FR-K, NFR-7.6); the list is built on the
+    UI thread. **The evidence name (`TrustSource`) goes in by substitution**,
+    since word order differs by language. }
+  RsTrustSourceLog = '交信記録';
+  RsCrowded = '密集 %d';
+  RsTrustShape = '確認中';
+  RsTrustAgreed = '一致';
+  RsTrustInRoster = '資料あり';
+  RsTrustVerified = '実在確認';
+  RsTrustFoundIn = '%sあり';
+
 { 語に切る規則と、相手の符号を選ぶ規則は DeepCW.Exchange が持ちます。交信モードの
   記録も同じ規則で選ぶ必要があり、写しを 2 つ置くと食い違うためです。
   Splitting into words and choosing the station's call sign live in
@@ -318,7 +333,7 @@ begin
     if Result[I].Worked then
     begin
       Result[I].Trust := ctInRoster;
-      Result[I].TrustSource := '交信記録';
+      Result[I].TrustSource := RsTrustSourceLog;
     end
     { **交信記録が先です。**自分が交信した相手であることは、配られた一覧に
       名前があることより確かな根拠です。両方に在るときは、強いほうを言います
@@ -363,7 +378,7 @@ begin
   { 密集している範囲は、1 局として読んだふりをしません（要件 FR-J.6）。
     A crowded stretch is not passed off as one station (requirement FR-J.6). }
   if Entry.Crowded > 0 then
-    Exit(Format('密集 %d', [Entry.Crowded + 1]));
+    Exit(Format(RsCrowded, [Entry.Crowded + 1]));
   case Entry.Trust of
     ctNone: Result := '';
     ctShape: Result := Entry.Callsign + ' ?';
@@ -387,10 +402,10 @@ end;
 function TrustCaption(Trust: TCallsignTrust): string;
 begin
   case Trust of
-    ctShape: Result := '確認中';
-    ctAgreed: Result := '一致';
-    ctInRoster: Result := '資料あり';
-    ctVerified: Result := '実在確認';
+    ctShape: Result := RsTrustShape;
+    ctAgreed: Result := RsTrustAgreed;
+    ctInRoster: Result := RsTrustInRoster;
+    ctVerified: Result := RsTrustVerified;
   else
     Result := '';
   end;
@@ -405,7 +420,7 @@ begin
     whether this is a station one has worked or merely a name on a list somebody
     handed out. }
   if (Entry.TrustSource <> '') and (Entry.Trust = ctInRoster) then
-    Result := Entry.TrustSource + 'あり';
+    Result := Format(RsTrustFoundIn, [Entry.TrustSource]);
 end;
 
 end.

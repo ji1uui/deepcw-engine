@@ -362,12 +362,27 @@ function LogKeyOf(const Callsign: string): string;
 
 implementation
 
+resourcestring
+  { 交信記録の札と知らせ（要件 FR-E.3・FR-K.10・NFR-7.6）。交信記録は画面の
+    スレッドで読み書きします。**ADIF へ書く値は訳しません**（鍵のまま）。
+    Labels and messages of the contact log (FR-E.3, FR-K.10, NFR-7.6); the log
+    is read and written on the UI thread. **Values written to ADIF are not
+    translated** (they stay keys). }
+  RsSubdivisionCity = '市（JCC）';
+  RsSubdivisionGun = '郡（JCG）';
+  RsSubdivisionCityOrWard = '市または区（JCC／WAKU）';
+  RsLogCannotRead = '交信記録を読めません: %s';
+  RsLogNoDirectory = '交信記録の保存先を作れません: %s';
+  RsLogCannotWrite = '交信記録を書けません: %s';
+  RsLogCannotImport = '取り込むファイルを読めません: %s';
+  RsLogCannotExport = '書き出せません: %s';
+
 function JapanSubdivisionCaption(Kind: TJapanSubdivision): string;
 begin
   case Kind of
-    jsCity: Result := '市（JCC）';
-    jsGun: Result := '郡（JCG）';
-    jsCityOrWard: Result := '市または区（JCC／WAKU）';
+    jsCity: Result := RsSubdivisionCity;
+    jsGun: Result := RsSubdivisionGun;
+    jsCityOrWard: Result := RsSubdivisionCityOrWard;
   else
     Result := '';
   end;
@@ -745,7 +760,7 @@ begin
   except
     on E: Exception do
     begin
-      FLastError := '交信記録を読めません: ' + E.Message;
+      FLastError := Format(RsLogCannotRead, [E.Message]);
       Exit;
     end;
   end;
@@ -767,7 +782,7 @@ begin
     if (Directory <> '') and not DirectoryExists(Directory) then
       if not ForceDirectories(Directory) then
       begin
-        FLastError := '交信記録の保存先を作れません: ' + Directory;
+        FLastError := Format(RsLogNoDirectory, [Directory]);
         Exit;
       end;
     if FileExists(FFileName) then
@@ -789,7 +804,7 @@ begin
     Result := True;
   except
     on E: Exception do
-      FLastError := '交信記録を書けません: ' + E.Message;
+      FLastError := Format(RsLogCannotWrite, [E.Message]);
   end;
 end;
 
@@ -827,7 +842,7 @@ begin
   except
     on E: Exception do
     begin
-      FLastError := '取り込むファイルを読めません: ' + E.Message;
+      FLastError := Format(RsLogCannotImport, [E.Message]);
       Exit;
     end;
   end;
@@ -908,7 +923,7 @@ begin
     Result := True;
   except
     on E: Exception do
-      FLastError := '書き出せません: ' + E.Message;
+      FLastError := Format(RsLogCannotExport, [E.Message]);
   end;
 end;
 

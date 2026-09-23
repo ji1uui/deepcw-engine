@@ -151,6 +151,11 @@ function LanguageDirectory: string;
 
 implementation
 
+resourcestring
+  { 同梱の許諾条項の 1 行（要件 NFR-8.2・NFR-7.6）。
+    One line of the bundled licences (NFR-8.2, NFR-7.6). }
+  RsLicenceFile = '%0:s（%1:d バイト）';
+
 { 常駐メモリ（kB）。読めない環境では 0 を返します。
 
   Linux は `/proc/self/status` の `VmRSS:` に持っています。Windows は
@@ -276,7 +281,7 @@ begin
     repeat
       if (Search.Attr and faDirectory) <> 0 then
         Continue;
-      Result.Add(Format('%0:s（%1:d バイト）', [Search.Name, Search.Size]));
+      Result.Add(Format(RsLicenceFile, [Search.Name, Search.Size]));
     until FindNext(Search) <> 0;
   finally
     FindClose(Search);

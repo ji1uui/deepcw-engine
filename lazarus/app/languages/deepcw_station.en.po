@@ -1,6 +1,193 @@
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8"
 
+#: bandmapview.rsageminutes
+#, object-pascal-format
+msgid "%.0f分"
+msgstr "%.0f min"
+
+#: bandmapview.rsagenow
+msgid "いま"
+msgstr "now"
+
+#: bandmapview.rsageseconds
+#, object-pascal-format
+msgid "%.0f秒"
+msgstr "%.0f s"
+
+#: bandmapview.rsbandmapempty
+msgid "受信を始めると、聞こえている局がここに並びます。"
+msgstr "Heard stations appear here once receiving starts."
+
+#: bandmapview.rscut
+msgid "休止"
+msgstr "Paused"
+
+#: deepcw.audio.rswaitingfordevice
+msgid "装置待ち"
+msgstr "Device wait"
+
+#: deepcw.audio.rswaitingfordevicetry
+#, object-pascal-format
+msgid "装置待ち %d 回目"
+msgstr "Wait, try %d"
+
+#: deepcw.bandmap.rscrowded
+#, object-pascal-format
+msgid "密集 %d"
+msgstr "Crowded %d"
+
+#: deepcw.bandmap.rstrustagreed
+msgid "一致"
+msgstr "Agreed"
+
+#: deepcw.bandmap.rstrustfoundin
+#, object-pascal-format
+msgid "%sあり"
+msgstr "In %s"
+
+#: deepcw.bandmap.rstrustinroster
+msgid "資料あり"
+msgstr "Listed"
+
+#: deepcw.bandmap.rstrustshape
+msgid "確認中"
+msgstr "Checking"
+
+#: deepcw.bandmap.rstrustsourcelog
+msgctxt "deepcw.bandmap.rstrustsourcelog"
+msgid "交信記録"
+msgstr "log"
+
+#: deepcw.bandmap.rstrustverified
+msgid "実在確認"
+msgstr "Verified"
+
+#: deepcw.copylog.rsconfusionadded
+#, object-pascal-format
+msgid "%0:s（足し %1:d 回）"
+msgstr "%0:s (extra ×%1:d)"
+
+#: deepcw.copylog.rsconfusionmissed
+#, object-pascal-format
+msgid "%0:s（落とし %1:d 回）"
+msgstr "%0:s (missed ×%1:d)"
+
+#: deepcw.copylog.rsconfusionseparator
+msgctxt "deepcw.copylog.rsconfusionseparator"
+msgid "、"
+msgstr ", "
+
+#: deepcw.copylog.rsconfusionswapped
+#, object-pascal-format
+msgid "%0:s → %1:s（%2:d 回）"
+msgstr "%0:s → %1:s (×%2:d)"
+
+#: deepcw.diagnostics.rsdiagnosticnote
+msgid "この控えには、受信した文章・交信記録の中身・待っている符号・音声は入っていません。ファイルの場所のうち、利用者の場所は ~ に置き換えてあります。"
+msgstr "This copy holds no received text, no contact log contents, no watched call signs and no audio. Your own folder in file locations is replaced by ~."
+
+#: deepcw.diagnostics.rsdiagnostictitle
+msgid "DeepCW 診断情報の控え"
+msgstr "DeepCW diagnostics"
+
+#: deepcw.journal.rsjournalcannotwrite
+#, object-pascal-format
+msgid "記録を書けません: %s"
+msgstr "Journal failed: %s"
+
+#: deepcw.journal.rsjournalnodirectory
+#, object-pascal-format
+msgid "記録の保存先を作れません: %s"
+msgstr "No journal folder: %s"
+
+#: deepcw.log.rslogcannotexport
+#, object-pascal-format
+msgid "書き出せません: %s"
+msgstr "Cannot export: %s"
+
+#: deepcw.log.rslogcannotimport
+#, object-pascal-format
+msgid "取り込むファイルを読めません: %s"
+msgstr "Cannot read the file to import: %s"
+
+#: deepcw.log.rslogcannotread
+#, object-pascal-format
+msgid "交信記録を読めません: %s"
+msgstr "Log unreadable: %s"
+
+#: deepcw.log.rslogcannotwrite
+#, object-pascal-format
+msgid "交信記録を書けません: %s"
+msgstr "Log not written: %s"
+
+#: deepcw.log.rslognodirectory
+#, object-pascal-format
+msgid "交信記録の保存先を作れません: %s"
+msgstr "No log folder: %s"
+
+#: deepcw.log.rssubdivisioncity
+msgid "市（JCC）"
+msgstr "City (JCC)"
+
+#: deepcw.log.rssubdivisioncityorward
+msgid "市または区（JCC／WAKU）"
+msgstr "City or ward (JCC/WAKU)"
+
+#: deepcw.log.rssubdivisiongun
+msgid "郡（JCG）"
+msgstr "District (JCG)"
+
+#: deepcw.platform.rslicencefile
+#, object-pascal-format
+msgid "%0:s（%1:d バイト）"
+msgstr "%0:s (%1:d bytes)"
+
+#: deepcw.recorder.rsreccannotstart
+#, object-pascal-format
+msgid "録音を始められません: %s"
+msgstr "Recording failed: %s"
+
+#: deepcw.recorder.rsrecnodirectory
+#, object-pascal-format
+msgid "録音の保存先を作れません: %s"
+msgstr "No recording folder: %s"
+
+#: deepcw.recorder.rsrecnotreceiving
+msgid "録音を始められません: 受信が動いていません。"
+msgstr "Cannot start recording: not receiving."
+
+#: deepcw.recorder.rsrecsizelimit
+#, object-pascal-format
+msgid "録音の上限（%.0f MB）に達しました。"
+msgstr "Recording limit (%.0f MB) reached."
+
+#: deepcw.recorder.rsrectimelimit
+#, object-pascal-format
+msgid "録音の上限（%.0f 時間）に達しました。"
+msgstr "Recording limit (%.0f hours) reached."
+
+#: deepcw.recorder.rsrecwritefailed
+#, object-pascal-format
+msgid "録音を続けられません: %s"
+msgstr "Recording stopped: %s"
+
+#: deepcw.tuner.rsbandwidthauto
+msgid "自動（推奨）"
+msgstr "Auto (best)"
+
+#: deepcw.tuner.rsbandwidthnarrow
+msgid "狭い（±125 Hz）"
+msgstr "Narrow (±125 Hz)"
+
+#: deepcw.tuner.rsbandwidthnormal
+msgid "標準（±250 Hz）"
+msgstr "Normal (±250 Hz)"
+
+#: deepcw.tuner.rsbandwidthwide
+msgid "広い（±400 Hz）"
+msgstr "Wide (±400 Hz)"
+
 #: frmmain.rsadifexportfilter
 msgid "ADIF (*.adi)|*.adi|すべて (*.*)|*.*"
 msgstr "ADIF (*.adi)|*.adi|All files (*.*)|*.*"
@@ -272,7 +459,7 @@ msgstr ""
 #: frmmain.rsevidenceentry
 #, object-pascal-format
 msgid "（%s にあり＝実在は確かです）"
-msgstr " (seen at %s -- known to exist)"
+msgstr " (in the %s -- known to exist)"
 
 #: frmmain.rsexported
 #, object-pascal-format
@@ -655,7 +842,7 @@ msgstr "Audio length: %0:.0f - %1:.0f s (longer is split)"
 
 #: frmmain.rsinroster
 msgid "手元の一覧"
-msgstr "Local list"
+msgstr "local list"
 
 #: frmmain.rsjournaloff
 msgid "受信テキストの記録を止めました。"
@@ -1479,6 +1666,7 @@ msgid "待っていた %s が出ています。"
 msgstr "Watched call on air: %s."
 
 #: frmmain.rswatchedseparator
+msgctxt "frmmain.rswatchedseparator"
 msgid "、"
 msgstr ", "
 
@@ -1505,10 +1693,32 @@ msgid "WAV ファイル|*.wav|すべてのファイル|*.*"
 msgstr "WAV files|*.wav|All files|*.*"
 
 #: frmmain.rswfidle
+msgctxt "frmmain.rswfidle"
 msgid "受信を開始すると、ここに信号が流れます。読みたい信号をクリックしてください。"
 msgstr "Signals flow here once you start receiving. Click the one you want to read."
 
 #: frmmain.rswfwaiting
 msgid "信号を待っています。読みたい信号が見えたらクリックしてください。"
 msgstr "Waiting for signals. Click one to read when it appears."
+
+#: histogramview.rsgaplengths
+msgid "間隔の長さ（短点いくつぶん）"
+msgstr "Gap lengths (in dots)"
+
+#: histogramview.rshistogramempty
+msgid "訓練を 1 回終えると、ここに符号の長さの分布が出ます。"
+msgstr "After one drill, the spread of lengths appears here."
+
+#: histogramview.rstonelengths
+msgid "音の長さ（短点いくつぶん）"
+msgstr "Tone lengths (in dots)"
+
+#: trendview.rstrendempty
+msgid "まだ記録がありません。訓練を 1 回終えると、ここに推移が出ます。"
+msgstr "No records yet. After one drill, the trend appears here."
+
+#: waterfallview.rswaterfallidle
+msgctxt "waterfallview.rswaterfallidle"
+msgid "受信を開始すると、ここに信号が流れます。読みたい信号をクリックしてください。"
+msgstr "Signals flow here once you start receiving. Click the one you want to read."
 

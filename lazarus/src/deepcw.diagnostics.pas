@@ -33,13 +33,16 @@ interface
 uses
   SysUtils;
 
-const
+resourcestring
   { 控えの先頭に置く断り書き。**これを読めば、貼ってよいかが分かります。**
-    The note at the top: **it is what tells the sender it is safe to paste.** }
-  DIAGNOSTIC_NOTE =
+    貼る人が読む言葉なので訳します（要件 NFR-7.6）。
+    The note at the top: **it is what tells the sender it is safe to paste.**
+    The sender reads it, so it is translated (requirement NFR-7.6). }
+  RsDiagnosticNote =
     'この控えには、受信した文章・交信記録の中身・待っている符号・音声は' +
     '入っていません。ファイルの場所のうち、利用者の場所は ~ に置き換えて' +
     'あります。';
+  RsDiagnosticTitle = 'DeepCW 診断情報の控え';
 
 { 利用者の場所を `~` に置き換えます。末尾の区切りの有無は問いません。
   `HomeDir` が空なら何もしません。
@@ -82,9 +85,9 @@ begin
     The date and time are written without passing through the locale: unreadable
     on the receiving side, they would serve nothing (lesson 10.27). }
   Result :=
-    'DeepCW 診断情報の控え  ' +
+    RsDiagnosticTitle + '  ' +
     FormatDateTime('yyyy"-"mm"-"dd" "hh":"nn":"ss', When_) + LineEnding +
-    DIAGNOSTIC_NOTE + LineEnding +
+    RsDiagnosticNote + LineEnding +
     StringOfChar('-', 60) + LineEnding +
     MaskHome(Body, HomeDir);
 end;

@@ -88,6 +88,9 @@ type
 
   TAudioRecorder = class;
 
+  { 自ら止まった種類。/ The kind of stop it made by itself. }
+  TRecorderStopKind = (skNone, skWriteFailed, skTimeLimit, skSizeLimit);
+
   TRecorderThread = class(TThread)
   private
     FOwner: TAudioRecorder;
@@ -116,7 +119,19 @@ type
     FSeconds: Double;
     FBytes: Int64;
     FLost: Int64;
-    FStopped: string;
+    { 自ら止まった**種類**と、書けなかったときの原文。**言葉にはしません。**
+      これを書くのは録音のスレッドで、言葉（`resourcestring`）は稼働中の
+      言語切替で画面のスレッドが入れ替えます。ワーカーが読むと取り合いに
+      なるので、言葉にするのは `Snapshot` を呼んだ側です（要件 NFR-7.6、
+      付録 BO）。
+      The **kind** of stop it made by itself, and the original text when a
+      write failed. **It is not put into words here**: the recording thread
+      writes these, while the words (`resourcestring`s) are swapped by the UI
+      thread on a language change, and a worker reading them would race it.
+      The caller of `Snapshot` puts it into words (requirement NFR-7.6,
+      appendix BO). }
+    FStopKind: TRecorderStopKind;
+    FStopDetail: string;
     procedure Publish;
     { 輪バッファに溜まった分を書き出します。**ワーカースレッドだけが呼びます。**
       書き出し中に錠を持たないのは、遅い書き込みが画面の状態表示を待たせない
@@ -161,6 +176,11 @@ type
     procedure Stop;
 
     function Running: Boolean;
+    { いまの様子を写して返します。**画面のスレッドから呼びます**——止まった
+      理由（`Stopped`）をここで言葉にし、言葉は言語切替で入れ替わるためです。
+      Returns a copy of the current state. **Call it from the UI thread**: the
+      reason it stopped (`Stopped`) is put into words here, and the words are
+      swapped on a language change. }
     function Snapshot: TRecorderStatus;
     property FileName: string read FFileName;
     property LastError: string read FLastError;
@@ -179,6 +199,17 @@ type
 function RecordingFileFor(const Directory: string; When: TDateTime): string;
 
 implementation
+
+resourcestring
+  { 録音の知らせ（要件 FR-E.8・NFR-7.6）。**画面のスレッドでだけ読みます。**
+    The recording's messages (requirements FR-E.8, NFR-7.6). **Read only on
+    the UI thread.** }
+  RsRecNotReceiving = '録音を始められません: 受信が動いていません。';
+  RsRecNoDirectory = '録音の保存先を作れません: %s';
+  RsRecCannotStart = '録音を始められません: %s';
+  RsRecWriteFailed = '録音を続けられません: %s';
+  RsRecTimeLimit = '録音の上限（%.0f 時間）に達しました。';
+  RsRecSizeLimit = '録音の上限（%.0f MB）に達しました。';
 
 function RecordingFileFor(const Directory: string; When: TDateTime): string;
 begin
@@ -204,7 +235,7 @@ begin
       状態で伝えます。**ワーカーから画面を触ることはしません。
       A limit reached or a write that failed ends it here. **The display learns
       of it from the status**; a worker never touches the display. }
-    if FOwner.FStopped <> '' then
+    if FOwner.FStopKind <> skNone then
       Break;
     if not Terminated then
       Sleep(RECORD_POLL_MS);
@@ -212,7 +243,7 @@ begin
   { 最後にもう一度読み切ります。止める指示が来たあとに届いた音も残します。
     One last read: audio that arrived after the stop was asked for is kept
     too. }
-  if FOwner.FStopped = '' then
+  if FOwner.FStopKind = skNone then
     FOwner.Drain;
 end;
 
@@ -246,7 +277,7 @@ begin
     Exit(True);
   if (FRing = nil) or (FSampleRate <= 0) then
   begin
-    FLastError := '録音を始められません: 受信が動いていません。';
+    FLastError := RsRecNotReceiving;
     Exit;
   end;
   try
@@ -254,7 +285,7 @@ begin
     if (Directory <> '') and not DirectoryExists(Directory) then
       if not ForceDirectories(Directory) then
       begin
-        FLastError := '録音の保存先を作れません: ' + Directory;
+        FLastError := Format(RsRecNoDirectory, [Directory]);
         Exit;
       end;
     FWriter := TWavWriter.Create(AFileName, FSampleRate);
@@ -262,7 +293,7 @@ begin
     on E: Exception do
     begin
       FreeAndNil(FWriter);
-      FLastError := '録音を始められません: ' + E.Message;
+      FLastError := Format(RsRecCannotStart, [E.Message]);
       Exit;
     end;
   end;
@@ -275,7 +306,8 @@ begin
   FSeconds := 0;
   FBytes := FWriter.Bytes;
   FLost := 0;
-  FStopped := '';
+  FStopKind := skNone;
+  FStopDetail := '';
   FThread := TRecorderThread.Create(Self);
   Result := True;
 end;
@@ -314,7 +346,8 @@ procedure TAudioRecorder.Drain;
 var
   Fresh: TSingleArray;
   Before, Missing: Int64;
-  Reason: string;
+  Kind: TRecorderStopKind;
+  Detail: string;
 begin
   if FWriter = nil then
     Exit;
@@ -342,28 +375,31 @@ begin
     Publish;
     Exit;
   end;
-  Reason := '';
+  Kind := skNone;
+  Detail := '';
   try
     FWriter.Append(Fresh, Length(Fresh));
   except
     on E: Exception do
-      Reason := '録音を続けられません: ' + E.Message;
+    begin
+      Kind := skWriteFailed;
+      Detail := E.Message;
+    end;
   end;
   Publish;
-  if Reason = '' then
+  if Kind = skNone then
   begin
     if FWriter.SampleCount / FSampleRate >= FMaxSeconds then
-      Reason := Format('録音の上限（%.0f 時間）に達しました。',
-        [FMaxSeconds / 3600])
+      Kind := skTimeLimit
     else if FWriter.Bytes >= FMaxBytes then
-      Reason := Format('録音の上限（%.0f MB）に達しました。',
-        [FMaxBytes / (1000 * 1000)]);
+      Kind := skSizeLimit;
   end;
-  if Reason <> '' then
+  if Kind <> skNone then
   begin
     EnterCriticalSection(FLock);
     try
-      FStopped := Reason;
+      FStopDetail := Detail;
+      FStopKind := Kind;
     finally
       LeaveCriticalSection(FLock);
     end;
@@ -379,11 +415,20 @@ begin
       One that stopped itself at a limit is not called running: **saying
       otherwise would have the display go on counting a recording that
       ended.** }
-    Result.Running := (FThread <> nil) and (FStopped = '');
+    Result.Running := (FThread <> nil) and (FStopKind = skNone);
     Result.Seconds := FSeconds;
     Result.Bytes := FBytes;
     Result.Lost := FLost;
-    Result.Stopped := FStopped;
+    { ここで言葉にします。**呼ぶのは画面のスレッドです**（`FStopKind` の注）。
+      Put into words here. **The UI thread is the caller** (see `FStopKind`). }
+    case FStopKind of
+      skWriteFailed: Result.Stopped := Format(RsRecWriteFailed, [FStopDetail]);
+      skTimeLimit: Result.Stopped := Format(RsRecTimeLimit, [FMaxSeconds / 3600]);
+      skSizeLimit: Result.Stopped :=
+        Format(RsRecSizeLimit, [FMaxBytes / (1000 * 1000)]);
+    else
+      Result.Stopped := '';
+    end;
   finally
     LeaveCriticalSection(FLock);
   end;

@@ -128,6 +128,15 @@ function AveragePercent(const Items: TCopyRecords; Recent: Integer = 0): Double;
 
 implementation
 
+resourcestring
+  { 受信練習の取り違えの表示（要件 FR-F.3・NFR-7.6）。**区切りも言語で違います。**
+    How copy-practice confusions are shown (FR-F.3, NFR-7.6). **The separator
+    differs by language too.** }
+  RsConfusionMissed = '%0:s（落とし %1:d 回）';
+  RsConfusionAdded = '%0:s（足し %1:d 回）';
+  RsConfusionSwapped = '%0:s → %1:s（%2:d 回）';
+  RsConfusionSeparator = '、';
+
 function Escape(const Value: string): string;
 begin
   Result := Value;
@@ -430,16 +439,16 @@ begin
   for I := 0 to High(List) do
   begin
     if List[I].Typed = #0 then
-      One := Format('%0:s（落とし %1:d 回）', [List[I].Truth, List[I].Count])
+      One := Format(RsConfusionMissed, [List[I].Truth, List[I].Count])
     else if List[I].Truth = #0 then
-      One := Format('%0:s（足し %1:d 回）', [List[I].Typed, List[I].Count])
+      One := Format(RsConfusionAdded, [List[I].Typed, List[I].Count])
     else
-      One := Format('%0:s → %1:s（%2:d 回）',
+      One := Format(RsConfusionSwapped,
         [List[I].Truth, List[I].Typed, List[I].Count]);
     if Result = '' then
       Result := One
     else
-      Result := Result + '、' + One;
+      Result := Result + RsConfusionSeparator + One;
   end;
 end;
 
