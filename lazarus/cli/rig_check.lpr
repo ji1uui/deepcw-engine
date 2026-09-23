@@ -128,6 +128,7 @@ var
   Wrong: TRigSettings;
   HandedAtStop: Integer;
   Started: QWord;
+  Elapsed: Double;
 begin
   I := 1;
   while I <= CommandLineArgCount do
@@ -177,9 +178,24 @@ begin
     Check('繋がる', WaitFor(Keyer, ksReady, 10), Keyer.Snapshot.Detail);
     Sleep(200);
     Check('速度を無線機に合わせた', Keyer.Snapshot.SpeedSet);
+    Check('無線機に訊き直した速度で間合いを計る', Keyer.Snapshot.RigWpm = 40,
+      IntToStr(Keyer.Snapshot.RigWpm));
+    Started := GetTickCount64;
     Check('送る', Keyer.Send('CQ DE JA1ABC K'));
     Check('送っている間は、次の文を受け付けない', not Keyer.Send('TEST'));
+    Sleep(100);
+    Check('送り終える見込みを知らせる（受信の抑制が使う）',
+      Keyer.Snapshot.KeyedUntil > GetTickCount64,
+      Format('%d / %d', [Keyer.Snapshot.KeyedUntil, GetTickCount64]));
     Check('送り終えて「待機」に戻る', WaitFor(Keyer, ksReady, 15));
+    { 送り終えるまでの時間は、文全体の見積もりと合うこと（付録 BS.1）。
+      語間を数え落とすと、語ごとに早まって短く終わる。
+      Sending takes as long as the whole text is estimated to (appendix BS.1);
+      dropping the word gaps makes it finish early, one gap per word. }
+    Elapsed := (GetTickCount64 - Started) / 1000;
+    Check('送り終えるまでの時間が、文全体の見積もりと合う（±0.25 秒）',
+      Abs(Elapsed - EstimateTransmitSeconds('CQ DE JA1ABC K', 40)) < 0.25,
+      Format('%.2f / %.2f 秒', [Elapsed, EstimateTransmitSeconds('CQ DE JA1ABC K', 40)]));
     Sent := MorseSent(LogA);
     try
       Check('語ごとに、順に、1 度ずつ渡した',
@@ -191,6 +207,8 @@ begin
     WriteLn('間合い / pacing');
     Keyer.SetWpm(10);
     Sleep(200);
+    Check('速度を変えれば、訊き直した速度も変わる', Keyer.Snapshot.RigWpm = 10,
+      IntToStr(Keyer.Snapshot.RigWpm));
     Started := GetTickCount64;
     Check('送る（遅い速度）', Keyer.Send('ONE TWO THREE FOUR FIVE'));
     Sleep(300);
@@ -227,6 +245,8 @@ begin
       IntToStr(Ord(Keyer.Snapshot.State)));
     Check('失敗の種類は「送れない」', Keyer.Snapshot.Fault = kfSend,
       Keyer.Snapshot.Detail);
+    Check('失敗しても、送り終える見込みは残す（無線機は渡された語を送りうる）',
+      Keyer.Snapshot.KeyedUntil > 0);
 
     Daemon := StartRigctld(LogB);
     Sleep(1500);

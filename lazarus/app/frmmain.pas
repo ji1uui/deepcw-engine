@@ -37,7 +37,7 @@ uses
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
   DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster, DeepCW.CopyLog,
   DeepCW.Hamlib, DeepCW.RigKeyer, DeepCW.TxMessage, DeepCW.NoiseReduction,
-  DeepCW.Alphabet,
+  DeepCW.Alphabet, DeepCW.TxGate,
   DeepCW.Platform,
   TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView,
   ViewColors, LayoutCheck, TextCheck, UiText, UiLang;
@@ -374,6 +374,10 @@ type
     FSetRigBaud: TComboBox;
     FSetMyCall: TEdit;
     FSetTemplates: TMemo;
+    { 送っている間は復号を止めるか（要件 FR-T.4）。/ Whether decoding pauses
+      while sending (FR-T.4). }
+    FSetMuteRx: TCheckBox;
+    FTxGate: TTxReceiveGate;
     { 拡張の受け口（要件 FR-W・FR-N）。中身は保留。
       The extension seats (FR-W, FR-N); their contents are pending. }
     FSetAlphabet: TComboBox;
@@ -684,6 +688,7 @@ type
     procedure SettingChanged(Sender: TObject);
     procedure ExtensionChanged(Sender: TObject);
     function ForDecoderAudio(const Samples: TSingleArray; SampleRate: Integer): TSingleArray;
+    function ReceiveMutedForTx: Boolean;
     procedure TxSendClick(Sender: TObject);
     procedure TxStopClick(Sender: TObject);
     procedure TxSaveClick(Sender: TObject);
@@ -1350,6 +1355,9 @@ resourcestring
   RsTxNoTemplates = '定型は設定タブで書けます';
   RsTxComposed = '送信文を作りました。確かめてから「無線機で送る」を押してください。';
   RsTxNoRxCall = '受信タブで、まだ相手の符号が読めていません。';
+  RsSetMuteRx = '送っている間は復号しない';
+  RsRxMutedForTx = '送信中（復号を止めています）';
+  RsTxRxIsMine = '受信から採れた符号 %s は自局です。相手の符号を入れてください。';
   RsRigGroup = '無線機';
   RsRigConnect = '繋ぐ';
   RsRigDisconnect = '切る';
@@ -1586,6 +1594,7 @@ begin
   FKeyer := TRigKeyer.Create;
   { 設定を読む前は素通しです（要件 FR-N）。/ Pass-through until settings load. }
   FReducer := TBypassReducer.Create;
+  FTxGate := TTxReceiveGate.Create;
   KeyPreview := True;
   OnKeyDown := @FormKeyDown;
   LoadSettings;
@@ -1725,6 +1734,7 @@ begin
   SaveSettings;
   FStream.Free;
   FReducer.Free;
+  FTxGate.Free;
   FDiagnostics.Free;
   FCapture.Free;
   FFtRing.Free;
@@ -3929,6 +3939,12 @@ begin
   FSetMyCall.SetBounds(120, 66, 140, 28);
   FSetMyCall.CharCase := ecUppercase;
   FSetMyCall.OnChange := @SettingChanged;
+  FSetMuteRx := TCheckBox.Create(RigGroup);
+  FSetMuteRx.Parent := RigGroup;
+  FSetMuteRx.SetBounds(300, 68, 400, 22);
+  RegisterCaption(FSetMuteRx, @RsSetMuteRx);
+  FSetMuteRx.Checked := True;
+  FSetMuteRx.OnChange := @SettingChanged;
   AddLabel(RigGroup, @RsSetTemplates, 14, 100);
   FSetTemplates := TMemo.Create(RigGroup);
   FSetTemplates.Parent := RigGroup;
@@ -4126,6 +4142,7 @@ begin
       Index := 0;
     FSetRigBaud.ItemIndex := Index;
     FSetMyCall.Text := Ini.ReadString('transmit', 'my_call', '');
+    FSetMuteRx.Checked := Ini.ReadBool('rig', 'mute_receive', True);
     FSetTemplates.Lines.Clear;
     for Index := 1 to 8 do
       if Ini.ReadString('transmit', 'template' + IntToStr(Index), '') <> '' then
@@ -4267,6 +4284,7 @@ begin
       Ini.WriteInteger('rig', 'baud', StrToIntDef(
         FSetRigBaud.Items[Max(0, FSetRigBaud.ItemIndex)], 0));
       Ini.WriteString('transmit', 'my_call', FSetMyCall.Text);
+      Ini.WriteBool('rig', 'mute_receive', FSetMuteRx.Checked);
       Ini.WriteString('receive', 'alphabet',
         AlphabetKey(TCwAlphabet(Max(0, FSetAlphabet.ItemIndex))));
       Ini.WriteString('receive', 'noise_reduction', FReducer.Key);
@@ -5215,6 +5233,26 @@ begin
   Result := ForDecoder(FReducer, Samples, SampleRate);
 end;
 
+{ 自局が送っている（か、送り終えた直後）で、復号を止めるか（要件 FR-T.4）。
+  **鍵の様子は、使うかどうかに関わらず毎回伝えます**——設定を入れた瞬間から
+  正しく止まるためです。
+  Whether the station is sending (or has just finished) and decoding is to be
+  paused (FR-T.4). **The keyer is reported every time, whether or not the
+  setting is on**, so that turning it on takes effect at once. }
+function TMainForm.ReceiveMutedForTx: Boolean;
+var
+  Status: TKeyerStatus;
+  NowMs: QWord;
+begin
+  Result := False;
+  if (FKeyer = nil) or (FTxGate = nil) then
+    Exit;
+  Status := FKeyer.Snapshot;
+  NowMs := GetTickCount64;
+  FTxGate.Update(Status.State = ksSending, Status.KeyedUntil, NowMs);
+  Result := FSetMuteRx.Checked and FTxGate.Muted(NowMs);
+end;
+
 { 送信文を作り、下の欄へ入れます（要件 FR-T.1）。**差し込みの値が無ければ
   作らず**、何が足りないかを言います（抜けたまま送らない）。
   Composes the text into the box below (FR-T.1). **With a macro value
@@ -5273,6 +5311,15 @@ begin
   if Call = '' then
   begin
     SetStatus('', '', RsTxNoRxCall);
+    Exit;
+  end;
+  { **自局の符号は相手に入れません**（付録 BS.4）。自分の送信を受信が拾うと、
+    「DE の直後」は自局になります。
+    **The operator's own call is never taken as theirs** (appendix BS.4): when
+    reception picks up one's own sending, the call after DE is one's own. }
+  if SameText(Call, Trim(FSetMyCall.Text)) then
+  begin
+    SetStatus('', '', Format(RsTxRxIsMine, [Call]));
     Exit;
   end;
   FTxTheirCall.Text := Call;
@@ -5401,7 +5448,12 @@ begin
     ksOff: Caption_ := RsRigOff;
     ksConnecting: Caption_ := RsRigConnecting;
     ksReady:
-      if Status.SpeedSet then
+      { 無線機が答えた速度を先に見せます。丸められていれば、それが本当の
+        速度です（付録 BS.2）。/ The speed the rig reports comes first: if it
+        was clamped, that is the real speed (appendix BS.2). }
+      if Status.RigWpm > 0 then
+        Caption_ := Format(RsRigReady, [Status.RigWpm])
+      else if Status.SpeedSet then
         Caption_ := Format(RsRigReady, [Status.Wpm])
       else
         Caption_ := RsRigReadyNoSpeed;
@@ -8206,11 +8258,12 @@ end;
 
 procedure TMainForm.UpdateLiveReceive;
 var
-  Fresh: TSingleArray;
+  Fresh, Decoded: TSingleArray;
   Failure: string;
   Kept: Integer;
   Peak: Single;
   StartAt: Double;
+  Muted: Boolean;
 begin
   if FCapture = nil then
     Exit;
@@ -8291,6 +8344,13 @@ begin
     FRxSignal.Caption := RsAudioPresent
   else
     FRxSignal.Caption := RsAudioSilent;
+  { 自局が送っている間は、復号を止めていると言います。**文字が出ない理由が
+    見えなければ、壊れたと思われます**（要件 FR-T.4）。
+    While the station is sending, say that decoding is paused: **characters
+    that stop with no visible reason look like a fault** (FR-T.4). }
+  Muted := ReceiveMutedForTx;
+  if Muted then
+    FRxSignal.Caption := RsRxMutedForTx;
 
   { 録音された分をそのまま流し込みます。窓を切り出すのではなく、確定点から
     先を溜め続けるのが流し込み受信です（要件 FR-B.2）。
@@ -8327,10 +8387,19 @@ begin
     { 復号へはノイズ低減を通した音を、保管庫とウォーターフォールには生の音を
       渡します（要件 FR-N）。/ The decoder gets the audio through noise
       reduction; the store and the waterfall get the raw audio (FR-N). }
-    if FMode = rmWatch then
-      FMulti.Append(ForDecoderAudio(Fresh, FCaptureRate), FCaptureRate)
+    { 送っている間は、復号へは同じ長さの無音を渡します（要件 FR-T.4）。
+      **ノイズ低減の前**で差し替えるので、低減には途切れない流れが届きます。
+      While sending, the decoder gets silence of the same length (FR-T.4).
+      It is swapped in **before noise reduction**, which so sees an unbroken
+      stream. }
+    if Muted then
+      Decoded := ForDecoderAudio(SilenceLike(Fresh), FCaptureRate)
     else
-      FStream.Append(ForDecoderAudio(Fresh, FCaptureRate), FCaptureRate);
+      Decoded := ForDecoderAudio(Fresh, FCaptureRate);
+    if FMode = rmWatch then
+      FMulti.Append(Decoded, FCaptureRate)
+    else
+      FStream.Append(Decoded, FCaptureRate);
     FHistory.Append(Fresh, FCaptureRate, StartAt);
     { ウォーターフォールには、同調も帯域制限も掛ける前の音を見せます。まだ
       選んでいない信号も見えていなければ、選びようがないためです。

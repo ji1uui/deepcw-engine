@@ -51,6 +51,9 @@ const
     over are expected to finish (ms). **Shorter makes a stop take effect
     sooner; longer keeps gaps from opening between words.** }
   KEYER_LEAD_MS = 600;
+  { 送っている間に、次の語を渡すかを見る間隔（ミリ秒）。
+    How often, while sending, the next hand-over is considered (ms). }
+  KEYER_TICK_MS = 50;
 
 type
   TKeyerState = (ksOff, ksConnecting, ksReady, ksSending, ksFailed);
@@ -75,6 +78,18 @@ type
     { キーヤーの速度を無線機に合わせられたか。/ Whether the rig took the speed. }
     SpeedSet: Boolean;
     Wpm: Integer;
+    { 無線機が答えた、いまの鍵の速度。読めなければ 0。**語を渡す間合いは
+      これで計ります**（機種が範囲に丸めることがあるため。付録 BS.2）。
+      The keyer speed the rig reports; 0 if it cannot be read. **Words are
+      paced by this** (a model may clamp to its range; appendix BS.2). }
+    RigWpm: Integer;
+    { 渡し済みの語を無線機が送り終える見込みの時刻（`GetTickCount64`）。
+      無ければ 0。**「失敗」のあとも残します**——無線機は渡された語を送り
+      続けうるためです（受信の抑制が使う。要件 FR-T.4）。
+      When the rig is expected to finish the words handed over
+      (`GetTickCount64`), 0 for none. **Kept after a failure too**: the rig may
+      go on sending what it was given (used by receive suppression, FR-T.4). }
+    KeyedUntil: QWord;
   end;
 
   TRigKeyer = class
@@ -273,8 +288,8 @@ var
   ConnectNow, DisconnectNow, StopNow: Boolean;
   Settings: TRigSettings;
   LibraryPath, Word_: string;
-  Wpm, WantedWpm: Integer;
-  Stopped: Boolean;
+  Wpm, WantedWpm, PaceWpm: Integer;
+  Stopped, Pacing, SpeedTaken: Boolean;
 
   procedure SetState(State: TKeyerState);
   begin
@@ -319,16 +334,27 @@ begin
   Rig := nil;
   QueuedUntil := 0;
   Wpm := 0;
+  PaceWpm := 0;
   while True do
   begin
     FLock.Enter;
     try
       if FQuit then
         Break;
+      Pacing := FStatus.State = ksSending;
     finally
       FLock.Leave;
     end;
-    FWake.WaitFor(50);
+    { 間合いを計るのは送っている間だけです。**それ以外は起こされるまで眠り
+      ます**（呼ぶ側はどれも `FWake` を鳴らす）。版 2.70 は使わなくても毎秒 20 回
+      起きていた（付録 BS.3）。
+      Pacing is only needed while sending; **otherwise the thread sleeps until
+      woken** (every caller signals `FWake`). Version 2.70 woke 20 times a
+      second even when unused (appendix BS.3). }
+    if Pacing then
+      FWake.WaitFor(KEYER_TICK_MS)
+    else
+      FWake.WaitFor(INFINITE);
 
     FLock.Enter;
     try
@@ -366,6 +392,7 @@ begin
           if Stopped then
           begin
             QueuedUntil := 0;
+            FStatus.KeyedUntil := 0;
             if FStatus.State = ksSending then
               FStatus.State := ksReady;
           end;
@@ -416,11 +443,13 @@ begin
         end;
       end;
       Wpm := 0;
+      PaceWpm := 0;
       FLock.Enter;
       try
         FStatus.State := ksReady;
         FStatus.Stop := ssUnknown;
         FStatus.SpeedSet := False;
+        FStatus.RigWpm := 0;
       finally
         FLock.Leave;
       end;
@@ -436,14 +465,30 @@ begin
     if (WantedWpm > 0) and (WantedWpm <> Wpm) then
     begin
       Wpm := WantedWpm;
+      SpeedTaken := True;
       try
         Rig.SetKeyerWpm(Wpm);
-        FLock.Enter;
-        FStatus.SpeedSet := True;
-        FLock.Leave;
       except
-        FLock.Enter;
-        FStatus.SpeedSet := False;
+        SpeedTaken := False;
+      end;
+      { 合わせたあと、**無線機に訊き直します。**合わせられても範囲に丸める
+        機種があり、合わせられなくても読める機種があります。読めなければ、
+        合わせた速度（合わせられなければ望んだ速度）で計ります。
+        After setting, **the rig is asked back**: some models clamp what they
+        accept, some cannot be set but can be read. If it cannot be read, pacing
+        uses the speed set (or wanted). }
+      try
+        PaceWpm := Rig.KeyerWpm;
+        if (PaceWpm < HAMLIB_MIN_WPM) or (PaceWpm > HAMLIB_MAX_WPM) then
+          PaceWpm := 0;
+      except
+        PaceWpm := 0;
+      end;
+      FLock.Enter;
+      try
+        FStatus.SpeedSet := SpeedTaken;
+        FStatus.RigWpm := PaceWpm;
+      finally
         FLock.Leave;
       end;
     end;
@@ -477,10 +522,12 @@ begin
         end;
       end;
       QueuedUntil := Max(QueuedUntil, GetTickCount64) +
-        QWord(Round(1000 * EstimateTransmitSeconds(Word_, Max(Wpm, HAMLIB_MIN_WPM))));
+        QWord(Round(1000 * KeyingSeconds(Word_,
+          Max(IfThen(PaceWpm > 0, PaceWpm, Wpm), HAMLIB_MIN_WPM))));
       FLock.Enter;
       try
         Inc(FStatus.Handed, Length(Word_));
+        FStatus.KeyedUntil := QueuedUntil;
       finally
         FLock.Leave;
       end;

@@ -27,7 +27,7 @@ uses
   DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.CopyLog, DeepCW.Callsign,
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
   DeepCW.Reference, DeepCW.Roster, DeepCW.Platform, DeepCW.TxMessage,
-  DeepCW.NoiseReduction, DeepCW.Alphabet, FistCases;
+  DeepCW.NoiseReduction, DeepCW.Alphabet, DeepCW.TxGate, FistCases;
 
 var
   Meta: TDeepCWMetadata;
@@ -4159,6 +4159,8 @@ var
   Problem: TTxProblem;
   Words: TStringArray;
   Ok: Boolean;
+  Sum: Double;
+  I: Integer;
 begin
   WriteLn;
   WriteLn('DeepCW.TxMessage（要件 FR-T.1）');
@@ -4216,6 +4218,74 @@ begin
   Check('語ごとに分け、最後の語以外は空白を持つ', (Length(Words) = 4) and
     (Words[0] = 'CQ ') and (Words[2] = 'JA1ABC ') and (Words[3] = 'K'),
     string.Join('|', Words));
+  { 語を渡す間合いの見積もりは、足すと文全体と同じでなければなりません
+    （付録 BS.1）。語間を数え落とすと、語ごとに早まって無線機より先へ進みます。
+    The per-piece estimates must add up to the whole text (appendix BS.1);
+    dropping the word gap makes each hand-over early and the pacing runs ahead
+    of the rig. }
+  Check('空白で終わる 1 片は語間を含む（TEST_ は 20 WPM で 28 短点）',
+    Abs(KeyingSeconds('TEST ', 20) - 28 * 0.06) < 0.005,
+    Format('%.3f 秒', [KeyingSeconds('TEST ', 20)]));
+  Check('最後の片は語間を含まない', Abs(KeyingSeconds('K', 20) -
+    EstimateTransmitSeconds('K', 20)) < 0.0005);
+  Sum := 0;
+  for I := 0 to High(Words) do
+    Sum := Sum + KeyingSeconds(Words[I], 20);
+  Check('片の見積もりを足すと、文全体の見積もりと同じ',
+    Abs(Sum - EstimateTransmitSeconds('CQ DE JA1ABC K', 20)) < 0.005,
+    Format('%.3f / %.3f 秒', [Sum, EstimateTransmitSeconds('CQ DE JA1ABC K', 20)]));
+end;
+
+{ 送っている間の受信の抑制（要件 FR-T.4）。時刻は手で進めます（スレッドも
+  時計も要らない）。/ Receive suppression while sending (FR-T.4); time is
+  advanced by hand, with no thread and no clock. }
+procedure TestTxGate;
+var
+  Gate: TTxReceiveGate;
+  Raw, Quiet: TSingleArray;
+  I: Integer;
+  AllZero: Boolean;
+begin
+  WriteLn;
+  WriteLn('送っている間の受信の抑制（要件 FR-T.4）');
+  Gate := TTxReceiveGate.Create(700);
+  try
+    { 0 は「見込み無し」で、時刻 0 ではありません。/ 0 means "none", not time 0. }
+    Gate.Update(False, 0, 100);
+    Check('見込み 0 は「無し」（起動直後でも止めない）', not Gate.Muted(100));
+    Check('送る前は止めない', not Gate.Muted(1000));
+    Gate.Update(True, 0, 1000);
+    Check('送っている間は止める', Gate.Muted(1000));
+    Gate.Update(False, 0, 1200);
+    Check('送り終えても、余白の間は止める（無線機と装置の遅れ）',
+      Gate.Muted(1699));
+    Check('余白が過ぎれば戻る', not Gate.Muted(1700));
+    { 鍵のスレッドが「失敗」になっても、無線機は渡された語を送り続けうる。
+      Even after the keyer fails, the rig may keep sending what it was given. }
+    Gate.Update(False, 5000, 3000);
+    Check('送っていなくても、渡し済みの語を送り終える見込みまで止める',
+      Gate.Muted(4000) and Gate.Muted(5699));
+    Check('見込みと余白が過ぎれば戻る', not Gate.Muted(5700));
+    Gate.Update(False, 0, 6000);
+    Check('見込みが無ければ（0）止めない', not Gate.Muted(6000));
+  finally
+    Gate.Free;
+  end;
+
+  SetLength(Raw, 5);
+  for I := 0 to High(Raw) do
+    Raw[I] := 0.5;
+  Quiet := SilenceLike(Raw);
+  AllZero := True;
+  for I := 0 to High(Quiet) do
+    if Quiet[I] <> 0 then
+      AllZero := False;
+  Check('無音は同じ長さ（復号器の時計を保管庫とずらさない）',
+    Length(Quiet) = Length(Raw), IntToStr(Length(Quiet)));
+  Check('無音は無音', AllZero);
+  Check('生の音は変わらない（聴き直し・録音は生のまま）',
+    (Pointer(Quiet) <> Pointer(Raw)) and (Raw[0] = 0.5));
+  Check('空は空', Length(SilenceLike(nil)) = 0);
 end;
 
 type
@@ -5131,6 +5201,7 @@ begin
     TestLineEndings;
     TestTxMessage;
     TestExtensionSeats;
+    TestTxGate;
   finally
     Meta.Free;
   end;

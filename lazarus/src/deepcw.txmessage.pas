@@ -97,6 +97,18 @@ function EstimateTransmitSeconds(const Text: string; Wpm: Integer): Double;
   the word gap. }
 function SplitForKeying(const Clean: string): TStringArray;
 
+{ `SplitForKeying` の 1 片を無線機が送り終えるまでの秒数。**末尾の空白の
+  ぶんの語間（7 短点）を含みます。**`EstimateTransmitSeconds` は語の間にしか
+  語間を置かないので、1 語だけを渡すと末尾の空白を数えません。数えなければ、
+  語を渡す間合いが語ごとに語間 1 つぶん早まり、送るほど無線機より先へ進みます
+  （付録 BS.1）。
+  How long the rig takes for one piece from `SplitForKeying`, **including the
+  word gap (7 dits) of its trailing space**. `EstimateTransmitSeconds` only
+  puts gaps between words, so a lone word's trailing space counts for nothing;
+  left uncounted, each hand-over comes one word gap early and the pacing runs
+  further ahead of the rig with every word (appendix BS.1). }
+function KeyingSeconds(const Piece: string; Wpm: Integer): Double;
+
 implementation
 
 function AutoTemplate(Stage: TTxStage): string;
@@ -224,6 +236,15 @@ begin
   Timing.CharWpm := Wpm;
   Timing.TextWpm := Wpm;
   Result := SegmentsDuration(TextToSegments(Text, Timing));
+end;
+
+function KeyingSeconds(const Piece: string; Wpm: Integer): Double;
+begin
+  if Wpm <= 0 then
+    Wpm := 20;
+  Result := EstimateTransmitSeconds(Trim(Piece), Wpm);
+  if (Piece <> '') and (Piece[Length(Piece)] = ' ') then
+    Result := Result + 7 * DitSeconds(Wpm);
 end;
 
 function SplitForKeying(const Clean: string): TStringArray;

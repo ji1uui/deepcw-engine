@@ -1513,6 +1513,10 @@ msgstr ""
 msgid "復調音を聴く"
 msgstr ""
 
+#: frmmain.rsrxmutedfortx
+msgid "送信中（復号を止めています）"
+msgstr ""
+
 #: frmmain.rsrxopentitle
 msgid "モールス音声を開く"
 msgstr ""
@@ -1726,6 +1730,10 @@ msgstr ""
 
 #: frmmain.rssetmodel
 msgid "モデル (model.onnx)"
+msgstr ""
+
+#: frmmain.rssetmuterx
+msgid "送っている間は復号しない"
 msgstr ""
 
 #: frmmain.rssetmycall
@@ -1980,6 +1988,11 @@ msgstr ""
 
 #: frmmain.rstxrst
 msgid "RST"
+msgstr ""
+
+#: frmmain.rstxrxismine
+#, object-pascal-format
+msgid "受信から採れた符号 %s は自局です。相手の符号を入れてください。"
 msgstr ""
 
 #: frmmain.rstxsavetitle

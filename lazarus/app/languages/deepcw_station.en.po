@@ -1537,6 +1537,10 @@ msgstr "Standby"
 msgid "復調音を聴く"
 msgstr "Monitor"
 
+#: frmmain.rsrxmutedfortx
+msgid "送信中（復号を止めています）"
+msgstr "Sending (decoding paused)"
+
 #: frmmain.rsrxopentitle
 msgid "モールス音声を開く"
 msgstr "Open Morse audio"
@@ -1751,6 +1755,10 @@ msgstr "Metadata (model.onnx.json)"
 #: frmmain.rssetmodel
 msgid "モデル (model.onnx)"
 msgstr "Model (model.onnx)"
+
+#: frmmain.rssetmuterx
+msgid "送っている間は復号しない"
+msgstr "Pause decoding on TX"
 
 #: frmmain.rssetmycall
 msgid "自局の符号"
@@ -2005,6 +2013,11 @@ msgstr "Cannot send: \"%s\""
 #: frmmain.rstxrst
 msgid "RST"
 msgstr "RST"
+
+#: frmmain.rstxrxismine
+#, object-pascal-format
+msgid "受信から採れた符号 %s は自局です。相手の符号を入れてください。"
+msgstr "%s from reception is your own call. Enter theirs."
 
 #: frmmain.rstxsavetitle
 msgid "モールス音声を保存"
