@@ -27,7 +27,8 @@ uses
   DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.CopyLog, DeepCW.Callsign,
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
   DeepCW.Reference, DeepCW.Roster, DeepCW.Platform, DeepCW.TxMessage,
-  DeepCW.NoiseReduction, DeepCW.Alphabet, DeepCW.TxGate, FistCases;
+  DeepCW.NoiseReduction, DeepCW.Alphabet, DeepCW.TxGate, DeepCW.RigConfig,
+  DeepCW.Hamlib, FistCases;
 
 var
   Meta: TDeepCWMetadata;
@@ -4236,6 +4237,103 @@ begin
     Format('%.3f / %.3f 秒', [Sum, EstimateTransmitSeconds('CQ DE JA1ABC K', 20)]));
 end;
 
+{ 無線機の詳しい接続設定の確かめ・変換・保存（要件 FR-T.5）。Hamlib は
+  使いません（渡るところは `rig_check` が確かめる）。
+  Checking, converting and storing the detailed rig settings (FR-T.5); no
+  Hamlib here (`rig_check` checks that they arrive). }
+procedure TestRigConfig;
+var
+  Conf, Back: TRigConf;
+  Problem: TRigConfProblem;
+  Name: string;
+  Pairs: TRigConfPairs;
+  Values: TStringList;
+  Rejected: TStringArray;
+  I, Handshake, Rts: Integer;
+
+  function Refuses(const C: TRigConf; P: TRigConfProblem; const Setting: string): Boolean;
+  begin
+    Result := (not CheckRigConf(C, Problem, Name)) and (Problem = P) and
+      (Name = Setting);
+  end;
+
+begin
+  WriteLn;
+  WriteLn('無線機の詳しい接続設定（要件 FR-T.5）');
+  Conf := DefaultRigConf;
+  Check('既定は確かめを通り、何も渡さない', CheckRigConf(Conf, Problem, Name) and
+    (Length(RigConfPairs(Conf)) = 0));
+  Conf.CivAddr := '94';
+  Check('CI-V アドレスは 16 進で渡す（94 → 0x94）', CheckRigConf(Conf, Problem, Name) and
+    (RigConfPairs(Conf)[0].Value = '0x94'), RigConfPairs(Conf)[0].Value);
+  Conf.CivAddr := 'zz';
+  Check('読めない CI-V アドレスは断る（Hamlib は 0 にしてしまう）',
+    Refuses(Conf, rcpCivAddr, 'civaddr'));
+  Conf.CivAddr := 'E0';
+  Check('操作側の番号（E0）は断る', Refuses(Conf, rcpCivAddr, 'civaddr'));
+  Conf.CivAddr := '00';
+  Check('00 は断る', Refuses(Conf, rcpCivAddr, 'civaddr'));
+  Conf := DefaultRigConf;
+  Conf.DataBits := 9;
+  Check('データビット 9 は断る（Hamlib は通してしまう）',
+    Refuses(Conf, rcpChoice, 'data_bits'));
+  Conf := DefaultRigConf;
+  Conf.TimeoutMs := 50;
+  Check('短すぎる応答待ちは断る', Refuses(Conf, rcpRange, 'timeout'));
+  Conf := DefaultRigConf;
+  Conf.Handshake := 'Hardware';
+  Conf.Rts := 'OFF';
+  Check('ハードウェアのフロー制御と RTS の手動は同時に使えない',
+    Refuses(Conf, rcpRtsWithHardware, 'rts_state'));
+  Conf.Handshake := 'None';
+  Pairs := RigConfPairs(Conf);
+  Handshake := -1;
+  Rts := -1;
+  for I := 0 to High(Pairs) do
+    if Pairs[I].Name = 'serial_handshake' then
+      Handshake := I
+    else if Pairs[I].Name = 'rts_state' then
+      Rts := I;
+  Check('フロー制御は RTS より先に渡す', (Handshake >= 0) and (Handshake < Rts));
+
+  Values := TStringList.Create;
+  try
+    Conf := RigConfFromValues(Values, Rejected);
+    Check('古い設定ファイル（鍵が無い）は既定で読み、何も捨てない',
+      (Length(Rejected) = 0) and (Length(RigConfPairs(Conf)) = 0));
+    Values.Add('serial_parity=Bogus');
+    Values.Add('data_bits=9');
+    Values.Add('timeout=abc');
+    Values.Add('dtr_state=OFF');
+    Values.Add('civaddr=zz');
+    Conf := RigConfFromValues(Values, Rejected);
+    Check('読めない値は既定に戻し、黙って捨てずに返す（3 件）',
+      (Length(Rejected) = 3) and (Conf.Parity = '') and (Conf.DataBits = 0) and
+      (Conf.TimeoutMs = 0), string.Join(',', Rejected));
+    Check('読める値は読む', Conf.Dtr = 'OFF');
+    Check('CI-V アドレスは書かれたまま残し、繋ぐ前に断る',
+      (Conf.CivAddr = 'zz') and Refuses(Conf, rcpCivAddr, 'civaddr'));
+
+    Conf := DefaultRigConf;
+    Conf.CivAddr := '5E';
+    Conf.StopBits := 1;
+    Conf.Parity := 'Odd';
+    Conf.Handshake := 'XONXOFF';
+    Conf.Dtr := 'ON';
+    Conf.TimeoutMs := 2500;
+    Conf.PostWriteDelayMs := 3;
+    RigConfToValues(Conf, Values);
+    Back := RigConfFromValues(Values, Rejected);
+    Check('保存して読み戻すと同じ', (Length(Rejected) = 0) and
+      (Back.CivAddr = Conf.CivAddr) and (Back.StopBits = 1) and
+      (Back.Parity = 'Odd') and (Back.Handshake = 'XONXOFF') and (Back.Dtr = 'ON') and
+      (Back.Rts = '') and (Back.TimeoutMs = 2500) and (Back.WriteDelayMs = 0) and
+      (Back.PostWriteDelayMs = 3), Values.CommaText);
+  finally
+    Values.Free;
+  end;
+end;
+
 { 送っている間の受信の抑制（要件 FR-T.4）。時刻は手で進めます（スレッドも
   時計も要らない）。/ Receive suppression while sending (FR-T.4); time is
   advanced by hand, with no thread and no clock. }
@@ -5202,6 +5300,7 @@ begin
     TestTxMessage;
     TestExtensionSeats;
     TestTxGate;
+    TestRigConfig;
   finally
     Meta.Free;
   end;

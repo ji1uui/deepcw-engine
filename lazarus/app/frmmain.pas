@@ -37,7 +37,7 @@ uses
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
   DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster, DeepCW.CopyLog,
   DeepCW.Hamlib, DeepCW.RigKeyer, DeepCW.TxMessage, DeepCW.NoiseReduction,
-  DeepCW.Alphabet, DeepCW.TxGate,
+  DeepCW.Alphabet, DeepCW.TxGate, DeepCW.RigConfig,
   DeepCW.Platform,
   TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView,
   ViewColors, LayoutCheck, TextCheck, UiText, UiLang;
@@ -365,7 +365,15 @@ type
     FRigDisconnect: TButton;
     FRigSend: TButton;
     FRigStop: TButton;
+    { 電源を入れる（要件 FR-T.6）。応答が無いときだけ押せます。
+      Power on (FR-T.6); enabled only while the rig does not answer. }
+    FRigPower: TButton;
     FRigStatus: TLabel;
+    { 状態・電源の結果の移り変わりを 1 度だけ言うため。
+      To announce each change of state and power result once. }
+    FRigLastState: TKeyerState;
+    FRigLastPower: TPowerResult;
+    FRigAutoConnectPending: Boolean;
     { 同じ失敗を診断へ 2 度書かないため。/ Not to log the same failure twice. }
     FRigFaultLogged: Boolean;
     FRigStopNoted: Boolean;
@@ -378,6 +386,19 @@ type
       while sending (FR-T.4). }
     FSetMuteRx: TCheckBox;
     FTxGate: TTxReceiveGate;
+    { 詳しい接続設定（要件 FR-T.5）と、起動したら繋ぐ（FR-T.6）。
+      Detailed connection settings (FR-T.5) and connect at start (FR-T.6). }
+    FSetRigCivAddr: TEdit;
+    FSetRigDataBits: TComboBox;
+    FSetRigStopBits: TComboBox;
+    FSetRigParity: TComboBox;
+    FSetRigHandshake: TComboBox;
+    FSetRigDtr: TComboBox;
+    FSetRigRts: TComboBox;
+    FSetRigTimeout: TSpinEdit;
+    FSetRigWriteDelay: TSpinEdit;
+    FSetRigPostDelay: TSpinEdit;
+    FSetRigAutoConnect: TCheckBox;
     { 拡張の受け口（要件 FR-W・FR-N）。中身は保留。
       The extension seats (FR-W, FR-N); their contents are pending. }
     FSetAlphabet: TComboBox;
@@ -689,6 +710,9 @@ type
     procedure ExtensionChanged(Sender: TObject);
     function ForDecoderAudio(const Samples: TSingleArray; SampleRate: Integer): TSingleArray;
     function ReceiveMutedForTx: Boolean;
+    procedure RigPowerClick(Sender: TObject);
+    function RigConfFromScreen: TRigConf;
+    procedure RigConfToScreen(const Conf: TRigConf);
     procedure TxSendClick(Sender: TObject);
     procedure TxStopClick(Sender: TObject);
     procedure TxSaveClick(Sender: TObject);
@@ -1375,7 +1399,47 @@ resourcestring
   RsRigCannotStopNote = 'この機種は送出の途中で止められません。止めると、無線機に渡した語の終わりで止まります。';
   RsRigFailed = '失敗（状態欄を見てください）';
   RsRigFailNoLibrary = '失敗: Hamlib が見つかりません。Hamlib を入れるか、アプリと同じ場所に置いてください。';
-  RsRigFailConnect = '失敗: 無線機に繋げません。機種番号・口・通信速度を確かめてください。';
+  RsRigFailModel = '失敗: Hamlib はこの機種番号を知りません。設定タブの機種番号を確かめてください。';
+  RsRigFailConfig = '失敗: 接続設定「%s」をこの機種・接続では使えません。設定タブで直すか、機種の既定に戻してください。';
+  RsRigFailPort = '失敗: 口を開けません。口の名前、ほかのアプリが使っていないか、ケーブルを確かめてください。';
+  RsRigFailNoAnswer = '失敗: 無線機が応答しません。電源・通信速度・CI-V アドレスを確かめてください。遠隔で電源を入れられる機種なら「電源を入れる」を押してください。';
+  RsRigFailLink = '失敗: 無線機との繋がりが切れました。ケーブルと電源を確かめてから繋ぎ直してください。';
+  RsRigPower = '電源を入れる';
+  RsRigNoAnswer = '応答なし（電源を確かめてください）';
+  RsRigPoweringOn = '電源を入れています…';
+  RsRigNoProbe = '（応答を確かめられない機種）';
+  RsRigLostAnswer = '無線機が応答しなくなりました。送信はできません。電源を確かめてください（応答が戻れば自動で待機に戻ります）。';
+  RsRigSilentAfterOpen = '口は開けましたが、無線機が応答しません。電源を確かめてください（応答すれば自動で待機になります）。';
+  RsRigBack = '無線機の応答が戻りました。';
+  RsRigConnected = '無線機に繋がりました（応答を確かめました）。';
+  RsRigPowerAsked = '無線機に電源を入れるよう頼みました。';
+  RsRigPowerNotSupported = 'この機種・接続では、遠隔で電源を入れられません。無線機の電源を手で入れてください。';
+  RsRigPowerFailed = '電源を入れられませんでした。無線機が応答しないか、この機種・接続では遠隔で電源を入れられません。';
+  RsRigPowerNoWake = '電源を入れる命令は受けましたが、30 秒待っても無線機が応答しません。';
+  RsRigPowerAwake = '無線機が起きました。';
+  RsRigPowerNotNow = '電源を入れられるのは、無線機が応答しないときだけです。';
+  RsRigConfCivAddr = 'CI-V アドレスは 16 進の 01〜DF で書いてください（例: 94）。';
+  RsRigConfChoice = '接続設定「%s」の値が使えません。';
+  RsRigConfRange = '接続設定「%s」が範囲の外です（応答待ちは 100〜10000 ms、間隔は 1000 ms まで。0 は機種の既定）。';
+  RsRigConfRtsHardware = 'フロー制御がハードウェアのときは、RTS を手で決められません。RTS を機種の既定に戻してください。';
+  RsRigAutoConnecting = '起動時の設定で、無線機へ繋いでいます。';
+  RsSetRigAutoConnect = '起動したら無線機へ繋ぐ（繋ぐだけで、送信も電源投入もしません）';
+  RsSetRigAdvGroup = '無線機の詳しい接続設定（普通は既定のまま）';
+  RsSetRigCivAddr = 'CI-V アドレス';
+  RsSetRigDataBits = 'データビット';
+  RsSetRigStopBits = 'ストップビット';
+  RsSetRigParity = 'パリティ';
+  RsSetRigParityNone = 'なし';
+  RsSetRigParityEven = '偶数';
+  RsSetRigParityOdd = '奇数';
+  RsSetRigHandshake = 'フロー制御';
+  RsSetRigHandshakeNone = 'なし';
+  RsSetRigHandshakeHardware = 'ハードウェア';
+  RsSetRigTimeout = '応答待ち (ms)';
+  RsSetRigWriteDelay = '文字の間隔 (ms)';
+  RsSetRigPostDelay = '命令の間隔 (ms)';
+  RsSetRigAdvHint = '「機種の既定」と 0 ms は Hamlib へ渡しません。繋ぎ直すと効きます。';
+  RsSetRigLineWarn = 'DTR・RTS で送信や鍵を操作する配線では、口を開いた瞬間に電波が出ないよう OFF にしてください。';
   RsRigFailSend = '失敗: 送出の途中で無線機との繋がりが切れました。送信は止めました。繋ぎ直してください。';
   RsRigFailStop = '失敗: 止める命令が通りませんでした。無線機の電源か繋がりを確かめてください。';
   RsRigNoModel = '設定タブで無線機の機種番号を入れてください。';
@@ -1598,6 +1662,11 @@ begin
   KeyPreview := True;
   OnKeyDown := @FormKeyDown;
   LoadSettings;
+  { 起動したら繋ぐ（要件 FR-T.6）。**窓が出てから**、最初の刻みで繋ぎます。
+    繋ぐだけで、送信も電源投入もしません。
+    Connect at start-up (FR-T.6), **once the window is up**, on the first tick.
+    It only connects; it neither sends nor powers on. }
+  FRigAutoConnectPending := FSetRigAutoConnect.Checked and (FSetRigModel.Value > 0);
   { 覚えていた言語を入れ直します（要件 NFR-7.6）。**覚えていても、渡さなければ
     効きません**——高コントラストと同じ話です。`LoadSettings` は選択肢を合わせる
     だけなので、文言そのものはここで切り替えます。
@@ -2059,7 +2128,9 @@ begin
   FRigDisconnect := AddButton(Rig, @RsRigDisconnect, 156, 4, 96, @RigDisconnectClick);
   FRigSend := AddButton(Rig, @RsRigSend, 262, 4, 140, @RigSendClick);
   FRigStop := AddButton(Rig, @RsRigStop, 410, 4, 130, @RigStopClick);
-  FRigStatus := AddLabel(Rig, '', 552, 12);
+  FRigPower := AddButton(Rig, @RsRigPower, 548, 4, 120, @RigPowerClick);
+  FRigPower.Enabled := False;
+  FRigStatus := AddLabel(Rig, '', 680, 12);
 
   FTxProgress := TProgressBar.Create(Sheet);
   FTxProgress.Parent := Sheet;
@@ -3692,10 +3763,24 @@ function TMainForm.BuildSettingsTab: TTabSheet;
 var
   Sheet: TTabSheet;
   Scroller: TScrollBox;
-  Operating, Advanced, RigGroup, ExtGroup: TGroupBox;
+  Operating, Advanced, RigGroup, RigAdvGroup, ExtGroup: TGroupBox;
   Row, Apply: TPanel;
   Choice: TTunerBandwidth;
   Language_: Integer;
+
+  { 詳しい接続設定の選択肢。先頭は「機種の既定」（要件 FR-T.5）。
+    A choice of the detailed settings; the first item is "the model's default"
+    (FR-T.5). }
+  function AddChoice(Parent: TWinControl; Left, Top, Width: Integer): TComboBox;
+  begin
+    Result := TComboBox.Create(Parent);
+    Result.Parent := Parent;
+    Result.SetBounds(Left, Top, Width, 28);
+    Result.Style := csDropDownList;
+    RegisterItem(Result, 0, @RsSetRigBaudDefault);
+    Result.ItemIndex := 0;
+    Result.OnChange := @SettingChanged;
+  end;
 
   { 技術的な設定は「詳細・診断」側にだけ置きます（要件 FR-G.1）。
     Technical settings live only under the advanced group (FR-G.1). }
@@ -3909,7 +3994,7 @@ begin
   RigGroup := TGroupBox.Create(Scroller);
   RigGroup.Parent := Scroller;
   RegisterCaption(RigGroup, @RsSetRigGroup);
-  RigGroup.Height := 210;
+  RigGroup.Height := 236;
   Stretch(RigGroup, alTop);
   AddLabel(RigGroup, @RsSetRigModel, 14, 10);
   FSetRigModel := AddSpin(RigGroup, 100, 6, 0, 99999, 0, @SettingChanged);
@@ -3951,6 +4036,65 @@ begin
   FSetTemplates.SetBounds(14, 120, 700, 70);
   FSetTemplates.ScrollBars := ssAutoVertical;
   FSetTemplates.OnChange := @SetTemplatesChanged;
+  FSetRigAutoConnect := TCheckBox.Create(RigGroup);
+  FSetRigAutoConnect.Parent := RigGroup;
+  FSetRigAutoConnect.SetBounds(14, 196, 700, 22);
+  RegisterCaption(FSetRigAutoConnect, @RsSetRigAutoConnect);
+  FSetRigAutoConnect.OnChange := @SettingChanged;
+
+  { ── 無線機の詳しい接続設定: 要件 FR-T.5 ──
+    **普通は既定のまま。**「機種の既定」と 0 ms は Hamlib へ渡しません。
+    項目の並びは `DeepCW.RigConfig` の選択肢と同じ順です。
+    Detailed rig connection settings (FR-T.5). **Normally left at the
+    defaults**; "the model's default" and 0 ms are not passed to Hamlib. The
+    items follow the order of the choices in `DeepCW.RigConfig`. }
+  RigAdvGroup := TGroupBox.Create(Scroller);
+  RigAdvGroup.Parent := Scroller;
+  RegisterCaption(RigAdvGroup, @RsSetRigAdvGroup);
+  RigAdvGroup.Height := 214;
+  Stretch(RigAdvGroup, alTop);
+  AddLabel(RigAdvGroup, @RsSetRigCivAddr, 14, 10);
+  FSetRigCivAddr := TEdit.Create(RigAdvGroup);
+  FSetRigCivAddr.Parent := RigAdvGroup;
+  FSetRigCivAddr.SetBounds(140, 6, 60, 28);
+  FSetRigCivAddr.CharCase := ecUppercase;
+  FSetRigCivAddr.MaxLength := 2;
+  FSetRigCivAddr.OnChange := @SettingChanged;
+  AddLabel(RigAdvGroup, @RsSetRigDataBits, 230, 10);
+  FSetRigDataBits := AddChoice(RigAdvGroup, 340, 6, 120);
+  FSetRigDataBits.Items.Add('7');
+  FSetRigDataBits.Items.Add('8');
+  AddLabel(RigAdvGroup, @RsSetRigStopBits, 490, 10);
+  FSetRigStopBits := AddChoice(RigAdvGroup, 610, 6, 120);
+  FSetRigStopBits.Items.Add('1');
+  FSetRigStopBits.Items.Add('2');
+  AddLabel(RigAdvGroup, @RsSetRigParity, 14, 44);
+  FSetRigParity := AddChoice(RigAdvGroup, 140, 40, 130);
+  RegisterItem(FSetRigParity, 1, @RsSetRigParityNone);
+  RegisterItem(FSetRigParity, 2, @RsSetRigParityEven);
+  RegisterItem(FSetRigParity, 3, @RsSetRigParityOdd);
+  AddLabel(RigAdvGroup, @RsSetRigHandshake, 300, 44);
+  FSetRigHandshake := AddChoice(RigAdvGroup, 410, 40, 160);
+  RegisterItem(FSetRigHandshake, 1, @RsSetRigHandshakeNone);
+  FSetRigHandshake.Items.Add('XON/XOFF');
+  RegisterItem(FSetRigHandshake, 3, @RsSetRigHandshakeHardware);
+  AddLabel(RigAdvGroup, 'DTR', 14, 78);
+  FSetRigDtr := AddChoice(RigAdvGroup, 140, 74, 130);
+  FSetRigDtr.Items.Add('ON');
+  FSetRigDtr.Items.Add('OFF');
+  AddLabel(RigAdvGroup, 'RTS', 300, 78);
+  FSetRigRts := AddChoice(RigAdvGroup, 410, 74, 160);
+  FSetRigRts.Items.Add('ON');
+  FSetRigRts.Items.Add('OFF');
+  AddLabel(RigAdvGroup, @RsSetRigTimeout, 14, 112);
+  FSetRigTimeout := AddSpin(RigAdvGroup, 140, 108, 0, RIG_TIMEOUT_MAX, 0, @SettingChanged);
+  FSetRigTimeout.Width := 90;
+  AddLabel(RigAdvGroup, @RsSetRigWriteDelay, 250, 112);
+  FSetRigWriteDelay := AddSpin(RigAdvGroup, 380, 108, 0, RIG_DELAY_MAX, 0, @SettingChanged);
+  AddLabel(RigAdvGroup, @RsSetRigPostDelay, 480, 112);
+  FSetRigPostDelay := AddSpin(RigAdvGroup, 610, 108, 0, RIG_DELAY_MAX, 0, @SettingChanged);
+  AddLabel(RigAdvGroup, @RsSetRigAdvHint, 14, 146);
+  AddLabel(RigAdvGroup, @RsSetRigLineWarn, 14, 170);
 
   { ── 拡張（準備中）: 要件 FR-W・FR-N ──
     **受け口だけ**です。準備中の項目も見せますが、選べません
@@ -4107,6 +4251,8 @@ var
   Ini: TIniFile;
   Rate: string;
   Index: Integer;
+  RigValues: TStringList;
+  Rejected: TStringArray;
 begin
   if not FileExists(ConfigFileName) then
     Exit;
@@ -4143,6 +4289,21 @@ begin
     FSetRigBaud.ItemIndex := Index;
     FSetMyCall.Text := Ini.ReadString('transmit', 'my_call', '');
     FSetMuteRx.Checked := Ini.ReadBool('rig', 'mute_receive', True);
+    { 詳しい接続設定（要件 FR-T.5）。**読めない値は既定に戻し、診断に残します**
+      （黙って捨てない）。/ Detailed settings (FR-T.5). **Unreadable values fall
+      back to the default and are logged** (never dropped silently). }
+    RigValues := TStringList.Create;
+    try
+      Ini.ReadSectionValues('rig', RigValues);
+      RigConfToScreen(RigConfFromValues(RigValues, Rejected));
+      for Index := 0 to High(Rejected) do
+        LogDiagnostic(RsCtxRig, Format(
+          'Settings file: [rig] %s cannot be used; the model''s default is used instead.',
+          [Rejected[Index]]));
+    finally
+      RigValues.Free;
+    end;
+    FSetRigAutoConnect.Checked := Ini.ReadBool('rig', 'connect_at_start', False);
     FSetTemplates.Lines.Clear;
     for Index := 1 to 8 do
       if Ini.ReadString('transmit', 'template' + IntToStr(Index), '') <> '' then
@@ -4261,6 +4422,7 @@ procedure TMainForm.SaveSettings;
 var
   Ini: TIniFile;
   Index: Integer;
+  RigValues: TStringList;
 begin
   FSettingsDirty := False;
   FSettingsSavedAt := Now;
@@ -4285,6 +4447,15 @@ begin
         FSetRigBaud.Items[Max(0, FSetRigBaud.ItemIndex)], 0));
       Ini.WriteString('transmit', 'my_call', FSetMyCall.Text);
       Ini.WriteBool('rig', 'mute_receive', FSetMuteRx.Checked);
+      RigValues := TStringList.Create;
+      try
+        RigConfToValues(RigConfFromScreen, RigValues);
+        for Index := 0 to RigValues.Count - 1 do
+          Ini.WriteString('rig', RigValues.Names[Index], RigValues.ValueFromIndex[Index]);
+      finally
+        RigValues.Free;
+      end;
+      Ini.WriteBool('rig', 'connect_at_start', FSetRigAutoConnect.Checked);
       Ini.WriteString('receive', 'alphabet',
         AlphabetKey(TCwAlphabet(Max(0, FSetAlphabet.ItemIndex))));
       Ini.WriteString('receive', 'noise_reduction', FReducer.Key);
@@ -5360,17 +5531,105 @@ begin
   Result.Model := FSetRigModel.Value;
   Result.Port := Trim(FSetRigPort.Text);
   Result.Baud := StrToIntDef(FSetRigBaud.Items[Max(0, FSetRigBaud.ItemIndex)], 0);
+  Result.Conf := RigConfPairs(RigConfFromScreen);
+  { 電源は繋ぐときには入れません（要件 FR-T.6）。/ Connecting never powers on. }
+  Result.PowerOnAtOpen := False;
 end;
 
+function IndexOfChoice(const Value: string; const Choices: array of string): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to High(Choices) do
+    if Choices[I] = Value then
+      Exit(I);
+  Result := 0;
+end;
+
+function IndexOfIntChoice(Value: Integer; const Choices: array of Integer): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to High(Choices) do
+    if Choices[I] = Value then
+      Exit(I);
+  Result := 0;
+end;
+
+{ 画面の詳しい接続設定（要件 FR-T.5）。/ The detailed settings on screen. }
+function TMainForm.RigConfFromScreen: TRigConf;
+begin
+  Result := DefaultRigConf;
+  Result.CivAddr := Trim(FSetRigCivAddr.Text);
+  Result.DataBits := RIG_DATA_BITS_CHOICES[Max(0, FSetRigDataBits.ItemIndex)];
+  Result.StopBits := RIG_STOP_BITS_CHOICES[Max(0, FSetRigStopBits.ItemIndex)];
+  Result.Parity := RIG_PARITY_CHOICES[Max(0, FSetRigParity.ItemIndex)];
+  Result.Handshake := RIG_HANDSHAKE_CHOICES[Max(0, FSetRigHandshake.ItemIndex)];
+  Result.Dtr := RIG_LINE_CHOICES[Max(0, FSetRigDtr.ItemIndex)];
+  Result.Rts := RIG_LINE_CHOICES[Max(0, FSetRigRts.ItemIndex)];
+  Result.TimeoutMs := FSetRigTimeout.Value;
+  Result.WriteDelayMs := FSetRigWriteDelay.Value;
+  Result.PostWriteDelayMs := FSetRigPostDelay.Value;
+end;
+
+procedure TMainForm.RigConfToScreen(const Conf: TRigConf);
+begin
+  FSetRigCivAddr.Text := Conf.CivAddr;
+  FSetRigDataBits.ItemIndex := IndexOfIntChoice(Conf.DataBits, RIG_DATA_BITS_CHOICES);
+  FSetRigStopBits.ItemIndex := IndexOfIntChoice(Conf.StopBits, RIG_STOP_BITS_CHOICES);
+  FSetRigParity.ItemIndex := IndexOfChoice(Conf.Parity, RIG_PARITY_CHOICES);
+  FSetRigHandshake.ItemIndex := IndexOfChoice(Conf.Handshake, RIG_HANDSHAKE_CHOICES);
+  FSetRigDtr.ItemIndex := IndexOfChoice(Conf.Dtr, RIG_LINE_CHOICES);
+  FSetRigRts.ItemIndex := IndexOfChoice(Conf.Rts, RIG_LINE_CHOICES);
+  FSetRigTimeout.Value := Conf.TimeoutMs;
+  FSetRigWriteDelay.Value := Conf.WriteDelayMs;
+  FSetRigPostDelay.Value := Conf.PostWriteDelayMs;
+end;
+
+{ 繋ぎます（要件 FR-T.2・T.5）。**詳しい接続設定を先に確かめ、通らなければ
+  繋ぎません**（理由を名指しする）。起動したら繋ぐ設定のときも、ここを通ります。
+  Connects (FR-T.2, T.5). **The detailed settings are checked first, and a
+  failure means no connection** (the reason is named). Connecting at start-up
+  comes through here too. }
 procedure TMainForm.RigConnectClick(Sender: TObject);
+var
+  Problem: TRigConfProblem;
+  Setting: string;
 begin
   if FSetRigModel.Value <= 0 then
   begin
     SetStatus('', '', RsRigNoModel);
     Exit;
   end;
+  if not CheckRigConf(RigConfFromScreen, Problem, Setting) then
+  begin
+    case Problem of
+      rcpCivAddr: SetStatus('', '', RsRigConfCivAddr);
+      rcpRange: SetStatus('', '', Format(RsRigConfRange, [Setting]));
+      rcpRtsWithHardware: SetStatus('', '', RsRigConfRtsHardware);
+    else
+      SetStatus('', '', Format(RsRigConfChoice, [Setting]));
+    end;
+    Exit;
+  end;
   FRigFaultLogged := False;
   FKeyer.Connect(RigSettings, FTxCharWpm.Value);
+  UpdateRigStatus;
+end;
+
+{ 電源を入れます（要件 FR-T.6）。**利用者が押したときだけ**で、自動では
+  決して入れません。応答が無いときだけ頼めます。
+  Powers the rig on (FR-T.6). **Only when the operator presses**; never
+  automatically. It can be asked only while the rig does not answer. }
+procedure TMainForm.RigPowerClick(Sender: TObject);
+begin
+  FRigFaultLogged := False;
+  if not FKeyer.PowerOn then
+  begin
+    SetStatus('', '', RsRigPowerNotNow);
+    Exit;
+  end;
+  SetStatus('', '', RsRigPowerAsked);
   UpdateRigStatus;
 end;
 
@@ -5447,6 +5706,8 @@ begin
   case Status.State of
     ksOff: Caption_ := RsRigOff;
     ksConnecting: Caption_ := RsRigConnecting;
+    ksNoAnswer: Caption_ := RsRigNoAnswer;
+    ksPoweringOn: Caption_ := RsRigPoweringOn;
     ksReady:
       { 無線機が答えた速度を先に見せます。丸められていれば、それが本当の
         速度です（付録 BS.2）。/ The speed the rig reports comes first: if it
@@ -5461,14 +5722,40 @@ begin
   else
     Caption_ := RsRigFailed;
   end;
+  if (Status.State = ksReady) and not Status.CanProbe then
+    Caption_ := Caption_ + RsRigNoProbe;
   if Status.Stop = ssNo then
     Caption_ := Caption_ + RsRigCannotStop;
   if FRigStatus.Caption <> Caption_ then
     FRigStatus.Caption := Caption_;
-  FRigConnect.Enabled := Status.State in [ksOff, ksFailed];
+  FRigConnect.Enabled := Status.State in [ksOff, ksFailed, ksNoAnswer];
   FRigDisconnect.Enabled := Status.State <> ksOff;
   FRigSend.Enabled := Status.State = ksReady;
   FRigStop.Enabled := True;
+  FRigPower.Enabled := (Status.State = ksNoAnswer) or
+    ((Status.State = ksFailed) and (Status.Fault = kfNoAnswer));
+  { 応答が無くなった・戻ったは、移ったときに 1 度だけ言います（要件 FR-T.6）。
+    Losing and regaining the answer is said once, when it happens (FR-T.6). }
+  if Status.State <> FRigLastState then
+  begin
+    if Status.State = ksNoAnswer then
+    begin
+      if FRigLastState in [ksReady, ksSending] then
+        SetStatus('', '', RsRigLostAnswer)
+      else if FRigLastState = ksConnecting then
+        SetStatus('', '', RsRigSilentAfterOpen);
+      LogDiagnostic(RsCtxRig, 'The rig does not answer.');
+    end
+    else if (Status.State = ksReady) and (FRigLastState = ksNoAnswer) then
+    begin
+      SetStatus('', '', RsRigBack);
+      LogDiagnostic(RsCtxRig, 'The rig answers again.');
+    end
+    else if (Status.State = ksReady) and (FRigLastState in [ksOff, ksConnecting, ksFailed]) then
+      { 前の失敗の案内を残さないため。/ So that no earlier failure message lingers. }
+      SetStatus('', '', RsRigConnected);
+    FRigLastState := Status.State;
+  end;
   { 失敗の原文は診断へ 1 度だけ。**送った文は書きません**（診断の控えは、
     受信した文章や符号を含まないと約束しているため）。
     The failure's original text goes to the diagnostics once. **The text sent
@@ -5480,11 +5767,29 @@ begin
     LogDiagnostic(RsCtxRig, Status.Detail);
     case Status.Fault of
       kfNoLibrary: SetStatus('', '', RsRigFailNoLibrary);
-      kfConnect: SetStatus('', '', RsRigFailConnect);
+      kfModel: SetStatus('', '', RsRigFailModel);
+      kfConfig: SetStatus('', '', Format(RsRigFailConfig, [Status.Setting]));
+      kfPort: SetStatus('', '', RsRigFailPort);
+      kfNoAnswer: SetStatus('', '', RsRigFailNoAnswer);
+      kfLink: SetStatus('', '', RsRigFailLink);
       kfStop: SetStatus('', '', RsRigFailStop);
     else
       SetStatus('', '', RsRigFailSend);
     end;
+  end;
+  { 電源を頼んだ結果（要件 FR-T.6）。変わったときに 1 度だけ言います。
+    The outcome of a power-on request (FR-T.6), said once when it changes. }
+  if Status.Power <> FRigLastPower then
+  begin
+    case Status.Power of
+      prNotSupported: SetStatus('', '', RsRigPowerNotSupported);
+      prFailed: SetStatus('', '', RsRigPowerFailed);
+      prNoWake: SetStatus('', '', RsRigPowerNoWake);
+      prAwake: SetStatus('', '', RsRigPowerAwake);
+    end;
+    if Status.Power in [prNotSupported, prFailed, prNoWake, prAwake] then
+      LogDiagnostic(RsCtxRig, Format('Power on: %d', [Ord(Status.Power)]));
+    FRigLastPower := Status.Power;
   end;
   { 止められないと分かったときも、状態欄で 1 度だけ詳しく言います。
     Once it is known the rig cannot stop, the status bar says so in full, once. }
@@ -8453,6 +8758,12 @@ end;
 
 procedure TMainForm.PollTimer(Sender: TObject);
 begin
+  if FRigAutoConnectPending then
+  begin
+    FRigAutoConnectPending := False;
+    SetStatus('', '', RsRigAutoConnecting);
+    RigConnectClick(nil);
+  end;
   UpdateRigStatus;
   { タイマーが動く時点でスレッドは Synchronize を抜けているため安全です。
   Safe here: the thread has left Synchronize by the time the timer runs. }

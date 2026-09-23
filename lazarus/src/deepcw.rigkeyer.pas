@@ -1,41 +1,64 @@
 unit DeepCW.RigKeyer;
 
-{ 無線機の鍵を、fail-safe に操作します（要件 FR-T.2・FR-T.3）。
+{ 無線機の鍵を、fail-safe に操作します（要件 FR-T.2・FR-T.3・FR-T.6）。
 
   **Transmit は fail-safe**（`CLAUDE.md`）。ここがその約束の置き場所です。
 
-  1. **送るのは `Send` を呼んだときだけ**です。繋がっていて、送っていない
-     ときだけ受け付けます。**受け付けなかった文は溜めません**——あとで繋がった
-     ときに、古い文が勝手に送られないためです。
+  1. **送るのは `Send` を呼んだときだけ**です。無線機が応答していて（「待機」）、
+     送っていないときだけ受け付けます。**受け付けなかった文は溜めません**——
+     あとで繋がったときに、古い文が勝手に送られないためです。
   2. **無線機には語ずつ渡します**（`SplitForKeying`）。次の語は、前の語を
      送り終える見込みの少し前に渡します。**`Stop` は残りの語を錠の下で捨てる
      ので、`Stop` が戻ったあとは 1 語も渡しません。**`stop_morse` を持たない
      機種でも、止まるのは遅くとも「渡し済みの語」の終わりです。
-  3. **誤りが起きたら**: 残りを捨て、止めを試み、無線機の口を閉じ、「失敗」に
-     なります。**自動で送り直したり繋ぎ直したりしません**（同じ文が 2 度出る）。
-     `Connect` をもう一度押すまで、何も送りません。
+  3. **送っている途中の誤りでは**: 残りを捨て、止めを試み、無線機の口を閉じ、
+     「失敗」になります。**自動で送り直したり繋ぎ直したりしません**（同じ文が
+     2 度出る）。
   4. **無線機の口は、このスレッドだけが触ります**（`DeepCW.Hamlib`）。画面は
-     `Snapshot` で様子を読むだけです（録音と同じ形。画面をワーカーから触らない）。
+     `Snapshot` で様子を読むだけです（画面をワーカーから触らない）。
+  5. **無線機が応答しているかを確かめ続けます**（要件 FR-T.6）。繋いだ直後・
+     待機中は 5 秒ごと・応答が無い間は 3 秒ごとに、**読むだけの命令**で訊きます。
+     応答が無くなれば「応答なし」になり（口は開いたまま）、送りません。応答が
+     戻れば「待機」に戻り、鍵の速度を合わせ直します。**戻っても、何も送りません。**
+  6. **電源を入れるのは、利用者が頼んだときだけ**（`PowerOn`）。口が開いていれば
+     電源を入れる命令を送り、起きるまで 1 秒ごとに 30 秒まで訊きます。開くときに
+     応答が無かったのなら、開くときに入れさせて（Hamlib の `auto_power_on`）
+     繋ぎ直します。**電源を切る命令は持ちません。**
+  7. **口を開き直す再試行はしません。**口を開くと DTR・RTS の線が動く機器があり、
+     その線で送信や鍵を操作する配線では、開き直すたびに電波が出うるためです。
 
-  Operates the rig's key in a fail-safe way (requirements FR-T.2, FR-T.3).
+  Operates the rig's key in a fail-safe way (requirements FR-T.2, FR-T.3,
+  FR-T.6).
 
   **Transmit is fail-safe** (`CLAUDE.md`); this is where that promise lives.
 
-  1. **Nothing is sent except on `Send`**, accepted only while connected and
-     idle. **A refused text is not kept**, so that no stale text goes out on
-     its own after a later connection.
+  1. **Nothing is sent except on `Send`**, accepted only while the rig answers
+     ("ready") and nothing is being sent. **A refused text is not kept**, so
+     that no stale text goes out on its own after a later connection.
   2. **The rig is handed one word at a time** (`SplitForKeying`); the next
      word goes a little before the previous one is expected to finish. **`Stop`
      drops the remaining words under the lock, so after `Stop` returns not one
      more word is handed over.** Even on a model without `stop_morse`, sending
      ends at the latest with the words already handed over.
-  3. **On any error** the rest is dropped, a stop is attempted, the rig is
-     closed, and the state becomes Failed. **Nothing is resent or reconnected
-     automatically** (the same text would go out twice); nothing is sent until
-     `Connect` is pressed again.
+  3. **On an error while sending** the rest is dropped, a stop is attempted,
+     the rig is closed, and the state becomes Failed. **Nothing is resent or
+     reconnected automatically** (the same text would go out twice).
   4. **Only this thread touches the rig handle** (`DeepCW.Hamlib`). The screen
-     only reads `Snapshot` -- the recorder's pattern; no worker touches the
-     screen. }
+     only reads `Snapshot`; no worker touches the screen.
+  5. **Whether the rig answers is checked continually** (FR-T.6): right after
+     connecting, every 5 s while ready and every 3 s while silent, with **a
+     read-only command**. When it stops answering the state becomes "no answer"
+     (the port stays open) and nothing is sent; when it answers again the state
+     returns to ready and the keyer speed is set again. **Coming back sends
+     nothing.**
+  6. **The rig is powered on only at the operator's request** (`PowerOn`). With
+     the port open the power-on command is sent and the rig is asked once a
+     second, for up to 30 s, until it wakes; if it did not answer at open, the
+     port is reopened with Hamlib's `auto_power_on`. **There is no power-off
+     command.**
+  7. **Opening the port is never retried on its own.** Opening moves the DTR and
+     RTS lines on some interfaces, and where those lines key the transmitter
+     every reopening could put out a signal. }
 
 {$mode objfpc}{$H+}
 
@@ -54,15 +77,27 @@ const
   { 送っている間に、次の語を渡すかを見る間隔（ミリ秒）。
     How often, while sending, the next hand-over is considered (ms). }
   KEYER_TICK_MS = 50;
+  { 応答を確かめる間隔（ミリ秒）: 待機中・応答なしの間・電源を入れたあと。
+    How often the rig is asked (ms): while ready, while silent, after power-on. }
+  PROBE_READY_MS = 5000;
+  PROBE_SILENT_MS = 3000;
+  PROBE_WAKING_MS = 1000;
+  { 電源を入れてから起きるのを待つ上限（ミリ秒）。/ How long to wait for the
+    rig to wake after power-on (ms). }
+  POWER_WAKE_LIMIT_MS = 30000;
 
 type
-  TKeyerState = (ksOff, ksConnecting, ksReady, ksSending, ksFailed);
+  TKeyerState = (ksOff, ksConnecting, ksReady, ksSending, ksNoAnswer,
+    ksPoweringOn, ksFailed);
   { 失敗の種類。**言葉にするのは画面の側です。**
     The kind of failure; **the screen puts it into words.** }
-  TKeyerFault = (kfNone, kfNoLibrary, kfConnect, kfSend, kfStop);
+  TKeyerFault = (kfNone, kfNoLibrary, kfModel, kfConfig, kfPort, kfNoAnswer,
+    kfLink, kfSend, kfStop);
   { 止められる機種か。繋いだだけでは分かりません（止めて初めて分かる）。
     Whether the model can stop; unknown until a stop is tried. }
   TStopSupport = (ssUnknown, ssYes, ssNo);
+  { 電源を入れる頼みの結果。/ The outcome of a power-on request. }
+  TPowerResult = (prNone, prAsked, prNotSupported, prFailed, prNoWake, prAwake);
 
   TKeyerStatus = record
     State: TKeyerState;
@@ -71,6 +106,8 @@ type
       The technical original (English): kept for diagnostics; the screen shows
       words made from the kind. }
     Detail: string;
+    { 断られた設定の名前（`kfConfig` のとき）。/ The refused setting. }
+    Setting: string;
     Text: string;
     { 渡し済みの文字数。/ Characters handed over so far. }
     Handed: Integer;
@@ -90,6 +127,10 @@ type
       (`GetTickCount64`), 0 for none. **Kept after a failure too**: the rig may
       go on sending what it was given (used by receive suppression, FR-T.4). }
     KeyedUntil: QWord;
+    Power: TPowerResult;
+    { 応答を確かめられる機種か（読む命令を持たない機種では確かめない）。
+      Whether the answer can be checked (not on a model without the read). }
+    CanProbe: Boolean;
   end;
 
   TRigKeyer = class
@@ -104,6 +145,7 @@ type
     FConnectWanted: Boolean;
     FDisconnectWanted: Boolean;
     FStopWanted: Boolean;
+    FPowerWanted: Boolean;
     FWpmWanted: Integer;
     FSettings: TRigSettings;
     FLibraryPath: string;
@@ -115,21 +157,34 @@ type
     { 送りかけていれば止め、無線機の口を閉じてから終わります。
       Stops anything in progress and closes the rig before finishing. }
     destructor Destroy; override;
+    { 繋ぎます。**電源は入れません**（`Settings.PowerOnAtOpen` は無視して偽）。
+      Connects. **Never powers on** (`Settings.PowerOnAtOpen` is forced off). }
     procedure Connect(const Settings: TRigSettings; Wpm: Integer;
       const LibraryPath: string = '');
     procedure Disconnect;
-    { 送ります。**繋がっていて、送っていないときだけ True。**`Clean` は
+    { 送ります。**待機（応答あり）で、送っていないときだけ True。**`Clean` は
       `CheckTransmitText` を通した文です。
-      Sends. **True only while connected and idle.** `Clean` is text that has
-      passed `CheckTransmitText`. }
+      Sends. **True only while ready (answering) and idle.** `Clean` is text
+      that has passed `CheckTransmitText`. }
     function Send(const Clean: string): Boolean;
     { 止めます。**いつでも呼べ、戻ったあとは 1 語も渡しません。**
       Stops. **Always callable; after it returns no further word is handed
       over.** }
     procedure Stop;
     procedure SetWpm(Wpm: Integer);
+    { 電源を入れます。**利用者が押したときだけ呼びます。**頼めるのは「応答なし」
+      か、開くときに応答が無かった「失敗」のときだけで、それ以外は False。
+      Powers the rig on. **Call only when the operator pressed for it.** It can
+      be asked only in "no answer", or in "failed" because the rig did not
+      answer at open; otherwise False. }
+    function PowerOn: Boolean;
     function Snapshot: TKeyerStatus;
   end;
+
+{ Hamlib の番号が「応答が無い」類か（口は開けた・開いているが、無線機が
+  答えない）。/ Whether a Hamlib code means "no answer" (the port opened or is
+  open, but the rig does not reply). }
+function IsNoAnswerCode(Code: Integer): Boolean;
 
 implementation
 
@@ -145,6 +200,11 @@ type
   public
     constructor Create(AOwner: TRigKeyer);
   end;
+
+function IsNoAnswerCode(Code: Integer): Boolean;
+begin
+  Result := (Code = -RIG_ETIMEOUT) or (Code = -RIG_EPOWER) or (Code = -RIG_EPROTO);
+end;
 
 constructor TKeyerThread.Create(AOwner: TRigKeyer);
 begin
@@ -195,13 +255,17 @@ begin
     FWords := nil;
     FNextWord := 0;
     FSettings := Settings;
+    FSettings.PowerOnAtOpen := False;
     FLibraryPath := LibraryPath;
     FWpmWanted := Wpm;
     FConnectWanted := True;
     FDisconnectWanted := False;
+    FPowerWanted := False;
     FStatus.State := ksConnecting;
     FStatus.Fault := kfNone;
     FStatus.Detail := '';
+    FStatus.Setting := '';
+    FStatus.Power := prNone;
     FStatus.Wpm := Wpm;
   finally
     FLock.Leave;
@@ -216,6 +280,7 @@ begin
     FWords := nil;
     FNextWord := 0;
     FConnectWanted := False;
+    FPowerWanted := False;
     FDisconnectWanted := True;
   finally
     FLock.Leave;
@@ -271,6 +336,38 @@ begin
   FWake.SetEvent;
 end;
 
+function TRigKeyer.PowerOn: Boolean;
+begin
+  FLock.Enter;
+  try
+    Result := False;
+    if (FStatus.State = ksNoAnswer) and not FConnectWanted and
+       not FDisconnectWanted then
+    begin
+      FPowerWanted := True;
+      FStatus.Power := prAsked;
+      Result := True;
+    end
+    else if (FStatus.State = ksFailed) and (FStatus.Fault = kfNoAnswer) and
+            not FDisconnectWanted then
+    begin
+      { 開くときに応答が無かった。**開くときに電源を入れさせて**繋ぎ直します。
+        It did not answer at open: reconnect **letting the opening power it on**. }
+      FSettings.PowerOnAtOpen := True;
+      FConnectWanted := True;
+      FStatus.State := ksConnecting;
+      FStatus.Fault := kfNone;
+      FStatus.Detail := '';
+      FStatus.Power := prAsked;
+      Result := True;
+    end;
+  finally
+    FLock.Leave;
+  end;
+  if Result then
+    FWake.SetEvent;
+end;
+
 function TRigKeyer.Snapshot: TKeyerStatus;
 begin
   FLock.Enter;
@@ -284,26 +381,64 @@ end;
 procedure TRigKeyer.Run;
 var
   Rig: THamlibRig;
-  QueuedUntil: QWord;
-  ConnectNow, DisconnectNow, StopNow: Boolean;
+  QueuedUntil, NextProbe, WakeDeadline, NowMs: QWord;
+  ConnectNow, DisconnectNow, StopNow, PowerNow: Boolean;
   Settings: TRigSettings;
   LibraryPath, Word_: string;
-  Wpm, WantedWpm, PaceWpm: Integer;
-  Stopped, Pacing, SpeedTaken: Boolean;
+  Wpm, WantedWpm, PaceWpm, Code: Integer;
+  Stopped, SpeedTaken, CanProbe: Boolean;
+  State: TKeyerState;
+  Wait: Cardinal;
 
-  procedure SetState(State: TKeyerState);
+  function CurrentState: TKeyerState;
   begin
     FLock.Enter;
     try
-      FStatus.State := State;
+      Result := FStatus.State;
     finally
       FLock.Leave;
     end;
   end;
 
+  procedure SetState(AState: TKeyerState);
+  begin
+    FLock.Enter;
+    try
+      FStatus.State := AState;
+    finally
+      FLock.Leave;
+    end;
+  end;
+
+  procedure SetPower(Result_: TPowerResult);
+  begin
+    FLock.Enter;
+    try
+      FStatus.Power := Result_;
+    finally
+      FLock.Leave;
+    end;
+  end;
+
+  procedure CloseRig;
+  begin
+    if Rig = nil then
+      Exit;
+    try
+      Rig.StopMorse;
+    except
+      { 止めの失敗は、閉じるのを妨げません。/ A failed stop does not block closing. }
+    end;
+    try
+      Rig.Free;
+    except
+    end;
+    Rig := nil;
+  end;
+
   { 誤りのあとの後始末。**送り直さず、繋ぎ直さず、止めを試みて閉じる。**
     After an error: **no resending, no reconnecting; try to stop, then close.** }
-  procedure Fail(Fault: TKeyerFault; const Detail: string);
+  procedure Fail(Fault: TKeyerFault; const Detail: string; const Setting: string = '');
   begin
     FLock.Enter;
     try
@@ -312,49 +447,77 @@ var
       FStatus.State := ksFailed;
       FStatus.Fault := Fault;
       FStatus.Detail := Detail;
+      FStatus.Setting := Setting;
     finally
       FLock.Leave;
     end;
-    if Rig <> nil then
+    CloseRig;
+  end;
+
+  { 開くまでの誤りを種類に分けます。/ Sorts an error before opening. }
+  procedure FailOpening(E: Exception);
+  var
+    H: EHamlib;
+  begin
+    if not (E is EHamlib) then
     begin
-      try
-        Rig.StopMorse;
-      except
-        { 止めの失敗は、閉じるのを妨げません。/ A failed stop does not block closing. }
-      end;
-      try
-        Rig.Free;
-      except
-      end;
-      Rig := nil;
+      Fail(kfPort, E.Message);
+      Exit;
+    end;
+    H := EHamlib(E);
+    case H.Stage of
+      hsModel: Fail(kfModel, H.Message);
+      hsConfig: Fail(kfConfig, H.Message, H.Setting);
+      hsOpen:
+        if IsNoAnswerCode(H.Code) then
+          Fail(kfNoAnswer, H.Message)
+        else
+          Fail(kfPort, H.Message);
+    else
+      Fail(kfPort, H.Message);
     end;
   end;
 
 begin
   Rig := nil;
   QueuedUntil := 0;
+  NextProbe := 0;
+  WakeDeadline := 0;
   Wpm := 0;
   PaceWpm := 0;
+  CanProbe := True;
   while True do
   begin
     FLock.Enter;
     try
       if FQuit then
         Break;
-      Pacing := FStatus.State = ksSending;
+      State := FStatus.State;
     finally
       FLock.Leave;
     end;
-    { 間合いを計るのは送っている間だけです。**それ以外は起こされるまで眠り
-      ます**（呼ぶ側はどれも `FWake` を鳴らす）。版 2.70 は使わなくても毎秒 20 回
-      起きていた（付録 BS.3）。
-      Pacing is only needed while sending; **otherwise the thread sleeps until
-      woken** (every caller signals `FWake`). Version 2.70 woke 20 times a
-      second even when unused (appendix BS.3). }
-    if Pacing then
-      FWake.WaitFor(KEYER_TICK_MS)
+    { 間合いを計るのは送っている間だけ、応答を確かめるのは繋がっている間だけ
+      です。**それ以外は起こされるまで眠ります**（呼ぶ側はどれも `FWake` を
+      鳴らす）。版 2.70 は使わなくても毎秒 20 回起きていた（付録 BS.3）。
+      Pacing is only needed while sending and probing only while connected;
+      **otherwise the thread sleeps until woken** (every caller signals
+      `FWake`). Version 2.70 woke 20 times a second even when unused
+      (appendix BS.3). }
+    if State = ksSending then
+      Wait := KEYER_TICK_MS
+    else if (Rig <> nil) and CanProbe and
+            (State in [ksReady, ksNoAnswer, ksPoweringOn]) then
+    begin
+      NowMs := GetTickCount64;
+      if NextProbe <= NowMs then
+        Wait := 0
+      else
+        Wait := Cardinal(Min(NextProbe - NowMs, PROBE_READY_MS));
+    end
     else
-      FWake.WaitFor(INFINITE);
+      Wait := INFINITE;
+    if Wait > 0 then
+      FWake.WaitFor(Wait);
 
     FLock.Enter;
     try
@@ -364,6 +527,8 @@ begin
       FDisconnectWanted := False;
       StopNow := FStopWanted;
       FStopWanted := False;
+      PowerNow := FPowerWanted;
+      FPowerWanted := False;
       Settings := FSettings;
       LibraryPath := FLibraryPath;
       WantedWpm := FWpmWanted;
@@ -408,23 +573,13 @@ begin
     { 2. 切る。/ 2. Disconnect. }
     if DisconnectNow or ConnectNow then
     begin
-      if Rig <> nil then
-      begin
-        try
-          Rig.StopMorse;
-        except
-        end;
-        try
-          Rig.Free;
-        except
-        end;
-        Rig := nil;
-      end;
+      CloseRig;
       if DisconnectNow then
         SetState(ksOff);
     end;
 
-    { 3. 繋ぐ。/ 3. Connect. }
+    { 3. 繋ぐ。**開く試みは 1 度だけ**（口の開き直しで線が動くため）。
+       3. Connect. **One attempt to open** (reopening moves the lines). }
     if ConnectNow then
     begin
       if not LoadHamlib(LibraryPath) then
@@ -438,30 +593,148 @@ begin
       except
         on E: Exception do
         begin
-          Fail(kfConnect, E.Message);
+          FailOpening(E);
+          if Settings.PowerOnAtOpen then
+            SetPower(prFailed);
           Continue;
         end;
       end;
       Wpm := 0;
       PaceWpm := 0;
+      CanProbe := True;
       FLock.Enter;
       try
-        FStatus.State := ksReady;
         FStatus.Stop := ssUnknown;
         FStatus.SpeedSet := False;
         FStatus.RigWpm := 0;
+        FStatus.CanProbe := True;
+        { 開けただけでは「待機」にしません。**応答を確かめてから**です。
+          電源を入れさせて開いたのなら、起きるのを待ちます。
+          Opening alone is not "ready": **the rig must answer first**. If the
+          opening was to power it on, it is given time to wake. }
+        if Settings.PowerOnAtOpen then
+          FStatus.State := ksPoweringOn
+        else
+          FStatus.State := ksConnecting;
       finally
         FLock.Leave;
       end;
+      NowMs := GetTickCount64;
+      NextProbe := NowMs;
+      WakeDeadline := NowMs + POWER_WAKE_LIMIT_MS;
     end;
 
     if Rig = nil then
       Continue;
 
-    { 4. 速度を合わせる。**合わせられない機種もあります**（そのときは無線機の
-       設定の速さで送られ、語を渡す間合いの見込みがずれます）。
-       4. Match the keyer speed. **Some models cannot** (the rig then sends at
-       its own setting and the pacing estimate drifts). }
+    { 4. 電源を入れる（利用者が頼んだときだけ）。
+       4. Power on (only when the operator asked). }
+    if PowerNow and (CurrentState = ksNoAnswer) then
+    begin
+      Code := Rig.PowerOn;
+      if Code = RIG_OK then
+      begin
+        SetState(ksPoweringOn);
+        NowMs := GetTickCount64;
+        WakeDeadline := NowMs + POWER_WAKE_LIMIT_MS;
+        NextProbe := NowMs + PROBE_WAKING_MS;
+      end
+      else if (Code = -RIG_ENIMPL) or (Code = -RIG_ENAVAIL) then
+        SetPower(prNotSupported)
+      else if Code = -RIG_EIO then
+      begin
+        Fail(kfLink, Format('power on: %d', [Code]));
+        Continue;
+      end
+      else
+        SetPower(prFailed);
+    end
+    else if PowerNow then
+      { 頼んだあいだに応答が戻った（など）。頼みは要らなくなりました。
+        The rig answered again meanwhile (or similar): the request is moot. }
+      SetPower(prNone);
+
+    { 5. 応答を確かめる。**読むだけの命令です。**送っている間はしません。
+       5. Check the rig answers, **with a read-only command**; never while
+       sending. }
+    State := CurrentState;
+    if CanProbe and (State in [ksConnecting, ksReady, ksNoAnswer, ksPoweringOn]) and
+       (GetTickCount64 >= NextProbe) then
+    begin
+      Code := Rig.Probe;
+      NowMs := GetTickCount64;
+      if Code = RIG_OK then
+      begin
+        if State <> ksReady then
+        begin
+          { 戻ってきた。**速度を合わせ直し、何も送らない。**
+            It is back: **set the speed again, send nothing.** }
+          Wpm := 0;
+          FLock.Enter;
+          try
+            FStatus.State := ksReady;
+            if State = ksPoweringOn then
+              FStatus.Power := prAwake;
+          finally
+            FLock.Leave;
+          end;
+        end;
+        NextProbe := NowMs + PROBE_READY_MS;
+      end
+      else if (Code = -RIG_ENIMPL) or (Code = -RIG_ENAVAIL) then
+      begin
+        { 確かめる手段が無い機種。確かめずに「待機」とし、その旨を見せます。
+          The model has no way to check; ready without checking, and it says so. }
+        CanProbe := False;
+        FLock.Enter;
+        try
+          FStatus.CanProbe := False;
+          FStatus.State := ksReady;
+        finally
+          FLock.Leave;
+        end;
+      end
+      else if Code = -RIG_EIO then
+      begin
+        Fail(kfLink, Format('probe: %d', [Code]));
+        Continue;
+      end
+      else
+      begin
+        { 応答が無い。口は開いたまま、訊き続けます。
+          No answer: the port stays open and the rig keeps being asked. }
+        if State = ksPoweringOn then
+        begin
+          if NowMs >= WakeDeadline then
+          begin
+            FLock.Enter;
+            try
+              FStatus.State := ksNoAnswer;
+              FStatus.Power := prNoWake;
+            finally
+              FLock.Leave;
+            end;
+            NextProbe := NowMs + PROBE_SILENT_MS;
+          end
+          else
+            NextProbe := NowMs + PROBE_WAKING_MS;
+        end
+        else
+        begin
+          SetState(ksNoAnswer);
+          NextProbe := NowMs + PROBE_SILENT_MS;
+        end;
+      end;
+    end;
+
+    State := CurrentState;
+    if not (State in [ksReady, ksSending]) then
+      Continue;
+
+    { 6. 速度を合わせる。**合わせられない機種もあります**（そのときは無線機の
+       設定の速さで送られます）。
+       6. Match the keyer speed. **Some models cannot** (the rig then sends at
+       its own setting). }
     if (WantedWpm > 0) and (WantedWpm <> Wpm) then
     begin
       Wpm := WantedWpm;
@@ -493,8 +766,8 @@ begin
       end;
     end;
 
-    { 5. 次の語を渡す。**取るのは錠の下**、渡すのは錠の外。
-       5. Hand over the next word: **taken under the lock**, handed outside it. }
+    { 7. 次の語を渡す。**取るのは錠の下**、渡すのは錠の外。
+       7. Hand over the next word: **taken under the lock**, handed outside it. }
     Word_ := '';
     FLock.Enter;
     try
@@ -506,7 +779,10 @@ begin
       end
       else if (FStatus.State = ksSending) and (FNextWord > High(FWords)) and
               (GetTickCount64 >= QueuedUntil) then
+      begin
         FStatus.State := ksReady;
+        NextProbe := GetTickCount64 + PROBE_READY_MS;
+      end;
     finally
       FLock.Leave;
     end;
@@ -536,14 +812,7 @@ begin
   end;
 
   { 終わるときは、送りかけを止めて閉じます。/ On the way out: stop and close. }
-  if Rig <> nil then
-  begin
-    try
-      Rig.StopMorse;
-    except
-    end;
-    Rig.Free;
-  end;
+  CloseRig;
 end;
 
 end.

@@ -100,16 +100,20 @@ else
   skip "gui_probe（画面部品）" "xvfb-run がありません"
 fi
 step "強制終了しても記録が残る" ./tools/kill_safety_test.sh
-# 無線機の鍵の操作が fail-safe であること（要件 FR-T.2・FR-T.3、付録 BR）。
-# **無線機は要りません**が、Hamlib の `rigctld` が要ります（ダミーの無線機を
-# 立てるため）。無ければ飛ばします。
-# Keying the rig is fail-safe (requirements FR-T.2, FR-T.3, appendix BR).
-# **No rig is needed**, but Hamlib's `rigctld` is (it runs the dummy rig);
-# without it the step is skipped.
-if command -v rigctld >/dev/null 2>&1; then
-  step "無線機の鍵の操作が fail-safe" ./cli/rig_check --work "$GUI_HOME"
+# 無線機の鍵の操作が fail-safe であること（要件 FR-T.2・FR-T.3、付録 BR）、
+# 詳しい接続設定が渡ること（FR-T.5）、応答の確かめと電源を入れる流れ
+# （FR-T.6、付録 BT）。**無線機は要りません**が、Hamlib の `rigctld`（ダミーの
+# 無線機）と、無線機の電源や応答を真似る中継（`tools/rig_proxy.py`）のための
+# `python3` が要ります。無ければ飛ばします。
+# Keying the rig is fail-safe (FR-T.2, FR-T.3, appendix BR), the detailed
+# settings arrive (FR-T.5), and the answer check and power-on flow work
+# (FR-T.6, appendix BT). **No rig is needed**, but Hamlib's `rigctld` (the dummy
+# rig) and `python3` (for the relay imitating the rig's power and answers,
+# `tools/rig_proxy.py`) are; without them the step is skipped.
+if command -v rigctld >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  step "無線機の鍵・接続設定・応答と電源" ./cli/rig_check --work "$GUI_HOME"
 else
-  skip "無線機の鍵の操作が fail-safe" "rigctld がありません"
+  skip "無線機の鍵・接続設定・応答と電源" "rigctld か python3 がありません"
 fi
 # 配布物に許諾条項が入ること、入らないときは止まること（要件 NFR-8.2）。
 # **配ってしまってからでは直せないものは、回帰試験に入れる。**

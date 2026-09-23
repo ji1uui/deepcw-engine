@@ -15,20 +15,31 @@ program rig_check;
   reached the key** can be compared. This program starts and kills `rigctld`
   itself, to create a lost connection.
 
-    使い方 / usage: rig_check [--rigctld PATH] [--port N] [--work DIR] }
+  無線機の詳しい接続設定（要件 FR-T.5）と、応答の確かめ・電源を入れる流れ
+  （要件 FR-T.6）も確かめます。後者は `tools/rig_proxy.py` を `rigctld` の前に
+  立て、**電源が切れた・応答しない・遠隔で電源を入れると起きる**無線機を真似ます。
+
+  It also checks the detailed connection settings (FR-T.5) and the answer check
+  and power-on flow (FR-T.6); for the latter `tools/rig_proxy.py` stands in
+  front of `rigctld` and imitates **a rig that is switched off, one that does
+  not answer, and one that wakes after a remote power-on**.
+
+    使い方 / usage: rig_check [--rigctld PATH] [--port N] [--work DIR]
+                              [--proxy PATH] }
 
 {$mode objfpc}{$H+}
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes, SysUtils, Process, DeepCW.Hamlib, DeepCW.RigKeyer, DeepCW.TxMessage,
-  DeepCW.Platform;
+  DeepCW.RigConfig, DeepCW.Platform;
 
 var
   Failures: Integer = 0;
   RigctldPath: string = 'rigctld';
   Port: Integer = 45321;
   WorkDir: string = '';
+  ProxyPath: string = 'tools/rig_proxy.py';
 
 procedure Check(const What: string; Passed: Boolean; const Detail: string = '');
 begin
@@ -111,11 +122,315 @@ begin
   Result := Keyer.Snapshot.State = State;
 end;
 
+function WaitForPower(Keyer: TRigKeyer; Power: TPowerResult; Seconds: Double): Boolean;
+var
+  Until_: QWord;
+begin
+  Until_ := GetTickCount64 + QWord(Round(Seconds * 1000));
+  repeat
+    if Keyer.Snapshot.Power = Power then
+      Exit(True);
+    Sleep(20);
+  until GetTickCount64 > Until_;
+  Result := Keyer.Snapshot.Power = Power;
+end;
+
+{ 中継の記録の行のうち、その文字列を含むものの数（状態を問わない）。
+  Lines of the relay log containing the text, whatever the mode. }
+function CountLines(const LogName, Text: string): Integer;
+var
+  Lines: TStringList;
+  I: Integer;
+begin
+  Result := 0;
+  if not FileExists(LogName) then
+    Exit;
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(LogName);
+    for I := 0 to Lines.Count - 1 do
+      if Pos(Text, Lines[I]) > 0 then
+        Inc(Result);
+  finally
+    Lines.Free;
+  end;
+end;
+
 function Settings: TRigSettings;
 begin
   Result.Model := HAMLIB_MODEL_NETRIGCTL;
   Result.Port := Format('localhost:%d', [Port]);
   Result.Baud := 0;
+  Result.Conf := nil;
+  Result.PowerOnAtOpen := False;
+end;
+
+{ 詳しい接続設定が Hamlib に渡ること、断るべきものを断ること（要件 FR-T.5）。
+  **口は開きません**（設定は開く前に渡るため）。
+  Detailed settings reach Hamlib, and what must be refused is (FR-T.5). **No
+  port is opened** (settings are passed before opening). }
+procedure TestConf;
+var
+  Conf: TRigConf;
+  S: TRigSettings;
+  Rig: THamlibRig;
+  Problem: TRigConfProblem;
+  Name: string;
+
+  function Refused(const ASettings: TRigSettings; out E: EHamlib): Boolean;
+  begin
+    E := nil;
+    try
+      THamlibRig.Create(ASettings).Free;
+      Result := False;
+    except
+      on X: EHamlib do
+      begin
+        E := EHamlib.Create(X.Message);
+        E.Stage := X.Stage;
+        E.Setting := X.Setting;
+        E.Code := X.Code;
+        Result := True;
+      end;
+    end;
+  end;
+
+var
+  E: EHamlib;
+begin
+  WriteLn('詳しい接続設定 / detailed connection settings (FR-T.5)');
+  Conf := DefaultRigConf;
+  Conf.CivAddr := '94';
+  Conf.DataBits := 8;
+  Conf.StopBits := 2;
+  Conf.Parity := 'Even';
+  Conf.Handshake := 'None';
+  Conf.Dtr := 'OFF';
+  Conf.Rts := 'OFF';
+  Conf.TimeoutMs := 1500;
+  Conf.WriteDelayMs := 5;
+  Conf.PostWriteDelayMs := 7;
+  Check('確かめを通る', CheckRigConf(Conf, Problem, Name), Name);
+  S.Model := 3073;  { IC-7300 }
+  S.Port := '/dev/null';
+  S.Baud := 19200;
+  S.Conf := RigConfPairs(Conf);
+  S.PowerOnAtOpen := False;
+  Rig := THamlibRig.Create(S);
+  try
+    Check('CI-V アドレスが渡る（94 は 16 進 = 148）', Rig.GetConf('civaddr') = '148',
+      Rig.GetConf('civaddr'));
+    Check('データビット・ストップビット・パリティが渡る',
+      (Rig.GetConf('data_bits') = '8') and (Rig.GetConf('stop_bits') = '2') and
+      (Rig.GetConf('serial_parity') = 'Even'),
+      Rig.GetConf('data_bits') + '/' + Rig.GetConf('stop_bits') + '/' +
+      Rig.GetConf('serial_parity'));
+    Check('フロー制御・DTR・RTS が渡る',
+      (Rig.GetConf('serial_handshake') = 'None') and
+      (Rig.GetConf('dtr_state') = 'OFF') and (Rig.GetConf('rts_state') = 'OFF'));
+    Check('応答待ち・書き込み間隔が渡る',
+      (Rig.GetConf('timeout') = '1500') and (Rig.GetConf('write_delay') = '5') and
+      (Rig.GetConf('post_write_delay') = '7'));
+    Check('通信速度が渡る', Rig.GetConf('serial_speed') = '19200',
+      Rig.GetConf('serial_speed'));
+    Check('再試行は 0（機種の既定 3 を上書き）', Rig.GetConf('retry') = '0',
+      Rig.GetConf('retry'));
+    Check('開くときに電源を入れさせない・閉じるときに切らせない',
+      (Rig.GetConf('auto_power_on') = '0') and (Rig.GetConf('auto_power_off') = '0'));
+  finally
+    Rig.Free;
+  end;
+
+  S.Conf := nil;
+  S.PowerOnAtOpen := True;
+  Rig := THamlibRig.Create(S);
+  try
+    Check('「電源を入れて繋ぐ」のときだけ、開くときに電源を入れさせる',
+      Rig.GetConf('auto_power_on') = '1', Rig.GetConf('auto_power_on'));
+  finally
+    Rig.Free;
+  end;
+
+  S := Settings;
+  SetLength(S.Conf, 1);
+  S.Conf[0].Name := 'data_bits';
+  S.Conf[0].Value := '8';
+  Check('その機種（網の口）に無い設定は断る', Refused(S, E) and (E.Stage = hsConfig) and
+    (E.Setting = 'data_bits'));
+  E.Free;
+  S.Model := 3073;
+  S.Port := '/dev/null';
+  S.Conf[0].Name := 'serial_parity';
+  S.Conf[0].Value := 'Bogus';
+  Check('Hamlib が断る値は、名指しして断る', Refused(S, E) and (E.Stage = hsConfig) and
+    (E.Setting = 'serial_parity'));
+  E.Free;
+  S.Conf := nil;
+  S.Model := 999999;
+  Check('知らない機種は「機種」の失敗', Refused(S, E) and (E.Stage = hsModel));
+  E.Free;
+end;
+
+procedure SetMode(const ControlFile, Mode: string);
+var
+  F: TStringList;
+begin
+  F := TStringList.Create;
+  try
+    F.Text := Mode;
+    F.SaveToFile(ControlFile);
+  finally
+    F.Free;
+  end;
+end;
+
+{ 中継の記録に、その命令が何回届いたか（`pass` のときだけ数える）。
+  How many times a command reached the relay while passing. }
+function RelayCount(const LogName, Command: string): Integer;
+var
+  Lines: TStringList;
+  I: Integer;
+begin
+  Result := 0;
+  if not FileExists(LogName) then
+    Exit;
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(LogName);
+    for I := 0 to Lines.Count - 1 do
+      if (Pos(' pass ', Lines[I]) > 0) and (Pos(Command, Lines[I]) > 0) then
+        Inc(Result);
+  finally
+    Lines.Free;
+  end;
+end;
+
+{ 応答の確かめと、電源を入れる流れ（要件 FR-T.6）。
+  The answer check and the power-on flow (FR-T.6). }
+procedure TestLiveness;
+var
+  Daemon, Relay: TProcess;
+  Keyer: TRigKeyer;
+  S: TRigSettings;
+  Control, RelayLog, DaemonLog: string;
+  RelayPort, Speeds: Integer;
+  Status: TKeyerStatus;
+begin
+  WriteLn('応答の確かめと電源 / answer check and power (FR-T.6)');
+  if not FileExists(ProxyPath) then
+  begin
+    WriteLn('  中継（', ProxyPath, '）がありません。この部分は確かめていません。');
+    Inc(Failures);
+    Exit;
+  end;
+  Control := WorkDir + 'rig-proxy.mode';
+  RelayLog := WorkDir + 'rig-proxy.log';
+  DaemonLog := WorkDir + 'rigctld-c.log';
+  DeleteFile(RelayLog);
+  DeleteFile(DaemonLog);
+  RelayPort := Port + 1;
+  SetMode(Control, 'off');
+  Daemon := StartRigctld(DaemonLog);
+  Relay := TProcess.Create(nil);
+  Relay.Executable := 'python3';
+  Relay.Parameters.Add(ProxyPath);
+  Relay.Parameters.Add('--listen');
+  Relay.Parameters.Add(IntToStr(RelayPort));
+  Relay.Parameters.Add('--upstream');
+  Relay.Parameters.Add(IntToStr(Port));
+  Relay.Parameters.Add('--control');
+  Relay.Parameters.Add(Control);
+  Relay.Parameters.Add('--log');
+  Relay.Parameters.Add(RelayLog);
+  Relay.Parameters.Add('--boot');
+  Relay.Parameters.Add('2');
+  Relay.Options := [poNoConsole];
+  Relay.Execute;
+  Sleep(700);
+  Keyer := TRigKeyer.Create;
+  try
+    S := Settings;
+    S.Port := Format('localhost:%d', [RelayPort]);
+    { 網の口の既定の応答待ちは 10 秒。試験では 0.8 秒にします（FR-T.5 の設定）。
+      The network client waits 10 s by default; 0.8 s here (an FR-T.5 setting). }
+    SetLength(S.Conf, 1);
+    S.Conf[0].Name := 'timeout';
+    S.Conf[0].Value := '800';
+
+    WriteLn('  電源が切れている無線機に繋ぐ / connecting to a rig that is off');
+    Keyer.Connect(S, 20);
+    Check('開くときに応答が無ければ「失敗（応答なし）」', WaitFor(Keyer, ksFailed, 15) and
+      (Keyer.Snapshot.Fault = kfNoAnswer), Keyer.Snapshot.Detail);
+    Check('応答なしのときは送らない（断る）', not Keyer.Send('CQ'));
+    Check('電源を入れて繋ぐを頼める', Keyer.PowerOn);
+    Check('開くときに電源を入れられない接続では「失敗」に戻る',
+      WaitFor(Keyer, ksFailed, 20) and (Keyer.Snapshot.Fault = kfNoAnswer) and
+      (Keyer.Snapshot.Power = prFailed), IntToStr(Ord(Keyer.Snapshot.Power)));
+
+    WriteLn('  電源が入っている / the rig is on');
+    SetMode(Control, 'pass');
+    Keyer.Connect(S, 20);
+    Check('応答を確かめてから「待機」になる', WaitFor(Keyer, ksReady, 10),
+      Keyer.Snapshot.Detail);
+    Check('待機中は電源を頼めない', not Keyer.PowerOn);
+    Speeds := RelayCount(RelayLog, 'KEYSPD');
+
+    WriteLn('  途中で応答しなくなる / the rig stops answering');
+    SetMode(Control, 'silent');
+    Check('待機中に応答が無くなれば「応答なし」（10 秒以内）',
+      WaitFor(Keyer, ksNoAnswer, 10), IntToStr(Ord(Keyer.Snapshot.State)));
+    Check('応答なしのときは送らない（断る）', not Keyer.Send('CQ'));
+    Check('口は閉じない（失敗にしない）', Keyer.Snapshot.Fault = kfNone);
+    SetMode(Control, 'pass');
+    Check('応答が戻れば「待機」に戻る（6 秒以内）', WaitFor(Keyer, ksReady, 6),
+      IntToStr(Ord(Keyer.Snapshot.State)));
+    Sleep(300);
+    Check('戻ったら速度を合わせ直す', RelayCount(RelayLog, 'KEYSPD') > Speeds,
+      Format('%d → %d', [Speeds, RelayCount(RelayLog, 'KEYSPD')]));
+    Check('戻っても何も送らない', RelayCount(RelayLog, 'send_morse') = 0,
+      IntToStr(RelayCount(RelayLog, 'send_morse')));
+    Check('頼まなければ、電源の命令は 1 度も送らない',
+      CountLines(RelayLog, 'set_powerstat') = 0,
+      IntToStr(CountLines(RelayLog, 'set_powerstat')));
+
+    WriteLn('  電源を切られ、遠隔で入れる / switched off, then powered on remotely');
+    SetMode(Control, 'silent');
+    Check('応答なしになる', WaitFor(Keyer, ksNoAnswer, 10));
+    Check('応答しない無線機に電源を頼むと「入れられない」', Keyer.PowerOn and
+      WaitForPower(Keyer, prFailed, 5) and (Keyer.Snapshot.State = ksNoAnswer),
+      IntToStr(Ord(Keyer.Snapshot.Power)));
+    SetMode(Control, 'off');
+    Check('電源を入れる命令を送る', Keyer.PowerOn);
+    Check('起きるのを待つ（「電源を入れています」）', WaitFor(Keyer, ksPoweringOn, 5),
+      IntToStr(Ord(Keyer.Snapshot.State)));
+    Check('起きたら「待機」になる（起動 2 秒）', WaitFor(Keyer, ksReady, 10),
+      IntToStr(Ord(Keyer.Snapshot.State)));
+    Status := Keyer.Snapshot;
+    Check('起きたと知らせる', Status.Power = prAwake, IntToStr(Ord(Status.Power)));
+    Check('電源を入れる命令は、頼んだ 1 回につき 1 度だけ（送り直さない）',
+      CountLines(RelayLog, ' off \set_powerstat 1') = 1,
+      IntToStr(CountLines(RelayLog, ' off \set_powerstat 1')));
+    Check('電源を切る命令は 1 度も送らない', CountLines(RelayLog, 'set_powerstat 0') = 0);
+    Check('送る', Keyer.Send('TU'));
+    Check('送り終える', WaitFor(Keyer, ksReady, 10));
+    Check('送ったのは頼んだ文だけ', RelayCount(RelayLog, 'send_morse') = 1,
+      IntToStr(RelayCount(RelayLog, 'send_morse')));
+
+    WriteLn('  繋がりそのものが切れる / the link itself is lost');
+    StopRigctld(Daemon);
+    Check('切れたら「失敗」になる（送っていなくても気付く）', WaitFor(Keyer, ksFailed, 15),
+      IntToStr(Ord(Keyer.Snapshot.State)));
+    Status := Keyer.Snapshot;
+    Check('失敗の種類は「繋がりが切れた」か「応答なし」',
+      Status.Fault in [kfLink, kfNoAnswer], IntToStr(Ord(Status.Fault)) + ' ' + Status.Detail);
+    Check('失敗のあとは送らない（断る）', not Keyer.Send('CQ'));
+  finally
+    Keyer.Free;
+    StopRigctld(Daemon);
+    Relay.Terminate(0);
+    Relay.WaitOnExit;
+    Relay.Free;
+  end;
 end;
 
 var
@@ -138,7 +453,9 @@ begin
     else if (CommandLineArg(I) = '--port') and (I < CommandLineArgCount) then
       Port := StrToIntDef(CommandLineArg(I + 1), Port)
     else if (CommandLineArg(I) = '--work') and (I < CommandLineArgCount) then
-      WorkDir := CommandLineArg(I + 1);
+      WorkDir := CommandLineArg(I + 1)
+    else if (CommandLineArg(I) = '--proxy') and (I < CommandLineArgCount) then
+      ProxyPath := CommandLineArg(I + 1);
     Inc(I, 2);
   end;
   if WorkDir = '' then
@@ -168,7 +485,7 @@ begin
     Keyer.Connect(Wrong, 30);
     Check('繋がらなければ「失敗」になる', WaitFor(Keyer, ksFailed, 10),
       IntToStr(Ord(Keyer.Snapshot.State)));
-    Check('失敗の種類は「繋げない」', Keyer.Snapshot.Fault = kfConnect,
+    Check('失敗の種類は「口を開けない」', Keyer.Snapshot.Fault = kfPort,
       Keyer.Snapshot.Detail);
     Check('失敗したら送らない（断る）', not Keyer.Send('CQ'));
 
@@ -274,6 +591,9 @@ begin
     Keyer.Free;
     StopRigctld(Daemon);
   end;
+
+  TestConf;
+  TestLiveness;
 
   WriteLn;
   if Failures = 0 then

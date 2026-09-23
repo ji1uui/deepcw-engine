@@ -4,8 +4,10 @@ unit DeepCW.Hamlib;
   （要件 FR-T.2）。
 
   **送信は高い危険の境界です**（`lazarus-security-privacy`）。この単位は
-  「無線機に文字列を渡す」「止める」「速度を合わせる」だけを持ち、**いつ送るかは
-  決めません。**送る判断は `DeepCW.RigKeyer` と利用者の操作が持ちます。
+  「無線機に文字列を渡す」「止める」「速度を合わせる」「応答を確かめる（周波数を
+  読むだけ）」「電源を入れる」だけを持ち、**いつ送るか・いつ電源を入れるかは
+  決めません。**その判断は `DeepCW.RigKeyer` と利用者の操作が持ちます。
+  **周波数・モード・スプリット・PTT を変える命令と、電源を切る命令は持ちません。**
 
   取り決め:
 
@@ -25,8 +27,11 @@ unit DeepCW.Hamlib;
   (requirement FR-T.2).
 
   **Transmission is a high-risk boundary.** This unit only hands the rig a
-  string, stops it, and sets the speed; **it never decides when to send.**
-  That decision belongs to `DeepCW.RigKeyer` and to the operator.
+  string, stops it, sets the speed, checks that it answers (reading the
+  frequency only) and powers it on; **it never decides when to send or when to
+  power on.** Those decisions belong to `DeepCW.RigKeyer` and to the operator.
+  **It has no command that changes frequency, mode, split or PTT, and none that
+  powers the rig off.**
 
   Rules:
 
@@ -58,8 +63,38 @@ const
   HAMLIB_MIN_WPM = 5;
   HAMLIB_MAX_WPM = 60;
 
+  { Hamlib の誤りの番号（`rig.h`。返るのは負の値）。
+    Hamlib's error numbers (`rig.h`; returned negated). }
+  RIG_OK = 0;
+  RIG_EINVAL = 1;
+  RIG_ECONF = 2;
+  RIG_ENIMPL = 4;
+  RIG_ETIMEOUT = 5;
+  RIG_EIO = 6;
+  RIG_EPROTO = 8;
+  RIG_ENAVAIL = 11;
+  RIG_EPOWER = 20;
+
 type
-  EHamlib = class(Exception);
+  { どこで失敗したか。/ Where it failed. }
+  THamlibStage = (hsOther, hsModel, hsConfig, hsOpen);
+
+  EHamlib = class(Exception)
+  public
+    { Hamlib の返した番号（負）。無ければ 0。/ Hamlib's code (negative), or 0. }
+    Code: Integer;
+    Stage: THamlibStage;
+    { 断られた設定名（`hsConfig` のとき）。/ The refused setting (`hsConfig`). }
+    Setting: string;
+  end;
+
+  { Hamlib へそのまま渡す設定の 1 組（`DeepCW.RigConfig` が作る）。
+    One setting passed to Hamlib as it is (made by `DeepCW.RigConfig`). }
+  TRigConfPair = record
+    Name: string;
+    Value: string;
+  end;
+  TRigConfPairs = array of TRigConfPair;
 
   { 無線機への繋ぎ方。/ How to reach the rig. }
   TRigSettings = record
@@ -69,6 +104,15 @@ type
     Port: string;
     { 通信速度。0 なら機種の既定。/ Baud rate; 0 keeps the model's default. }
     Baud: Integer;
+    { 詳しい接続設定（要件 FR-T.5）。**その機種に無い設定は断ります。**
+      Detailed connection settings (FR-T.5). **A setting the model lacks is
+      refused.** }
+    Conf: TRigConfPairs;
+    { 開くときに電源を入れさせるか（Hamlib の `auto_power_on`）。**利用者が
+      「電源を入れる」を押したときだけ True**（要件 FR-T.6）。
+      Whether opening powers the rig on (Hamlib's `auto_power_on`). **True only
+      when the operator pressed "power on"** (FR-T.6). }
+    PowerOnAtOpen: Boolean;
   end;
 
   { 1 台の無線機の口。**作ったスレッドだけが触ります。**
@@ -101,6 +145,24 @@ type
     function StopMorse: Boolean;
     procedure SetKeyerWpm(Wpm: Integer);
     function KeyerWpm: Integer;
+    { 無線機が応答するかを、**読むだけの命令**（周波数を訊く）で確かめます。
+      Hamlib の番号をそのまま返し、例外は投げません（`RIG_OK` なら応答あり）。
+      **電源の状態を訊く命令は使いません**——ダミーは値を書かずに成功を返し、
+      網の口では答えが 1 つずれました（付録 BT.2）。
+      Checks whether the rig answers, with **a read-only command** (asking the
+      frequency). Returns Hamlib's code and never raises (`RIG_OK` means it
+      answered). **The power-status query is not used**: the dummy returned
+      success without writing a value, and through the network client the
+      answers came one command late (appendix BT.2). }
+    function Probe: Integer;
+    { 電源を入れる命令を送ります。**利用者が頼んだときだけ呼びます。**番号を
+      返し、例外は投げません。
+      Sends the power-on command. **Called only on the operator's request.**
+      Returns the code; never raises. }
+    function PowerOn: Integer;
+    { 設定の今の値（試験と診断のため）。読めなければ空。
+      A setting's current value (for tests and diagnostics); empty if unreadable. }
+    function GetConf(const Name: string): string;
     property IsOpen: Boolean read FOpen;
   end;
 
@@ -117,14 +179,9 @@ uses
   DeepCW.Platform;
 
 const
-  RIG_OK = 0;
-  { 「実装していない」「その機種には無い」（`rig.h` の `RIG_ENIMPL`・
-    `RIG_ENAVAIL`。返るのは負の値）。
-    "Not implemented" and "not available" (`RIG_ENIMPL`, `RIG_ENAVAIL` in
-    `rig.h`; returned negated). }
-  RIG_ENIMPL = 4;
-  RIG_ENAVAIL = 11;
   RIG_DEBUG_NONE = 0;
+  { `powerstat_t` の「入」（`rig.h`）。/ `RIG_POWER_ON` in `rig.h`. }
+  RIG_POWER_ON = 1;
   { `RIG_VFO_N(29)` = `1 shl 29`（`rig.h`）。/ `RIG_VFO_N(29)` in `rig.h`. }
   RIG_VFO_CURR = cuint(1 shl 29);
   { `CONSTANT_64BIT_FLAG(14)`。/ `CONSTANT_64BIT_FLAG(14)` in `rig.h`. }
@@ -151,6 +208,10 @@ type
   TRigGetLevel = function(Rig: Pointer; Vfo: cuint; Level: cuint64;
     var Value: THamlibValue): cint; cdecl;
   TRigError = function(Code: cint): PAnsiChar; cdecl;
+  TRigGetFreq = function(Rig: Pointer; Vfo: cuint; var Freq: cdouble): cint; cdecl;
+  TRigSetPowerstat = function(Rig: Pointer; Status: cint): cint; cdecl;
+  TRigGetConf2 = function(Rig: Pointer; Token: clong; Value: PAnsiChar;
+    Length_: cint): cint; cdecl;
   TRigSetDebug = procedure(Level: cint); cdecl;
 
 var
@@ -174,6 +235,11 @@ var
     is preferred when present. }
   rigerror2: TRigError = nil;
   rig_set_debug: TRigSetDebug = nil;
+  rig_get_freq: TRigGetFreq = nil;
+  rig_set_powerstat: TRigSetPowerstat = nil;
+  { 4.5 から。無ければ `GetConf` は空を返します。
+    From 4.5; without it `GetConf` returns empty. }
+  rig_get_conf2: TRigGetConf2 = nil;
 
 function DefaultHamlibNames: TStringArray;
 begin
@@ -201,6 +267,9 @@ begin
   rigerror := TRigError(GetProcedureAddress(GHandle, 'rigerror'));
   rigerror2 := TRigError(GetProcedureAddress(GHandle, 'rigerror2'));
   rig_set_debug := TRigSetDebug(GetProcedureAddress(GHandle, 'rig_set_debug'));
+  rig_get_freq := TRigGetFreq(GetProcedureAddress(GHandle, 'rig_get_freq'));
+  rig_set_powerstat := TRigSetPowerstat(GetProcedureAddress(GHandle, 'rig_set_powerstat'));
+  rig_get_conf2 := TRigGetConf2(GetProcedureAddress(GHandle, 'rig_get_conf2'));
   { **止める手段が無い版は使いません**（`rig_stop_morse` は 4.0 から）。
     送れるのに止められないのは、fail-safe の逆です。
     **A version that cannot stop is not used** (`rig_stop_morse` arrived in
@@ -209,7 +278,8 @@ begin
     Assigned(rig_cleanup) and Assigned(rig_token_lookup) and
     Assigned(rig_set_conf) and Assigned(rig_send_morse) and
     Assigned(rig_stop_morse) and Assigned(rig_set_level) and
-    Assigned(rig_get_level) and Assigned(rigerror) and Assigned(rig_set_debug);
+    Assigned(rig_get_level) and Assigned(rigerror) and Assigned(rig_set_debug) and
+    Assigned(rig_get_freq) and Assigned(rig_set_powerstat);
 end;
 
 function LoadHamlib(const LibraryPath: string): Boolean;
@@ -272,19 +342,42 @@ end;
 
 { THamlibRig }
 
+function HamlibError(const Msg: string; Code: Integer; Stage: THamlibStage;
+  const Setting: string = ''): EHamlib;
+begin
+  Result := EHamlib.Create(Msg);
+  Result.Code := Code;
+  Result.Stage := Stage;
+  Result.Setting := Setting;
+end;
+
 constructor THamlibRig.Create(const Settings: TRigSettings);
+var
+  Pair: TRigConfPair;
 begin
   inherited Create;
   if not HamlibAvailable then
     raise EHamlib.Create('Hamlib is not loaded.');
   FRig := rig_init(cuint32(Settings.Model));
   if FRig = nil then
-    raise EHamlib.CreateFmt('Hamlib does not know rig model %d.', [Settings.Model]);
+    raise HamlibError(Format('Hamlib does not know rig model %d.', [Settings.Model]),
+      0, hsModel);
   SetConf('retry', '0', True);
+  { **電源は、利用者が頼んだときだけ**（要件 FR-T.6）。閉じるときに切らせず、
+    開くときも頼まれたとき以外は入れさせません。
+    **Power only on the operator's request** (FR-T.6): never switched off on
+    close, and switched on at open only when asked. }
+  SetConf('auto_power_off', '0', False);
+  if Settings.PowerOnAtOpen then
+    SetConf('auto_power_on', '1', True)
+  else
+    SetConf('auto_power_on', '0', False);
   if Settings.Port <> '' then
     SetConf('rig_pathname', Settings.Port, True);
   if Settings.Baud > 0 then
     SetConf('serial_speed', IntToStr(Settings.Baud), False);
+  for Pair in Settings.Conf do
+    SetConf(Pair.Name, Pair.Value, True);
 end;
 
 destructor THamlibRig.Destroy;
@@ -321,12 +414,14 @@ end;
 procedure THamlibRig.Check(Code: cint; const What: string);
 begin
   if Code <> RIG_OK then
-    raise EHamlib.CreateFmt('%s: %s (%d)', [What, ErrorLine(Code), Code]);
+    raise HamlibError(Format('%s: %s (%d)', [What, ErrorLine(Code), Code]),
+      Code, hsOther);
 end;
 
 procedure THamlibRig.SetConf(const Name, Value: string; Required: Boolean);
 var
   Token: clong;
+  Code: cint;
 begin
   Token := rig_token_lookup(FRig, PAnsiChar(AnsiString(Name)));
   { 0 は「その機種にはこの設定が無い」（`RIG_CONF_END`）。
@@ -334,17 +429,25 @@ begin
   if Token = 0 then
   begin
     if Required then
-      raise EHamlib.CreateFmt('This rig model has no "%s" setting.', [Name]);
+      raise HamlibError(Format('This rig model has no "%s" setting.', [Name]),
+        -RIG_ECONF, hsConfig, Name);
     Exit;
   end;
-  Check(rig_set_conf(FRig, Token, PAnsiChar(AnsiString(Value))), 'set ' + Name);
+  Code := rig_set_conf(FRig, Token, PAnsiChar(AnsiString(Value)));
+  if Code <> RIG_OK then
+    raise HamlibError(Format('set %s=%s: %s (%d)', [Name, Value, ErrorLine(Code), Code]),
+      Code, hsConfig, Name);
 end;
 
 procedure THamlibRig.Open;
+var
+  Code: cint;
 begin
   if FOpen then
     Exit;
-  Check(rig_open(FRig), 'open');
+  Code := rig_open(FRig);
+  if Code <> RIG_OK then
+    raise HamlibError(Format('open: %s (%d)', [ErrorLine(Code), Code]), Code, hsOpen);
   FOpen := True;
 end;
 
@@ -387,6 +490,39 @@ begin
   FillChar(Value, SizeOf(Value), 0);
   Value.I := Wpm;
   Check(rig_set_level(FRig, RIG_VFO_CURR, RIG_LEVEL_KEYSPD, Value), 'set KEYSPD');
+end;
+
+function THamlibRig.Probe: Integer;
+var
+  Freq: cdouble;
+begin
+  if not FOpen then
+    Exit(-RIG_EIO);
+  Freq := 0;
+  Result := rig_get_freq(FRig, RIG_VFO_CURR, Freq);
+end;
+
+function THamlibRig.PowerOn: Integer;
+begin
+  if not FOpen then
+    Exit(-RIG_EIO);
+  Result := rig_set_powerstat(FRig, RIG_POWER_ON);
+end;
+
+function THamlibRig.GetConf(const Name: string): string;
+var
+  Token: clong;
+  Buffer: array[0..255] of AnsiChar;
+begin
+  Result := '';
+  if (FRig = nil) or not Assigned(rig_get_conf2) then
+    Exit;
+  Token := rig_token_lookup(FRig, PAnsiChar(AnsiString(Name)));
+  if Token = 0 then
+    Exit;
+  FillChar(Buffer, SizeOf(Buffer), 0);
+  if rig_get_conf2(FRig, Token, @Buffer[0], SizeOf(Buffer) - 1) = RIG_OK then
+    Result := string(PAnsiChar(@Buffer[0]));
 end;
 
 function THamlibRig.KeyerWpm: Integer;

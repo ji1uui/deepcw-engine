@@ -1307,6 +1307,14 @@ msgstr ""
 msgid "聴き直せる長さを %d 分にしました。それまでに保管していた音は消えました。"
 msgstr ""
 
+#: frmmain.rsrigautoconnecting
+msgid "起動時の設定で、無線機へ繋いでいます。"
+msgstr ""
+
+#: frmmain.rsrigback
+msgid "無線機の応答が戻りました。"
+msgstr ""
+
 #: frmmain.rsrigcannotstop
 msgid "（途中で止められない機種）"
 msgstr ""
@@ -1315,8 +1323,30 @@ msgstr ""
 msgid "この機種は送出の途中で止められません。止めると、無線機に渡した語の終わりで止まります。"
 msgstr ""
 
+#: frmmain.rsrigconfchoice
+#, object-pascal-format
+msgid "接続設定「%s」の値が使えません。"
+msgstr ""
+
+#: frmmain.rsrigconfcivaddr
+msgid "CI-V アドレスは 16 進の 01〜DF で書いてください（例: 94）。"
+msgstr ""
+
+#: frmmain.rsrigconfrange
+#, object-pascal-format
+msgid "接続設定「%s」が範囲の外です（応答待ちは 100〜10000 ms、間隔は 1000 ms まで。0 は機種の既定）。"
+msgstr ""
+
+#: frmmain.rsrigconfrtshardware
+msgid "フロー制御がハードウェアのときは、RTS を手で決められません。RTS を機種の既定に戻してください。"
+msgstr ""
+
 #: frmmain.rsrigconnect
 msgid "繋ぐ"
+msgstr ""
+
+#: frmmain.rsrigconnected
+msgid "無線機に繋がりました（応答を確かめました）。"
 msgstr ""
 
 #: frmmain.rsrigconnecting
@@ -1327,16 +1357,33 @@ msgstr ""
 msgid "切る"
 msgstr ""
 
-#: frmmain.rsrigfailconnect
-msgid "失敗: 無線機に繋げません。機種番号・口・通信速度を確かめてください。"
+#: frmmain.rsrigfailconfig
+#, object-pascal-format
+msgid "失敗: 接続設定「%s」をこの機種・接続では使えません。設定タブで直すか、機種の既定に戻してください。"
 msgstr ""
 
 #: frmmain.rsrigfailed
 msgid "失敗（状態欄を見てください）"
 msgstr ""
 
+#: frmmain.rsrigfaillink
+msgid "失敗: 無線機との繋がりが切れました。ケーブルと電源を確かめてから繋ぎ直してください。"
+msgstr ""
+
+#: frmmain.rsrigfailmodel
+msgid "失敗: Hamlib はこの機種番号を知りません。設定タブの機種番号を確かめてください。"
+msgstr ""
+
+#: frmmain.rsrigfailnoanswer
+msgid "失敗: 無線機が応答しません。電源・通信速度・CI-V アドレスを確かめてください。遠隔で電源を入れられる機種なら「電源を入れる」を押してください。"
+msgstr ""
+
 #: frmmain.rsrigfailnolibrary
 msgid "失敗: Hamlib が見つかりません。Hamlib を入れるか、アプリと同じ場所に置いてください。"
+msgstr ""
+
+#: frmmain.rsrigfailport
+msgid "失敗: 口を開けません。口の名前、ほかのアプリが使っていないか、ケーブルを確かめてください。"
 msgstr ""
 
 #: frmmain.rsrigfailsend
@@ -1352,8 +1399,20 @@ msgctxt "frmmain.rsriggroup"
 msgid "無線機"
 msgstr ""
 
+#: frmmain.rsriglostanswer
+msgid "無線機が応答しなくなりました。送信はできません。電源を確かめてください（応答が戻れば自動で待機に戻ります）。"
+msgstr ""
+
+#: frmmain.rsrignoanswer
+msgid "応答なし（電源を確かめてください）"
+msgstr ""
+
 #: frmmain.rsrignomodel
 msgid "設定タブで無線機の機種番号を入れてください。"
+msgstr ""
+
+#: frmmain.rsrignoprobe
+msgid "（応答を確かめられない機種）"
 msgstr ""
 
 #: frmmain.rsrignotready
@@ -1362,6 +1421,38 @@ msgstr ""
 
 #: frmmain.rsrigoff
 msgid "繋いでいません"
+msgstr ""
+
+#: frmmain.rsrigpower
+msgid "電源を入れる"
+msgstr ""
+
+#: frmmain.rsrigpowerasked
+msgid "無線機に電源を入れるよう頼みました。"
+msgstr ""
+
+#: frmmain.rsrigpowerawake
+msgid "無線機が起きました。"
+msgstr ""
+
+#: frmmain.rsrigpowerfailed
+msgid "電源を入れられませんでした。無線機が応答しないか、この機種・接続では遠隔で電源を入れられません。"
+msgstr ""
+
+#: frmmain.rsrigpoweringon
+msgid "電源を入れています…"
+msgstr ""
+
+#: frmmain.rsrigpowernotnow
+msgid "電源を入れられるのは、無線機が応答しないときだけです。"
+msgstr ""
+
+#: frmmain.rsrigpowernotsupported
+msgid "この機種・接続では、遠隔で電源を入れられません。無線機の電源を手で入れてください。"
+msgstr ""
+
+#: frmmain.rsrigpowernowake
+msgid "電源を入れる命令は受けましたが、30 秒待っても無線機が応答しません。"
 msgstr ""
 
 #: frmmain.rsrigready
@@ -1380,6 +1471,10 @@ msgstr ""
 #: frmmain.rsrigsending
 #, object-pascal-format
 msgid "送信中 %0:d / %1:d 文字"
+msgstr ""
+
+#: frmmain.rsrigsilentafteropen
+msgid "口は開けましたが、無線機が応答しません。電源を確かめてください（応答すれば自動で待機になります）。"
 msgstr ""
 
 #: frmmain.rsrigstarted
@@ -1798,6 +1893,18 @@ msgstr ""
 msgid "受信テキストの文字を押して音を聴き直せる範囲です。長くするほど記憶を使います。"
 msgstr ""
 
+#: frmmain.rssetrigadvgroup
+msgid "無線機の詳しい接続設定（普通は既定のまま）"
+msgstr ""
+
+#: frmmain.rssetrigadvhint
+msgid "「機種の既定」と 0 ms は Hamlib へ渡しません。繋ぎ直すと効きます。"
+msgstr ""
+
+#: frmmain.rssetrigautoconnect
+msgid "起動したら無線機へ繋ぐ（繋ぐだけで、送信も電源投入もしません）"
+msgstr ""
+
 #: frmmain.rssetrigbaud
 msgid "通信速度"
 msgstr ""
@@ -1806,20 +1913,78 @@ msgstr ""
 msgid "機種の既定"
 msgstr ""
 
+#: frmmain.rssetrigcivaddr
+msgid "CI-V アドレス"
+msgstr ""
+
+#: frmmain.rssetrigdatabits
+msgid "データビット"
+msgstr ""
+
 #: frmmain.rssetriggroup
 msgid "無線機（送信）"
+msgstr ""
+
+#: frmmain.rssetrighandshake
+msgid "フロー制御"
+msgstr ""
+
+#: frmmain.rssetrighandshakehardware
+msgid "ハードウェア"
+msgstr ""
+
+#: frmmain.rssetrighandshakenone
+msgctxt "frmmain.rssetrighandshakenone"
+msgid "なし"
 msgstr ""
 
 #: frmmain.rssetrighint
 msgid "番号は Hamlib の rigctl -l で確かめられます（例: IC-7300 は 3073、FT-991 は 1035）。口は COM3・/dev/ttyUSB0 など。"
 msgstr ""
 
+#: frmmain.rssetriglinewarn
+msgid "DTR・RTS で送信や鍵を操作する配線では、口を開いた瞬間に電波が出ないよう OFF にしてください。"
+msgstr ""
+
 #: frmmain.rssetrigmodel
 msgid "機種番号"
 msgstr ""
 
+#: frmmain.rssetrigparity
+msgid "パリティ"
+msgstr ""
+
+#: frmmain.rssetrigparityeven
+msgid "偶数"
+msgstr ""
+
+#: frmmain.rssetrigparitynone
+msgctxt "frmmain.rssetrigparitynone"
+msgid "なし"
+msgstr ""
+
+#: frmmain.rssetrigparityodd
+msgid "奇数"
+msgstr ""
+
 #: frmmain.rssetrigport
 msgid "口"
+msgstr ""
+
+#: frmmain.rssetrigpostdelay
+msgid "命令の間隔 (ms)"
+msgstr ""
+
+#: frmmain.rssetrigstopbits
+msgid "ストップビット"
+msgstr ""
+
+#: frmmain.rssetrigtimeout
+msgid "応答待ち (ms)"
+msgstr ""
+
+#: frmmain.rssetrigwritedelay
+msgid "文字の間隔 (ms)"
 msgstr ""
 
 #: frmmain.rssetroster
