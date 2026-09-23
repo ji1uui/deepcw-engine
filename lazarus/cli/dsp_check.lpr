@@ -4790,8 +4790,70 @@ begin
   WriteLn(Format('%s に書きました（%s / %s）', [Path, Hands[Chosen].Name, Text]));
 end;
 
+{ 日本語がどの段で化けるかを切り分けるための出力です（未解決 #24、付録 BQ）。
+
+  Windows の CI で「素の literal の行は読めるのに、`Format` で組んだ行が化ける」
+  と分かっています。**推測では直しません。**化けるのが**プログラムの中**
+  （文字列の符号系）なのか、**出力の段**（`Output` の符号系への変換）なのかを
+  分けて見るため、次を出します。報告の行は ASCII だけで書くので、報告そのものは
+  化けません。
+
+    - RTL の既定の符号系（`DefaultSystemCodePage`）と `Output` の符号系
+    - literal と `Format` の結果の、**メモリ上のバイト列**（16 進）
+    - その 2 つを、そのまま `WriteLn` した行
+
+  バイト列の突き合わせは `tools/text_output_test.sh` が行います。
+
+  Output for finding the stage at which Japanese gets garbled (open question
+  #24, appendix BQ).
+
+  Windows CI showed plain literal lines readable while lines built with
+  `Format` were garbled. **It is not fixed by guessing.** To tell apart a fault
+  **inside the program** (the strings' code page) from one **at output** (the
+  conversion to `Output`'s code page), this prints the RTL's default code page
+  and `Output`'s, the **bytes in memory** (hex) of a literal and of a `Format`
+  result, and then those two written with `WriteLn` as they are. The report
+  lines are ASCII only, so the report itself cannot be garbled.
+
+  `tools/text_output_test.sh` compares the bytes. }
+procedure TextProbe;
+
+  function Hex(const S: RawByteString): string;
+  var
+    I: Integer;
+  begin
+    Result := '';
+    for I := 1 to Length(S) do
+      Result := Result + IntToHex(Ord(S[I]), 2);
+  end;
+
+const
+  { 「日本語」。**literal の中身を 1 か所にします**——2 つの行で綴りが違えば、
+    突き合わせの意味がなくなります。
+    "Japanese" in Japanese. **Spelt once**: were the two lines spelt
+    differently, comparing them would mean nothing. }
+  SAMPLE = '日本語';
+var
+  Built: string;
+begin
+  Built := Format('%s %d', [SAMPLE, 1]);
+  WriteLn('PROBE-CP system=', DefaultSystemCodePage,
+    ' output=', TextRec(Output).CodePage,
+    ' literal=', StringCodePage(SAMPLE), ' format=', StringCodePage(Built));
+  WriteLn('PROBE-HEX-LIT ', Hex(SAMPLE));
+  WriteLn('PROBE-HEX-FMT ', Hex(Built));
+  WriteLn('PROBE-OUT-LIT ', SAMPLE);
+  WriteLn('PROBE-OUT-FMT ', Built);
+  Flush(Output);
+end;
+
 begin
   MetadataPath := '';
+  if ParamStr(1) = '--text-probe' then
+  begin
+    TextProbe;
+    Halt(0);
+  end;
   if ParamStr(1) = '--record-until-killed' then
   begin
     RecordUntilKilled(ParamStr(2));

@@ -346,3 +346,16 @@ jobs:
           # wherever it goes.
           /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' \
             "$app/Contents/Info.plist"
+
+
+      # **命令行の道具が日本語を UTF-8 のまま出せるか**（未解決 #24、付録 BQ）。
+      # Windows では `Format` で組んだ行だけが化けていました。どの段で化けるかを
+      # バイト列で切り分けます。**最後に置きます**——報告が記録の末尾に来るので、
+      # 通っても落ちても読めます。
+      # **Whether the command-line tools write Japanese out as UTF-8** (open
+      # question #24, appendix BQ). On Windows only the lines built with `Format`
+      # came out garbled; this tells the stages apart by their bytes. **It comes
+      # last**, so its report ends the log and can be read either way.
+      - name: 日本語の出力（命令行）
+        working-directory: lazarus
+        run: ./tools/text_output_test.sh
