@@ -84,6 +84,19 @@ function UiLangIndexOf(const Key: string): Integer;
   `日本語` while the screen is in English. }
 function StartingUiLang(const Remembered: string): Integer;
 
+{ 命令行で言語が指定されていれば、その鍵を返します。無ければ空です。
+
+  **命令行の指定は 1 度きりのものです。**設定に書き戻すと、試しに `--lang en`
+  で開いただけで、次からずっと英語で開くことになります。書き戻すかどうかを
+  決めるために、呼ぶ側がこれを見ます（`TMainForm.SaveSettings`）。
+
+  The key given on the command line, or empty.
+
+  **A command-line choice is for one run.** Written back to the settings, a
+  single trial with `--lang en` would open in English from then on. The caller
+  looks at this to decide whether to write it back (`TMainForm.SaveSettings`). }
+function UiLangFromCommandLine: string;
+
 { 言語を切り替えます。**画面の文言を入れ直すのは呼ぶ側の仕事です**
   （`UiText.ApplyTexts`）。ここは `resourcestring` の中身だけを入れ替えます。
 
@@ -144,6 +157,11 @@ begin
   if Wanted = '' then
     Wanted := FromSystem;
   Result := UiLangIndexOf(Wanted);
+end;
+
+function UiLangFromCommandLine: string;
+begin
+  Result := FromCommandLine;
 end;
 
 function UiLangCaption(Index_: Integer): string;

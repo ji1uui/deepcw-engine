@@ -9,12 +9,31 @@ msgstr ""
 msgid "ADIF (*.adi;*.adif)|*.adi;*.adif|すべて (*.*)|*.*"
 msgstr ""
 
+#: frmmain.rsapptitle
+msgid "DeepCW モールス通信 - 送受信"
+msgstr ""
+
 #: frmmain.rsaudiopresent
 msgid "音が届いています"
 msgstr ""
 
 #: frmmain.rsaudiosilent
 msgid "無音です"
+msgstr ""
+
+#: frmmain.rsbandwidthset
+#, object-pascal-format
+msgid "帯域幅を %s にしました。"
+msgstr ""
+
+#: frmmain.rscallcopied
+#, object-pascal-format
+msgid "%s をコピーしました。"
+msgstr ""
+
+#: frmmain.rscallcopiednorst
+#, object-pascal-format
+msgid "%s をコピーしました（RST は聞こえていません）。"
 msgstr ""
 
 #: frmmain.rscountandname
@@ -34,6 +53,10 @@ msgstr ""
 #: frmmain.rsctxdecode
 msgctxt "frmmain.rsctxdecode"
 msgid "デコード"
+msgstr ""
+
+#: frmmain.rsctxengineload
+msgid "エンジンの読み込み"
 msgstr ""
 
 #: frmmain.rsctxfistlog
@@ -56,6 +79,10 @@ msgstr ""
 msgid "復調音"
 msgstr ""
 
+#: frmmain.rsctxplayback
+msgid "再生"
+msgstr ""
+
 #: frmmain.rsctxpractice
 msgctxt "frmmain.rsctxpractice"
 msgid "練習"
@@ -65,9 +92,18 @@ msgstr ""
 msgid "受信練習の記録"
 msgstr ""
 
+#: frmmain.rsctxprefixes
+msgctxt "frmmain.rsctxprefixes"
+msgid "国別前置符字表"
+msgstr ""
+
 #: frmmain.rsctxreceive
 msgctxt "frmmain.rsctxreceive"
 msgid "受信"
+msgstr ""
+
+#: frmmain.rsctxreceivestart
+msgid "受信の開始"
 msgstr ""
 
 #: frmmain.rsctxreceivestop
@@ -86,8 +122,26 @@ msgstr ""
 msgid "聴き直し"
 msgstr ""
 
+#: frmmain.rsctxroster
+msgctxt "frmmain.rsctxroster"
+msgid "呼出符号の一覧"
+msgstr ""
+
+#: frmmain.rsctxsavesettings
+msgid "設定の保存"
+msgstr ""
+
+#: frmmain.rsctxtransmit
+msgctxt "frmmain.rsctxtransmit"
+msgid "送信"
+msgstr ""
+
 #: frmmain.rsctxwavread
 msgid "WAV の読み込み"
+msgstr ""
+
+#: frmmain.rsctxwavsave
+msgid "WAV の保存"
 msgstr ""
 
 #: frmmain.rsdecodedone
@@ -118,6 +172,11 @@ msgstr ""
 
 #: frmmain.rsdevicereturned
 msgid "入力装置が戻りました。受信を再開しました。"
+msgstr ""
+
+#: frmmain.rsdiagcopied
+#, object-pascal-format
+msgid "診断情報を %d 行コピーしました。不具合報告にそのまま貼れます。"
 msgstr ""
 
 #: frmmain.rserrfailedtitle
@@ -208,6 +267,15 @@ msgstr ""
 msgid "読めませんでした。ファイルを確かめてください"
 msgstr ""
 
+#: frmmain.rsfindnone
+msgid "見つかりません"
+msgstr ""
+
+#: frmmain.rsfindposition
+#, object-pascal-format
+msgid "%0:d / %1:d 件"
+msgstr ""
+
 #: frmmain.rsftadvice
 #, object-pascal-format
 msgid "直すとよい点: %s"
@@ -231,6 +299,10 @@ msgstr ""
 
 #: frmmain.rsftbottomlabel
 msgid "下に出すもの"
+msgstr ""
+
+#: frmmain.rsftbusycapture
+msgid "送信訓練の最中です。先に「終了して採点」を押してください。"
 msgstr ""
 
 #: frmmain.rsftbusydrill
@@ -557,6 +629,10 @@ msgstr ""
 msgid "音声長の制約: %0:.0f - %1:.0f 秒（長い録音は自動的に分割）"
 msgstr ""
 
+#: frmmain.rsinroster
+msgid "手元の一覧"
+msgstr ""
+
 #: frmmain.rsjournaloff
 msgid "受信テキストの記録を止めました。"
 msgstr ""
@@ -658,6 +734,10 @@ msgstr ""
 msgid "遅らせる秒数"
 msgstr ""
 
+#: frmmain.rsprefixesopentitle
+msgid "国別前置符字表を開く"
+msgstr ""
+
 #: frmmain.rsprefixesskipped
 #, object-pascal-format
 msgid "（前置符字として読めなかった行 %d）"
@@ -733,6 +813,7 @@ msgstr ""
 
 #: frmmain.rsprsummary
 #, object-pascal-format
+msgctxt "frmmain.rsprsummary"
 msgid "%0:d 文字 / %1:.1f 秒"
 msgstr ""
 
@@ -747,6 +828,11 @@ msgstr ""
 
 #: frmmain.rsprwpm
 msgid "速度 (WPM)"
+msgstr ""
+
+#: frmmain.rsrate
+#, object-pascal-format
+msgid "直近 1 時間: %0:d 局 ／ 記録全体: %1:d 局"
 msgstr ""
 
 #: frmmain.rsreceivestarted
@@ -849,6 +935,10 @@ msgstr ""
 msgid "聴き直せる長さを %d 分にしました。それまでに保管していた音は消えました。"
 msgstr ""
 
+#: frmmain.rsrosteropentitle
+msgid "呼出符号の一覧を開く"
+msgstr ""
+
 #: frmmain.rsrosterskipped
 #, object-pascal-format
 msgid "（符号として読めなかった行 %d）"
@@ -884,6 +974,11 @@ msgstr ""
 
 #: frmmain.rsrxclear
 msgid "表示をクリア"
+msgstr ""
+
+#: frmmain.rsrxcopied
+#, object-pascal-format
+msgid "受信テキスト %d 文字をコピーしました。"
 msgstr ""
 
 #: frmmain.rsrxcopy
@@ -957,6 +1052,10 @@ msgstr ""
 
 #: frmmain.rsrxmonitor
 msgid "復調音を聴く"
+msgstr ""
+
+#: frmmain.rsrxopentitle
+msgid "モールス音声を開く"
 msgstr ""
 
 #: frmmain.rsrxoverlay
@@ -1043,6 +1142,11 @@ msgstr ""
 
 #: frmmain.rsrxwatchlabel
 msgid "待つ符号"
+msgstr ""
+
+#: frmmain.rssaved
+#, object-pascal-format
+msgid "保存しました: %s"
 msgstr ""
 
 #: frmmain.rssetadifexport
@@ -1144,6 +1248,7 @@ msgid "PortAudio ライブラリ（空欄なら自動検索）"
 msgstr ""
 
 #: frmmain.rssetprefixes
+msgctxt "frmmain.rssetprefixes"
 msgid "国別前置符字表"
 msgstr ""
 
@@ -1180,6 +1285,7 @@ msgid "受信テキストの文字を押して音を聴き直せる範囲です�
 msgstr ""
 
 #: frmmain.rssetroster
+msgctxt "frmmain.rssetroster"
 msgid "呼出符号の一覧"
 msgstr ""
 
@@ -1201,6 +1307,10 @@ msgstr ""
 
 #: frmmain.rssubdivisionhint
 msgid "相手局の市郡区番号（任意）"
+msgstr ""
+
+#: frmmain.rstextfilter
+msgid "テキスト (*.txt;*.csv)|*.txt;*.csv|すべて (*.*)|*.*"
 msgstr ""
 
 #: frmmain.rstuneauto
@@ -1249,12 +1359,24 @@ msgstr ""
 msgid "文字速度 (WPM)"
 msgstr ""
 
+#: frmmain.rstxdone
+msgid "送信完了"
+msgstr ""
+
 #: frmmain.rstxmorse
 msgid "モールス符号"
 msgstr ""
 
 #: frmmain.rstxnoise
 msgid "受信練習用ノイズ"
+msgstr ""
+
+#: frmmain.rstxnothing
+msgid "送信できる文字がありません。"
+msgstr ""
+
+#: frmmain.rstxsavetitle
+msgid "モールス音声を保存"
 msgstr ""
 
 #: frmmain.rstxsavewav
@@ -1270,6 +1392,10 @@ msgstr ""
 msgid "送信中の文字"
 msgstr ""
 
+#: frmmain.rstxsendingnow
+msgid "送信中"
+msgstr ""
+
 #: frmmain.rstxsettings
 msgid "送信設定"
 msgstr ""
@@ -1277,6 +1403,16 @@ msgstr ""
 #: frmmain.rstxstop
 msgctxt "frmmain.rstxstop"
 msgid "停止"
+msgstr ""
+
+#: frmmain.rstxstopped
+msgid "送信を停止しました。"
+msgstr ""
+
+#: frmmain.rstxsummary
+#, object-pascal-format
+msgctxt "frmmain.rstxsummary"
+msgid "%0:d 文字 / %1:.1f 秒"
 msgstr ""
 
 #: frmmain.rstxtab
@@ -1304,6 +1440,24 @@ msgstr ""
 msgid "音量"
 msgstr ""
 
+#: frmmain.rswaitingdevice
+msgid "装置を待っています"
+msgstr ""
+
+#: frmmain.rswatchedat
+#, object-pascal-format
+msgid "%0:s（%1:.0f Hz）"
+msgstr ""
+
+#: frmmain.rswatchedonair
+#, object-pascal-format
+msgid "待っていた %s が出ています。"
+msgstr ""
+
+#: frmmain.rswatchedseparator
+msgid "、"
+msgstr ""
+
 #: frmmain.rswatchhint
 msgid "符号を書くと、その局が聞こえたときに知らせます"
 msgstr ""
@@ -1316,5 +1470,21 @@ msgstr ""
 #: frmmain.rswatchingsome
 #, object-pascal-format
 msgid "%0:d 局を待っています（%1:d 件は呼出符号の形になっていません）"
+msgstr ""
+
+#: frmmain.rswavfilter
+msgid "WAV ファイル|*.wav"
+msgstr ""
+
+#: frmmain.rswavopenfilter
+msgid "WAV ファイル|*.wav|すべてのファイル|*.*"
+msgstr ""
+
+#: frmmain.rswfidle
+msgid "受信を開始すると、ここに信号が流れます。読みたい信号をクリックしてください。"
+msgstr ""
+
+#: frmmain.rswfwaiting
+msgid "信号を待っています。読みたい信号が見えたらクリックしてください。"
 msgstr ""
 

@@ -9,6 +9,10 @@ msgstr "ADIF (*.adi)|*.adi|All files (*.*)|*.*"
 msgid "ADIF (*.adi;*.adif)|*.adi;*.adif|すべて (*.*)|*.*"
 msgstr "ADIF (*.adi;*.adif)|*.adi;*.adif|All files (*.*)|*.*"
 
+#: frmmain.rsapptitle
+msgid "DeepCW モールス通信 - 送受信"
+msgstr "DeepCW Morse Station"
+
 #: frmmain.rsaudiopresent
 msgid "音が届いています"
 msgstr "Audio present"
@@ -16,6 +20,21 @@ msgstr "Audio present"
 #: frmmain.rsaudiosilent
 msgid "無音です"
 msgstr "Silent"
+
+#: frmmain.rsbandwidthset
+#, object-pascal-format
+msgid "帯域幅を %s にしました。"
+msgstr "Bandwidth set to %s."
+
+#: frmmain.rscallcopied
+#, object-pascal-format
+msgid "%s をコピーしました。"
+msgstr "Copied %s."
+
+#: frmmain.rscallcopiednorst
+#, object-pascal-format
+msgid "%s をコピーしました（RST は聞こえていません）。"
+msgstr "Copied %s (no RST was heard)."
 
 #: frmmain.rscountandname
 #, object-pascal-format
@@ -35,6 +54,10 @@ msgstr "Contact log"
 msgctxt "frmmain.rsctxdecode"
 msgid "デコード"
 msgstr "Decoding"
+
+#: frmmain.rsctxengineload
+msgid "エンジンの読み込み"
+msgstr "Loading the engine"
 
 #: frmmain.rsctxfistlog
 msgid "送信訓練の記録"
@@ -56,6 +79,10 @@ msgstr "Journal"
 msgid "復調音"
 msgstr "Monitor tone"
 
+#: frmmain.rsctxplayback
+msgid "再生"
+msgstr "Playback"
+
 #: frmmain.rsctxpractice
 msgctxt "frmmain.rsctxpractice"
 msgid "練習"
@@ -65,10 +92,19 @@ msgstr "Practice"
 msgid "受信練習の記録"
 msgstr "Copy record"
 
+#: frmmain.rsctxprefixes
+msgctxt "frmmain.rsctxprefixes"
+msgid "国別前置符字表"
+msgstr "Prefix table"
+
 #: frmmain.rsctxreceive
 msgctxt "frmmain.rsctxreceive"
 msgid "受信"
 msgstr "Receive"
+
+#: frmmain.rsctxreceivestart
+msgid "受信の開始"
+msgstr "Starting to receive"
 
 #: frmmain.rsctxreceivestop
 msgid "受信の終了"
@@ -86,9 +122,27 @@ msgstr "Recording"
 msgid "聴き直し"
 msgstr "Replay"
 
+#: frmmain.rsctxroster
+msgctxt "frmmain.rsctxroster"
+msgid "呼出符号の一覧"
+msgstr "Call sign list"
+
+#: frmmain.rsctxsavesettings
+msgid "設定の保存"
+msgstr "Saving settings"
+
+#: frmmain.rsctxtransmit
+msgctxt "frmmain.rsctxtransmit"
+msgid "送信"
+msgstr "Sending"
+
 #: frmmain.rsctxwavread
 msgid "WAV の読み込み"
 msgstr "WAV read"
+
+#: frmmain.rsctxwavsave
+msgid "WAV の保存"
+msgstr "Saving the WAV"
 
 #: frmmain.rsdecodedone
 #, object-pascal-format
@@ -119,6 +173,11 @@ msgstr "No recording device was found. Check the connection and OS settings."
 #: frmmain.rsdevicereturned
 msgid "入力装置が戻りました。受信を再開しました。"
 msgstr "The input device is back. Receiving resumed."
+
+#: frmmain.rsdiagcopied
+#, object-pascal-format
+msgid "診断情報を %d 行コピーしました。不具合報告にそのまま貼れます。"
+msgstr "Copied %d lines of diagnostics, ready to paste into a bug report."
 
 #: frmmain.rserrfailedtitle
 #, object-pascal-format
@@ -228,6 +287,15 @@ msgstr "Export contact log (ADIF)"
 msgid "読めませんでした。ファイルを確かめてください"
 msgstr "Could not be read. Check the file"
 
+#: frmmain.rsfindnone
+msgid "見つかりません"
+msgstr "Not found"
+
+#: frmmain.rsfindposition
+#, object-pascal-format
+msgid "%0:d / %1:d 件"
+msgstr "%0:d of %1:d"
+
 #: frmmain.rsftadvice
 #, object-pascal-format
 msgid "直すとよい点: %s"
@@ -252,6 +320,10 @@ msgstr "Not a standard of correctness: a bug key is measured against the bug-key
 #: frmmain.rsftbottomlabel
 msgid "下に出すもの"
 msgstr "Show below"
+
+#: frmmain.rsftbusycapture
+msgid "送信訓練の最中です。先に「終了して採点」を押してください。"
+msgstr "Sending practice is running. Press \"Stop, score\" first."
 
 #: frmmain.rsftbusydrill
 msgid "訓練中です。先に「終了して採点」を押してください。"
@@ -581,6 +653,10 @@ msgstr "Sample rate: %d Hz"
 msgid "音声長の制約: %0:.0f - %1:.0f 秒（長い録音は自動的に分割）"
 msgstr "Audio length: %0:.0f - %1:.0f s (longer is split)"
 
+#: frmmain.rsinroster
+msgid "手元の一覧"
+msgstr "Local list"
+
 #: frmmain.rsjournaloff
 msgid "受信テキストの記録を止めました。"
 msgstr "Stopped journalling the text."
@@ -682,6 +758,10 @@ msgstr "Each character appears under Answer after this delay."
 msgid "遅らせる秒数"
 msgstr "Delay (s)"
 
+#: frmmain.rsprefixesopentitle
+msgid "国別前置符字表を開く"
+msgstr "Open a prefix table"
+
 #: frmmain.rsprefixesskipped
 #, object-pascal-format
 msgid "（前置符字として読めなかった行 %d）"
@@ -757,6 +837,7 @@ msgstr "Stop"
 
 #: frmmain.rsprsummary
 #, object-pascal-format
+msgctxt "frmmain.rsprsummary"
 msgid "%0:d 文字 / %1:.1f 秒"
 msgstr "%0:d chars / %1:.1f s"
 
@@ -772,6 +853,11 @@ msgstr "Tone and volume: see the Transmit tab."
 #: frmmain.rsprwpm
 msgid "速度 (WPM)"
 msgstr "Speed (WPM)"
+
+#: frmmain.rsrate
+#, object-pascal-format
+msgid "直近 1 時間: %0:d 局 ／ 記録全体: %1:d 局"
+msgstr "Last hour: %0:d stations / whole log: %1:d"
 
 #: frmmain.rsreceivestarted
 msgid "受信を開始しました。"
@@ -873,6 +959,10 @@ msgstr "%0:s: audio at %1:d min %2:d s from the start (%3:.1f s)"
 msgid "聴き直せる長さを %d 分にしました。それまでに保管していた音は消えました。"
 msgstr "Replay window set to %d min. Audio held until now was cleared."
 
+#: frmmain.rsrosteropentitle
+msgid "呼出符号の一覧を開く"
+msgstr "Open a call sign list"
+
 #: frmmain.rsrosterskipped
 #, object-pascal-format
 msgid "（符号として読めなかった行 %d）"
@@ -909,6 +999,11 @@ msgstr "Call + RST"
 #: frmmain.rsrxclear
 msgid "表示をクリア"
 msgstr "Clear"
+
+#: frmmain.rsrxcopied
+#, object-pascal-format
+msgid "受信テキスト %d 文字をコピーしました。"
+msgstr "Copied %d characters of received text."
 
 #: frmmain.rsrxcopy
 msgid "コピー"
@@ -982,6 +1077,10 @@ msgstr "Standby"
 #: frmmain.rsrxmonitor
 msgid "復調音を聴く"
 msgstr "Monitor"
+
+#: frmmain.rsrxopentitle
+msgid "モールス音声を開く"
+msgstr "Open Morse audio"
 
 #: frmmain.rsrxoverlay
 msgid "文字を波形に重ねる"
@@ -1068,6 +1167,11 @@ msgstr "Stopped waiting for the device."
 #: frmmain.rsrxwatchlabel
 msgid "待つ符号"
 msgstr "Watch for"
+
+#: frmmain.rssaved
+#, object-pascal-format
+msgid "保存しました: %s"
+msgstr "Saved: %s"
 
 #: frmmain.rssetadifexport
 msgid "ADIF を書き出す"
@@ -1168,6 +1272,7 @@ msgid "PortAudio ライブラリ（空欄なら自動検索）"
 msgstr "PortAudio library (blank to search)"
 
 #: frmmain.rssetprefixes
+msgctxt "frmmain.rssetprefixes"
 msgid "国別前置符字表"
 msgstr "Prefix table"
 
@@ -1204,6 +1309,7 @@ msgid "受信テキストの文字を押して音を聴き直せる範囲です�
 msgstr "How far back you can press a character to hear it again. Longer uses more memory."
 
 #: frmmain.rssetroster
+msgctxt "frmmain.rssetroster"
 msgid "呼出符号の一覧"
 msgstr "Call sign list"
 
@@ -1226,6 +1332,10 @@ msgstr "Wrong shape (4, 5 or 6 digits)"
 #: frmmain.rssubdivisionhint
 msgid "相手局の市郡区番号（任意）"
 msgstr "Ward/county (optional)"
+
+#: frmmain.rstextfilter
+msgid "テキスト (*.txt;*.csv)|*.txt;*.csv|すべて (*.*)|*.*"
+msgstr "Text (*.txt;*.csv)|*.txt;*.csv|All (*.*)|*.*"
 
 #: frmmain.rstuneauto
 msgctxt "frmmain.rstuneauto"
@@ -1273,6 +1383,10 @@ msgstr "Manual"
 msgid "文字速度 (WPM)"
 msgstr "Char (WPM)"
 
+#: frmmain.rstxdone
+msgid "送信完了"
+msgstr "Sent"
+
 #: frmmain.rstxmorse
 msgid "モールス符号"
 msgstr "Morse code"
@@ -1280,6 +1394,14 @@ msgstr "Morse code"
 #: frmmain.rstxnoise
 msgid "受信練習用ノイズ"
 msgstr "Practice noise"
+
+#: frmmain.rstxnothing
+msgid "送信できる文字がありません。"
+msgstr "Nothing to send."
+
+#: frmmain.rstxsavetitle
+msgid "モールス音声を保存"
+msgstr "Save Morse audio"
 
 #: frmmain.rstxsavewav
 msgid "WAV に保存"
@@ -1294,6 +1416,10 @@ msgstr "Send"
 msgid "送信中の文字"
 msgstr "Now sending"
 
+#: frmmain.rstxsendingnow
+msgid "送信中"
+msgstr "Sending"
+
 #: frmmain.rstxsettings
 msgid "送信設定"
 msgstr "Transmit"
@@ -1302,6 +1428,16 @@ msgstr "Transmit"
 msgctxt "frmmain.rstxstop"
 msgid "停止"
 msgstr "Stop"
+
+#: frmmain.rstxstopped
+msgid "送信を停止しました。"
+msgstr "Sending stopped."
+
+#: frmmain.rstxsummary
+#, object-pascal-format
+msgctxt "frmmain.rstxsummary"
+msgid "%0:d 文字 / %1:.1f 秒"
+msgstr "%0:d chars / %1:.1f s"
 
 #: frmmain.rstxtab
 msgctxt "frmmain.rstxtab"
@@ -1328,6 +1464,24 @@ msgstr "Decode check"
 msgid "音量"
 msgstr "Volume"
 
+#: frmmain.rswaitingdevice
+msgid "装置を待っています"
+msgstr "Waiting for device"
+
+#: frmmain.rswatchedat
+#, object-pascal-format
+msgid "%0:s（%1:.0f Hz）"
+msgstr "%0:s (%1:.0f Hz)"
+
+#: frmmain.rswatchedonair
+#, object-pascal-format
+msgid "待っていた %s が出ています。"
+msgstr "Watched call on air: %s."
+
+#: frmmain.rswatchedseparator
+msgid "、"
+msgstr ", "
+
 #: frmmain.rswatchhint
 msgid "符号を書くと、その局が聞こえたときに知らせます"
 msgstr "Add a call sign to be told when heard"
@@ -1341,4 +1495,20 @@ msgstr "Watching %d"
 #, object-pascal-format
 msgid "%0:d 局を待っています（%1:d 件は呼出符号の形になっていません）"
 msgstr "Watching %0:d station(s) (%1:d entr(y/ies) are not call-sign shaped)"
+
+#: frmmain.rswavfilter
+msgid "WAV ファイル|*.wav"
+msgstr "WAV files|*.wav"
+
+#: frmmain.rswavopenfilter
+msgid "WAV ファイル|*.wav|すべてのファイル|*.*"
+msgstr "WAV files|*.wav|All files|*.*"
+
+#: frmmain.rswfidle
+msgid "受信を開始すると、ここに信号が流れます。読みたい信号をクリックしてください。"
+msgstr "Signals flow here once you start receiving. Click the one you want to read."
+
+#: frmmain.rswfwaiting
+msgid "信号を待っています。読みたい信号が見えたらクリックしてください。"
+msgstr "Waiting for signals. Click one to read when it appears."
 

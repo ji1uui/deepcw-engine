@@ -24,6 +24,26 @@ fi
 
 FAILED=0
 
+# **利用者の設定に触れません。**アプリは終わるときに設定を書き戻すので、本物の
+# `~/.config` で走らせると試験のたびに書き換わり、結果もその設定に左右されます。
+# **The operator's settings are left alone.** The application writes its
+# settings back as it exits; run against the real `~/.config`, every test
+# would rewrite them, and the outcome would depend on them.
+GUI_HOME=$(mktemp -d)
+trap 'rm -rf "$GUI_HOME"' EXIT
+# **家はわざと深く、長くします。**設定タブには置き場所がそのまま出るので、
+# 短い家（`/root`）で測ると、長い置き場所でのはみ出しを見逃します（付録 BN）。
+# Windows の `C:\Users\<名前>\AppData\Roaming\...` 程度の長さにします。
+# **The home is made deep and long on purpose.** The settings tab shows
+# locations as they are, so measured under a short home (`/root`) the overflow
+# of a long one is missed (appendix BN). It is made about as long as Windows'
+# `C:\Users\<name>\AppData\Roaming\...`.
+DEEP="$GUI_HOME/Users/a-fairly-long-operator-name/AppData/Roaming/Settings of the operator"
+mkdir -p "$DEEP/home" "$DEEP/config"
+HOME="$DEEP/home"
+XDG_CONFIG_HOME="$DEEP/config"
+export HOME XDG_CONFIG_HOME
+
 run_at() {
   DPI="$1"
   SIZE="$2"

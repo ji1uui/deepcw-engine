@@ -29,7 +29,7 @@ interface
 uses
   SysUtils, Classes, Math, DateUtils, IniFiles, Clipbrd,
   Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls, Spin,
-  LCLType,
+  LCLType, FileCtrl,
   DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Onnx, DeepCW.Wave,
   DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Morse, DeepCW.Decoder, DeepCW.Audio, DeepCW.Stream, DeepCW.Tuner,
@@ -342,6 +342,14 @@ type
     FTxCurrentChar: TLabel;
     FTxCurrentCode: TLabel;
     FTxSummary: TLabel;
+    { 送信音を作れなかったか。**作れなかったときの行は例外の原文なので、
+      言語を変えても組み直しません。**
+      Whether the transmit audio could not be made. **The line then holds the
+      exception's own text, so a language change does not rebuild it.** }
+    FTxRenderFailed: Boolean;
+    { 滝に出している案内（`RsWfIdle` か `RsWfWaiting`）。
+      The note the waterfall shows (`RsWfIdle` or `RsWfWaiting`). }
+    FWfMessage: PResString;
 
     { 受信タブ / receive tab }
     FRxFile: TEdit;
@@ -412,6 +420,17 @@ type
     FSetRetention: TComboBox;
     FSetLanguage: TComboBox;
     FSetLanguageInfo: TLabel;
+    { 設定ファイルに覚えてあった言語の鍵と、この回に利用者が選び直したか。
+      **命令行の `--lang` は 1 度きりなので、選び直さない限り覚えてあった方を
+      書き戻します**（`UiLangFromCommandLine`）。
+      The language key the settings file held, and whether the operator chose
+      again this run. **A command-line `--lang` is for one run, so unless they
+      chose again the remembered one is written back** (`UiLangFromCommandLine`). }
+    FLangRemembered: string;
+    { 文字の幅を測るための画布です。**窓がまだ無くても測れます。**
+      A canvas to measure text on; **it works before any window exists.** }
+    FMeasure: TBitmap;
+    FLangChosenHere: Boolean;
     FSetJournal: TCheckBox;
     { 受信練習（要件 FR-F.3）。**出題は隠しておき、答え合わせのときだけ見せます。**
       Receive practice (requirement FR-F.3). **The exercise is kept out of sight
@@ -604,6 +623,7 @@ type
     procedure TxTextChanged(Sender: TObject);
     procedure TxOptionsChanged(Sender: TObject);
     procedure RenderTransmit;
+    procedure UpdateTxSummary;
     procedure TxSendClick(Sender: TObject);
     procedure TxStopClick(Sender: TObject);
     procedure TxSaveClick(Sender: TObject);
@@ -694,6 +714,10 @@ type
     procedure StopRecording(const Why: string);
     procedure UpdateRecording;
     procedure UpdateRecordInfo;
+    { 置き場所をラベルの残りの幅へ収めます（要件 NFR-5.1）。
+      Fits a location into what is left of a label's width (NFR-5.1). }
+    function FitPath(Lbl: TLabel; const Path, Around: string): string;
+    procedure OperatingResized(Sender: TObject);
     procedure SetRecordStatus(const Shown: string);
     procedure JournalConfirmed;
 
@@ -1193,6 +1217,55 @@ resourcestring
     What was read from the reference (requirement FR-E.1). }
   RsReferenceRead = '%s を読みました。';
 
+  { 窓の題と、送信タブの実行時の文言（要件 FR-T.1・NFR-7.6）。
+    The window title and the transmit tab's runtime words (NFR-7.6). }
+  RsAppTitle = 'DeepCW モールス通信 - 送受信';
+  RsTxSummary = '%0:d 文字 / %1:.1f 秒';
+  RsTxNothing = '送信できる文字がありません。';
+  RsTxSendingNow = '送信中';
+  RsTxStopped = '送信を停止しました。';
+  RsTxDone = '送信完了';
+  RsTxSaveTitle = 'モールス音声を保存';
+  RsWavFilter = 'WAV ファイル|*.wav';
+  RsSaved = '保存しました: %s';
+  RsCtxTransmit = '送信';
+  RsCtxWavSave = 'WAV の保存';
+  RsCtxPlayback = '再生';
+  RsCtxEngineLoad = 'エンジンの読み込み';
+  RsCtxSaveSettings = '設定の保存';
+
+  { 受信タブの残り（要件 NFR-7.6）。
+    The rest of the receive tab (NFR-7.6). }
+  RsRxOpenTitle = 'モールス音声を開く';
+  RsWavOpenFilter = 'WAV ファイル|*.wav|すべてのファイル|*.*';
+  RsFtBusyCapture = '送信訓練の最中です。先に「終了して採点」を押してください。';
+  RsWfIdle = '受信を開始すると、ここに信号が流れます。読みたい信号をクリックしてください。';
+  RsWfWaiting = '信号を待っています。読みたい信号が見えたらクリックしてください。';
+  RsCtxReceiveStart = '受信の開始';
+  RsWaitingDevice = '装置を待っています';
+  RsRxCopied = '受信テキスト %d 文字をコピーしました。';
+  RsCallCopied = '%s をコピーしました。';
+  RsCallCopiedNoRst = '%s をコピーしました（RST は聞こえていません）。';
+  RsRate = '直近 1 時間: %0:d 局 ／ 記録全体: %1:d 局';
+  { 待っていた局の知らせ。**区切りも言語で違います**（日本語は「、」）。
+    The watched-station notice. **The separator differs by language too.** }
+  RsWatchedAt = '%0:s（%1:.0f Hz）';
+  RsWatchedSeparator = '、';
+  RsWatchedOnAir = '待っていた %s が出ています。';
+  RsFindNone = '見つかりません';
+  RsFindPosition = '%0:d / %1:d 件';
+  RsBandwidthSet = '帯域幅を %s にしました。';
+
+  { 設定タブの残り（要件 NFR-7.6）。
+    The rest of the settings tab (NFR-7.6). }
+  RsDiagCopied = '診断情報を %d 行コピーしました。不具合報告にそのまま貼れます。';
+  RsCtxPrefixes = '国別前置符字表';
+  RsPrefixesOpenTitle = '国別前置符字表を開く';
+  RsTextFilter = 'テキスト (*.txt;*.csv)|*.txt;*.csv|すべて (*.*)|*.*';
+  RsCtxRoster = '呼出符号の一覧';
+  RsRosterOpenTitle = '呼出符号の一覧を開く';
+  RsInRoster = '手元の一覧';
+
 
 
 { 改行の直し（`AsLines`）は `DeepCW.Platform` に在ります。**OS で振る舞いが
@@ -1310,7 +1383,7 @@ begin
   { CreateNew は Create が行う .lfm の探索を省きます。
     CreateNew skips the .lfm lookup that Create would perform. }
   inherited CreateNew(AOwner);
-  Caption := 'DeepCW モールス通信 - 送受信';
+  RegisterCaption(Self, @RsAppTitle);
   { 窓の既定の幅。**中身から決めます。**受信タブの表示の行と、送信訓練の案内文が
     いちばん幅を要る（付録 AW.2 の実測で 1033 画素）。狭くすると、それらは
     静かに切れます——警告も出ず、切れていることが画面から分かりません。
@@ -1398,7 +1471,7 @@ begin
     The contact log is loaded; reception continues even if it cannot be read. }
   FLog.Load;
   if FLog.LastError <> '' then
-    LogDiagnostic('交信記録', FLog.LastError);
+    LogDiagnostic(RsCtxContactLog, FLog.LastError);
   UpdateLogInfo;
   UpdateReplayInfo;
   { 読み込んだ設定を記録へも反映します。控えるだけでは効きません。
@@ -1478,6 +1551,7 @@ begin
   FFtRing.Free;
   FPlayback.Free;
   FReviewPlay.Free;
+  FMeasure.Free;
   FAlerts.Free;
   { 書き残しを出してから解放します。閉じるときの 1 語は、記録として要ります。
     The remainder is written before releasing: the last word of a session
@@ -1965,6 +2039,12 @@ begin
   FRxWaterfall.Parent := WaterfallPanel;
   FRxWaterfall.OnTuneChanged := @RxTuneChanged;
   FRxWaterfall.OnBandwidthChanged := @RxBandwidthDragged;
+  { 何も流れていないときの案内。**どちらを出しているかを控えておき**、言語を
+    変えたら同じものを入れ直します（`ApplyTexts`）。
+    The note shown while nothing flows. **Which one is showing is kept**, and
+    the same one is put back when the language changes (`ApplyTexts`). }
+  FWfMessage := @RsWfIdle;
+  FRxWaterfall.Message_ := FWfMessage^;
   Stretch(FRxWaterfall, alClient);
 
   TextPanel := TPanel.Create(Sheet);
@@ -2710,8 +2790,7 @@ begin
   RefreshInfo;
   Report := BuildDiagnosticReport(FSetInfo.Lines.Text, GetUserDir, Now);
   Clipboard.AsText := Report;
-  SetStatus('', '', Format('診断情報を %d 行コピーしました。' +
-    '不具合報告にそのまま貼れます。',
+  SetStatus('', '', Format(RsDiagCopied,
     [Length(FSetInfo.Lines.Text.Split([LineEnding])) + 3]));
 end;
 
@@ -3447,6 +3526,9 @@ begin
   Operating.Height := 340;
   RegisterCaption(Operating, @RsSetOperating);
   Stretch(Operating, alTop);
+  { 幅が決まるたびに、置き場所を収め直します（`FitPath`）。
+    Each time the width settles, the locations are fitted again (`FitPath`). }
+  Operating.OnResize := @OperatingResized;
 
   AddLabel(Operating, @RsSetCaptureRate, 14, 8);
   FSetCaptureRate := TComboBox.Create(Operating);
@@ -3757,7 +3839,8 @@ begin
       ここでは選択だけを合わせます。
       The language (NFR-7.6). **The words go back in at the end of loading**, so
       only the choice is set here. }
-    FSetLanguage.ItemIndex := StartingUiLang(Ini.ReadString('ui', 'language', ''));
+    FLangRemembered := Ini.ReadString('ui', 'language', '');
+    FSetLanguage.ItemIndex := StartingUiLang(FLangRemembered);
     FFtBottomKind.ItemIndex := ClampInt(Ini.ReadInteger('fist', 'bottom', 0),
       0, FFtBottomKind.Items.Count - 1);
     FtBottomChanged(nil);
@@ -3869,9 +3952,19 @@ begin
         The language is remembered **by key** (NFR-7.6): by number, adding a
         language would select a different one; by the name shown, it could only
         be read back in that same language (the same story as version 2.54). }
-      if (FSetLanguage.ItemIndex >= Low(UI_LANG_KEYS)) and
-         (FSetLanguage.ItemIndex <= High(UI_LANG_KEYS)) then
-        Ini.WriteString('ui', 'language', UI_LANG_KEYS[FSetLanguage.ItemIndex]);
+      { **命令行で決まった言語は書き戻しません。**選び直したときだけ書きます。
+        覚えてあった鍵が無ければ何も書かず、次は OS の地域設定で決まります。
+        **A language decided by the command line is not written back**; only a
+        choice made on the screen is. With nothing remembered, nothing is written
+        and the next start follows the locale. }
+      if (UiLangFromCommandLine = '') or FLangChosenHere then
+      begin
+        if (FSetLanguage.ItemIndex >= Low(UI_LANG_KEYS)) and
+           (FSetLanguage.ItemIndex <= High(UI_LANG_KEYS)) then
+          Ini.WriteString('ui', 'language', UI_LANG_KEYS[FSetLanguage.ItemIndex]);
+      end
+      else if FLangRemembered <> '' then
+        Ini.WriteString('ui', 'language', FLangRemembered);
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('receive', 'watch', FRxWatch.Text);
       Ini.WriteInteger('receive', 'band', FRxBand.ItemIndex);
@@ -3887,7 +3980,7 @@ begin
         原因が分からなくなるため診断情報には残します。
         Settings are a convenience and must not block exit, but a silent
         failure leaves no way to find the cause, so it is recorded. }
-      LogDiagnostic('設定の保存', E.Message);
+      LogDiagnostic(RsCtxSaveSettings, E.Message);
   end;
 end;
 
@@ -3965,6 +4058,15 @@ begin
   UpdateReplayInfo;
   PrShowHistory;
   FtShowHistory;
+  { 版 2.66 で足した、送信の要約・局数・滝の案内。
+    Added in version 2.66: the transmit summary, the rate, the waterfall note. }
+  UpdateTxSummary;
+  UpdateRate(True);
+  if (FRxWaterfall <> nil) and (FWfMessage <> nil) then
+  begin
+    FRxWaterfall.Message_ := FWfMessage^;
+    FRxWaterfall.Invalidate;
+  end;
   { **これも控えに載らない組み直しです。**`FRxSubdivisionInfo` の文言は
     `RxSubdivisionChanged` が都度組み立てるので、控えには載せられません
     （空欄なら案内、埋まっていれば読みの札）。呼ばなければ、起動したときの
@@ -4160,26 +4262,27 @@ begin
     end;
 
     { 英語のときに集めた札のうち、日本語が残っていて、かつ登録済みでないものを
-      数えます。**これは落とす検査ではなく、進み具合の目盛りです。**移行の
-      途中では、まだ訳していない札（送信タブの要約や `src/` の
-      `ConfusionCaption` など）が正しく日本語のままなので、ここで落とすと
-      移行が終わるまで回帰試験が通りません。数だけを報告に載せ、移行が
-      終われば 0 になります（0 になったら落とす検査に格上げする。付録 BM）。
+      数え、**1 つでもあれば落とします。**版 2.65 では進み具合の目盛り（落とさない）
+      でしたが、版 2.66 で `frmmain` の文言を訳し終え、試験の家を一時の場所へ
+      移して結果が手元の設定に左右されなくなったので、0 を確かめて落とす検査に
+      格上げしました（付録 BN）。落ちたときは札の文言を名指しします。
       登録済み（`After` にある）のは意図して両言語のままの「画面の言葉 /
       Language」だけなので除きます。
       Counts the labels gathered in English that still hold Japanese and are not
-      registered. **This is a progress meter, not a gate.** Mid-migration, a
-      label not yet translated (the transmit summary, `src/`'s
-      `ConfusionCaption`) is correctly still Japanese, so failing here would keep
-      the regression red until the migration is done. Only the count is
-      reported; it reaches 0 when the migration is complete (then it is promoted
-      to a gate; appendix BM). The registered ones (in `After`) are excluded --
-      the only one with Japanese is the deliberately bilingual "画面の言葉 /
-      Language". }
+      registered, and **fails if there is even one.** In version 2.65 it was a
+      progress meter that never failed; in version 2.66 `frmmain`'s words were
+      all translated and the tests were given a scratch home, so the outcome no
+      longer depends on the operator's settings. With 0 confirmed it is promoted
+      to a gate (appendix BN), and a failure names the label. The registered
+      ones (in `After`) are excluded -- the only one with Japanese is the
+      deliberately bilingual "画面の言葉 / Language". }
     Leaks := 0;
     for I := 0 to Labels.Count - 1 do
       if HasCjk(Labels[I]) and (After.IndexOf(Labels[I]) < 0) then
+      begin
         Inc(Leaks);
+        Result.Add(Format('英語なのに日本語が残っている札: 「%s」', [Labels[I]]));
+      end;
 
     Result.Insert(0, Format('控え %0:d 件 / 英語で変わった %1:d 件 / 戻らなかった %2:d 件 / 未反映の疑い %3:d 件 / 切替 %4:d ms',
       [UiText.TextCount, Moved, Wrong, Leaks, Spent]));
@@ -4211,6 +4314,7 @@ procedure TMainForm.SetLanguageChanged(Sender: TObject);
 begin
   if FSetLanguage = nil then
     Exit;
+  FLangChosenHere := True;
   UseUiLang(FSetLanguage.ItemIndex);
   ApplyTexts;
   MarkSettingsDirty;
@@ -4409,12 +4513,12 @@ begin
       FDecoder := nil;
       if Silent then
       begin
-        LogDiagnostic('エンジンの読み込み', E.Message);
-        SetStatus('エンジン: 未読み込み', '',
+        LogDiagnostic(RsCtxEngineLoad, E.Message);
+        SetStatus(RsInfoEngineNotLoaded, '',
           StatusLine(E.Message));
       end
       else
-        ReportError('エンジンの読み込み', E);
+        ReportError(RsCtxEngineLoad, E);
       Result := False;
     end;
   end;
@@ -4616,6 +4720,19 @@ begin
   RenderTransmit;
 end;
 
+{ 送信の要約（文字数と長さ）を出します。**言語を変えたときも通ります**ので、
+  音は作り直しません——送信中に作り直すと、鳴っている音を取り替えることになります。
+  Shows the transmit summary (characters and length). **Also run when the
+  language changes**, so the audio is not rebuilt: rebuilding it mid-send
+  would swap the sound being played. }
+procedure TMainForm.UpdateTxSummary;
+begin
+  if (FTxSummary = nil) or FTxRenderFailed then
+    Exit;
+  FTxSummary.Caption := Format(RsTxSummary,
+    [Length(FTxNormalized), Length(FTxSamples) / FTxSampleRate]);
+end;
+
 procedure TMainForm.RenderTransmit;
 var
   Timing: TCWTiming;
@@ -4636,13 +4753,14 @@ begin
   try
     FTxSegments := TextToSegments(FTxText.Text, Timing);
     FTxSamples := SegmentsToPCM(FTxSegments, Options);
-    FTxSummary.Caption := Format('%0:d 文字 / %1:.1f 秒',
-      [Length(FTxNormalized), Length(FTxSamples) / FTxSampleRate]);
+    FTxRenderFailed := False;
+    UpdateTxSummary;
   except
     on E: Exception do
     begin
       FTxSegments := nil;
       FTxSamples := nil;
+      FTxRenderFailed := True;
       FTxSummary.Caption := E.Message;
     end;
   end;
@@ -4655,7 +4773,7 @@ procedure TMainForm.TxSendClick(Sender: TObject);
 begin
   if Length(FTxSamples) = 0 then
   begin
-    SetStatus('', '', '送信できる文字がありません。');
+    SetStatus('', '', RsTxNothing);
     Exit;
   end;
   try
@@ -4663,10 +4781,10 @@ begin
       raise EDeepCW.Create(PortAudioLoadError);
     FPlayback.Play(FTxSamples, FTxSampleRate);
     FTxPlaying := True;
-    SetStatus('', '', '送信中');
+    SetStatus('', '', RsTxSendingNow);
   except
     on E: Exception do
-      ReportError('送信', E);
+      ReportError(RsCtxTransmit, E);
   end;
 end;
 
@@ -4677,7 +4795,7 @@ begin
   FTxProgress.Position := 0;
   FTxCurrentChar.Caption := '-';
   FTxCurrentCode.Caption := '';
-  SetStatus('', '', '送信を停止しました。');
+  SetStatus('', '', RsTxStopped);
 end;
 
 procedure TMainForm.TxSaveClick(Sender: TObject);
@@ -4688,18 +4806,18 @@ begin
     Exit;
   Dialog := TSaveDialog.Create(Self);
   try
-    Dialog.Title := 'モールス音声を保存';
-    Dialog.Filter := 'WAV ファイル|*.wav';
+    Dialog.Title := RsTxSaveTitle;
+    Dialog.Filter := RsWavFilter;
     Dialog.DefaultExt := 'wav';
     Dialog.FileName := 'morse.wav';
     if not Dialog.Execute then
       Exit;
     try
       SaveWavMono(Dialog.FileName, FTxSamples, FTxSampleRate);
-      SetStatus('', '', '保存しました: ' + Dialog.FileName);
+      SetStatus('', '', Format(RsSaved, [Dialog.FileName]));
     except
       on E: Exception do
-        ReportError('WAV の保存', E);
+        ReportError(RsCtxWavSave, E);
     end;
   finally
     Dialog.Free;
@@ -4752,11 +4870,11 @@ begin
       FTxCurrentCode.Caption := '';
       if FPlayback.LastError <> '' then
       begin
-        LogDiagnostic('再生', FPlayback.LastError);
+        LogDiagnostic(RsCtxPlayback, FPlayback.LastError);
         SetStatus('', '', StatusLine(FPlayback.LastError));
       end
       else
-        SetStatus('', '', '送信完了');
+        SetStatus('', '', RsTxDone);
     end;
     Exit;
   end;
@@ -4799,8 +4917,8 @@ var
 begin
   Dialog := TOpenDialog.Create(Self);
   try
-    Dialog.Title := 'モールス音声を開く';
-    Dialog.Filter := 'WAV ファイル|*.wav|すべてのファイル|*.*';
+    Dialog.Title := RsRxOpenTitle;
+    Dialog.Filter := RsWavOpenFilter;
     if Dialog.Execute then
       FRxFile.Text := Dialog.FileName;
   finally
@@ -4930,7 +5048,7 @@ begin
     either fail or leave it unclear which is measuring what.** }
   if FFtCapture <> nil then
   begin
-    SetStatus('', '', '送信訓練の最中です。先に「終了して採点」を押してください。');
+    SetStatus('', '', RsFtBusyCapture);
     Exit;
   end;
   if not EnsureDecoder then
@@ -4972,7 +5090,8 @@ begin
       A change of capture rate changes the waterfall's scale, so whatever is
       already drawn no longer means anything and is cleared. }
     FRxWaterfall.Clear;
-    FRxWaterfall.Message_ := '信号を待っています。読みたい信号が見えたらクリックしてください。';
+    FWfMessage := @RsWfWaiting;
+    FRxWaterfall.Message_ := FWfMessage^;
     { 「録音」はファイルへ残すこと（要件 FR-E.8）に使う語なので、取り込んで
       いる状態は「受信中」と言います。**1 つの語に 2 つの意味を持たせると、
       録音していないのに録音中と読めます。**
@@ -4987,7 +5106,7 @@ begin
     on E: Exception do
     begin
       FreeAndNil(FCapture);
-      LogDiagnostic('受信の開始', E.Message);
+      LogDiagnostic(RsCtxReceiveStart, E.Message);
       { **知らせは 30 秒に 1 度まで。**3 秒ごとに同じ文言を出し直すと、ほかの
         知らせが読めません（要件 FR-A.4）。
         **Told at most once every thirty seconds**: the same words every three
@@ -4995,7 +5114,7 @@ begin
       if SecondsBetween(Now, FSaidDeviceAt) >= 30 then
       begin
         FSaidDeviceAt := Now;
-        ReportError('受信の開始', E);
+        ReportError(RsCtxReceiveStart, E);
       end;
       FWaiting := True;
       FLastRetryAt := Now;
@@ -5036,7 +5155,7 @@ begin
     The wait goes in the **status panel**; the label beside the level meter
     (`FRxSignal`) is the short one for "sound is arriving" and "silent", and a
     sentence there runs off the end. }
-  FRxSignal.Caption := '装置を待っています';
+  FRxSignal.Caption := RsWaitingDevice;
   SetStatus('', WaitingForDeviceCaption(FRetryCount), '');
   if MilliSecondsBetween(Now, FLastRetryAt) < Round(AUDIO_RETRY_SECONDS * 1000) then
     Exit;
@@ -5176,7 +5295,7 @@ end;
 procedure TMainForm.RxCopyClick(Sender: TObject);
 begin
   Clipboard.AsText := FRxTranscript.AsText;
-  SetStatus('', '', Format('受信テキスト %d 文字をコピーしました。',
+  SetStatus('', '', Format(RsRxCopied,
     [FRxTranscript.CharCount]));
 end;
 
@@ -5391,7 +5510,7 @@ begin
   FPrefixFile := FileName;
   FPrefixes.LoadFromFile(FileName);
   if FPrefixes.LastError <> '' then
-    LogDiagnostic('国別前置符字表', FPrefixes.LastError);
+    LogDiagnostic(RsCtxPrefixes, FPrefixes.LastError);
   SetAllocatedPrefixes(FPrefixes.Items);
   UpdatePrefixesInfo;
   { 形の規則が変われば、一覧に出る符号も変わります。作り直します。
@@ -5431,8 +5550,8 @@ var
 begin
   Dialog := TOpenDialog.Create(Self);
   try
-    Dialog.Title := '国別前置符字表を開く';
-    Dialog.Filter := 'テキスト (*.txt;*.csv)|*.txt;*.csv|すべて (*.*)|*.*';
+    Dialog.Title := RsPrefixesOpenTitle;
+    Dialog.Filter := RsTextFilter;
     if not Dialog.Execute then
       Exit;
     LoadPrefixes(Dialog.FileName);
@@ -5488,7 +5607,7 @@ begin
   if (FRoster = nil) or (FRoster.Count = 0) then
     Exit;
   if FRoster.Contains(Callsign) then
-    Result := '手元の一覧';
+    Result := RsInRoster;
 end;
 
 { 一覧を読み込みます。**読めなくても受信は止めません**（要件 FR-K.10）。
@@ -5504,7 +5623,7 @@ begin
     { 原文は診断へ、利用者には対処のある言葉を出します（要件 FR-A.4）。
       The original text goes to the diagnostics and the operator gets words with
       a next step in them (requirement FR-A.4). }
-    LogDiagnostic('呼出符号の一覧', FRoster.LastError);
+    LogDiagnostic(RsCtxRoster, FRoster.LastError);
   UpdateRosterInfo;
   { 読み込んだら一覧を作り直します。**作り直さないと、次に局が動くまで
     反映されません。**
@@ -5546,8 +5665,8 @@ var
 begin
   Dialog := TOpenDialog.Create(Self);
   try
-    Dialog.Title := '呼出符号の一覧を開く';
-    Dialog.Filter := 'テキスト (*.txt;*.csv)|*.txt;*.csv|すべて (*.*)|*.*';
+    Dialog.Title := RsRosterOpenTitle;
+    Dialog.Filter := RsTextFilter;
     if not Dialog.Execute then
       Exit;
     LoadRoster(Dialog.FileName);
@@ -5589,10 +5708,9 @@ begin
     Sent := Sent + ' ' + FExchange.Rst.Text;
   Clipboard.AsText := Sent;
   if FExchange.Rst.First >= 0 then
-    SetStatus('', '', Format('%s をコピーしました。', [Sent]))
+    SetStatus('', '', Format(RsCallCopied, [Sent]))
   else
-    SetStatus('', '', Format('%s をコピーしました（RST は聞こえていません）。',
-      [Sent]));
+    SetStatus('', '', Format(RsCallCopiedNoRst, [Sent]));
 end;
 
 { ---- 交信の記録（要件 FR-E.3・FR-J.4） ---- }
@@ -5705,8 +5823,7 @@ begin
   FRateAt := Now;
   Hour := FLog.CountSince(IncHour(LocalTimeToUniversal(Now), -1));
   Total := FLog.Count;
-  FRxRate.Caption := Format('直近 1 時間: %0:d 局 ／ 記録全体: %1:d 局',
-    [Hour, Total]);
+  FRxRate.Caption := Format(RsRate, [Hour, Total]);
 end;
 
 { いま記録に残せる呼出符号を探します。
@@ -5783,7 +5900,9 @@ begin
   else
     FRxLogInfo.Caption := Call + Note;
   if FSetLogInfo <> nil then
-    FSetLogInfo.Caption := Format(RsCountAndName, [FLog.Count, FLog.FileName]);
+    FSetLogInfo.Caption := Format(RsCountAndName, [FLog.Count,
+      FitPath(FSetLogInfo, FLog.FileName,
+        Format(RsCountAndName, [FLog.Count, '']))]);
 end;
 
 { 交信を 1 件記録します（要件 FR-E.3）。時刻は協定世界時で持ちます。ADIF の
@@ -6203,12 +6322,12 @@ begin
     if (FBandEntries[I].Watched <> '') and FAlerts.Announce(FBandEntries[I].Id) then
     begin
       if Found <> '' then
-        Found := Found + '、';
-      Found := Found + Format('%0:s（%1:.0f Hz）',
+        Found := Found + RsWatchedSeparator;
+      Found := Found + Format(RsWatchedAt,
         [FBandEntries[I].Callsign, FBandEntries[I].Hz]);
     end;
   if Found <> '' then
-    SetStatus('', '', Format('待っていた %s が出ています。', [Found]));
+    SetStatus('', '', Format(RsWatchedOnAir, [Found]));
 end;
 
 { 一覧を作り直します。毎秒 1 回で足ります。局の並びが 0.2 秒ごとに変わる必要は
@@ -6310,9 +6429,9 @@ begin
       無いのかが分かりません。
       "Not found" rather than "0": a bare count does not say whether the search
       ran or whether there is nothing there. }
-    FRxFindInfo.Caption := '見つかりません'
+    FRxFindInfo.Caption := RsFindNone
   else
-    FRxFindInfo.Caption := Format('%0:d / %1:d 件',
+    FRxFindInfo.Caption := Format(RsFindPosition,
       [FRxTranscript.CurrentMatch, FRxTranscript.MatchCount]);
 end;
 
@@ -6475,7 +6594,59 @@ begin
   if FSetRecordInfo = nil then
     Exit;
   FSetRecordInfo.Caption := Format(RsRecordInfo,
-    [RecordingDirectory, RECORD_MAX_SECONDS / 3600]);
+    [FitPath(FSetRecordInfo, RecordingDirectory,
+       Format(RsRecordInfo, ['', RECORD_MAX_SECONDS / 3600])),
+     RECORD_MAX_SECONDS / 3600]);
+end;
+
+{ 置き場所を、ラベルに残った幅へ収まるように途中を省きます（要件 NFR-5.1）。
+
+  **置き場所の長さは利用者の手元で決まります。**Windows の
+  `C:\Users\<名前>\AppData\Roaming\...` や長い利用者名では、枠の外へはみ出して
+  読めなくなります。この容器の `/root/.config` は短いので、**試験の家を一時の
+  場所へ移すまで、はみ出しに気づきませんでした**（付録 BN）。
+
+  省いた部分は `...` になり、**元の置き場所はヒントに出します。**ファイル名は
+  残します——どれを指しているかは、名前で分かるからです。
+
+  `Around` は、置き場所を空にして組み立てた文言です。残りの幅はそれを引いて
+  求めます。
+
+  Shortens a location in the middle so that it fits in what is left of the
+  label's width (requirement NFR-5.1).
+
+  **How long the location is depends on the operator's machine.** On Windows,
+  `C:\Users\<name>\AppData\Roaming\...` or a long user name runs it past the
+  edge of the box, where it cannot be read. This container's `/root/.config`
+  is short, so **the overflow went unnoticed until the tests were given a
+  scratch home** (appendix BN).
+
+  What is left out becomes `...`, and **the whole location goes into the
+  hint.** The file name is kept: it is what says which file is meant.
+
+  `Around` is the text built with the location left empty; the room left is
+  found by taking it away. }
+function TMainForm.FitPath(Lbl: TLabel; const Path, Around: string): string;
+var
+  Room: Integer;
+begin
+  Result := Path;
+  Lbl.Hint := Path;
+  Lbl.ShowHint := Path <> '';
+  if Lbl.Parent = nil then
+    Exit;
+  if FMeasure = nil then
+    FMeasure := TBitmap.Create;
+  FMeasure.Canvas.Font := Lbl.Font;
+  Room := Lbl.Parent.ClientWidth - Lbl.Left - Scale96ToForm(8)
+    - FMeasure.Canvas.TextWidth(Around);
+  Result := MinimizeName(Path, FMeasure.Canvas, Room);
+end;
+
+procedure TMainForm.OperatingResized(Sender: TObject);
+begin
+  UpdateRecordInfo;
+  UpdateLogInfo;
 end;
 
 procedure TMainForm.RxRecordChanged(Sender: TObject);
@@ -7221,8 +7392,7 @@ begin
     通します。
     Writing ItemIndex raises no OnChange, so the same follow-up is run here. }
   RxConfirmSpeedChanged(Sender);
-  SetStatus('', '', Format('帯域幅を %s にしました。',
-    [BandwidthCaption(Chosen)]));
+  SetStatus('', '', Format(RsBandwidthSet, [BandwidthCaption(Chosen)]));
 end;
 
 { すべてのタブを順に前へ出して、組み方の破綻を数えます（要件 NFR-5.1）。

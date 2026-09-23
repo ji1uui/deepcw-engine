@@ -216,8 +216,14 @@ done
 #     application finds them: started from `Contents/MacOS/`, it must find the
 #     translations -- and **must stop finding them when they are moved beside
 #     the executable**, for otherwise the change did nothing.
+# **利用者の設定に触れません。**アプリは終わるときに設定を書き戻すので、本物の
+# `~/.config` で走らせると試験のたびに書き換わり、結果もその設定に左右されます。
+# **The operator's settings are left alone.** The application writes its
+# settings back as it exits; run against the real `~/.config`, every test
+# would rewrite them, and the outcome would depend on them.
+mkdir -p "$work/home" "$work/config"
 if command -v xvfb-run >/dev/null 2>&1; then
-  if (cd "$app/Contents/MacOS" && DEEPCW_TEXT_CHECK=1 xvfb-run -a ./deepcw_station) \
+  if (cd "$app/Contents/MacOS" && HOME="$work/home" XDG_CONFIG_HOME="$work/config" DEEPCW_TEXT_CHECK=1 xvfb-run -a ./deepcw_station) \
        >"$work/text1" 2>&1 && grep -q '訳 [0-9]* 件' "$work/text1"; then
     check "中から訳を引ける" ok
   else
@@ -229,7 +235,7 @@ if command -v xvfb-run >/dev/null 2>&1; then
   # all), this mutation cannot be placed. **Not placing it is not a pass.**
   if [ -d "$app/Contents/Resources/languages" ]; then
     mv "$app/Contents/Resources/languages" "$app/Contents/MacOS/languages"
-    (cd "$app/Contents/MacOS" && DEEPCW_TEXT_CHECK=1 xvfb-run -a ./deepcw_station) \
+    (cd "$app/Contents/MacOS" && HOME="$work/home" XDG_CONFIG_HOME="$work/config" DEEPCW_TEXT_CHECK=1 xvfb-run -a ./deepcw_station) \
       >"$work/text2" 2>&1 || true
     if grep -q '訳された文言はありません' "$work/text2"; then
       check "実行ファイルの隣へ移すと引けなくなる" ok

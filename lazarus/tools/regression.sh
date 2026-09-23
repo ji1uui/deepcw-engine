@@ -60,6 +60,21 @@ fi
 echo "ONNX Runtime: ${DEEPCW_ONNXRUNTIME:-（見つかりません）}"
 echo
 
+# **利用者の設定に触れません。**アプリは終わるときに設定を書き戻すので、本物の
+# `~/.config` で走らせると試験のたびに書き換わり、結果もその設定に左右されます。
+# **The operator's settings are left alone.** The application writes its
+# settings back as it exits; run against the real `~/.config`, every test
+# would rewrite them, and the outcome would depend on them.
+# 組み立て（lazbuild）は本物の家が要るので、画面を開く段にだけ渡します。
+# The build (lazbuild) needs the real home, so only the steps that open the
+# screen are given this one.
+GUI_HOME=$(mktemp -d)
+trap 'rm -rf "$GUI_HOME"' EXIT
+mkdir -p "$GUI_HOME/home" "$GUI_HOME/config"
+gui_env() {
+  env HOME="$GUI_HOME/home" XDG_CONFIG_HOME="$GUI_HOME/config" "$@"
+}
+
 # ---- 組み立て ----
 echo "== 組み立て / build =="
 for p in app/deepcw_station app/gui_probe cli/cw_devices cli/cw_loopback \
@@ -72,7 +87,7 @@ echo
 echo "== 数値と部品 / numeric and component checks =="
 step "dsp_check（数値・記録・読み取り・待ち符号）" ./cli/dsp_check
 if command -v xvfb-run >/dev/null 2>&1; then
-  step "gui_probe（画面部品）" xvfb-run -a ./app/gui_probe
+  step "gui_probe（画面部品）" gui_env xvfb-run -a ./app/gui_probe
 else
   skip "gui_probe（画面部品）" "xvfb-run がありません"
 fi
@@ -106,7 +121,7 @@ step "画素密度と言語を変えても組み方が崩れない" ./tools/layo
 # (requirement NFR-7.6). **The controls were sized for the Japanese.**
 if command -v xvfb-run >/dev/null 2>&1; then
   step "訳した文言が元より広くなっていない" \
-    env DEEPCW_TEXT_CHECK=1 xvfb-run -a ./app/deepcw_station
+    gui_env DEEPCW_TEXT_CHECK=1 xvfb-run -a ./app/deepcw_station
 else
   skip "訳した文言が元より広くなっていない" "xvfb-run がありません"
 fi
