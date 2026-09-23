@@ -85,6 +85,12 @@ const
   { 電源を入れてから起きるのを待つ上限（ミリ秒）。/ How long to wait for the
     rig to wake after power-on (ms). }
   POWER_WAKE_LIMIT_MS = 30000;
+  { 渡し済みの語を送り終える見込みのあと、なお「鍵を操作しているかもしれない」
+    とみなす余白（ミリ秒）。無線機が見込みより遅いときのためです。
+    The margin after the expected end of the handed-over words during which
+    the rig is still taken to be possibly keying (ms), for a rig slower than
+    expected. }
+  STOP_MARGIN_MS = 2000;
 
 type
   TKeyerState = (ksOff, ksConnecting, ksReady, ksSending, ksNoAnswer,
@@ -131,6 +137,15 @@ type
     { 応答を確かめられる機種か（読む命令を持たない機種では確かめない）。
       Whether the answer can be checked (not on a model without the read). }
     CanProbe: Boolean;
+    { 応答の確かめで読んだ周波数（Hz）とモード、読んだ時刻
+      （`GetTickCount64`）。読めていなければ 0 と空（要件 FR-T.7）。**古い値を
+      使わないため、使う側は時刻で新しさを確かめます。**
+      The frequency (Hz) and mode read by the answer check, and when
+      (`GetTickCount64`); 0 and empty if unread (FR-T.7). **Users check the
+      time for freshness, so that a stale value is not used.** }
+    RigFreqHz: Double;
+    RigMode: string;
+    RigReadAt: QWord;
   end;
 
   TRigKeyer = class
@@ -386,6 +401,8 @@ var
   Settings: TRigSettings;
   LibraryPath, Word_: string;
   Wpm, WantedWpm, PaceWpm, Code: Integer;
+  FreqHz: Double;
+  ModeName: string;
   Stopped, SpeedTaken, CanProbe: Boolean;
   State: TKeyerState;
   Wait: Cardinal;
@@ -420,10 +437,25 @@ var
     end;
   end;
 
+  { 無線機が鍵を操作しているかもしれないか。送っている最中か、渡し済みの語を
+    送り終える見込み（と余白）より前なら真。**そうでなければ止める命令は
+    要りません**——止めるものが無いうえ、応答しない無線機へ送れば待たされて
+    「失敗」になります（付録 BU.1）。
+    Whether the rig may be keying: while sending, or before the handed-over
+    words are expected to finish (plus a margin). **Otherwise no stop command is
+    needed**: there is nothing to stop, and sent to a silent rig it would wait
+    out the timeout and fail (appendix BU.1). }
+  function MayBeKeying: Boolean;
+  begin
+    Result := (CurrentState = ksSending) or
+      ((QueuedUntil > 0) and (QueuedUntil + STOP_MARGIN_MS > GetTickCount64));
+  end;
+
   procedure CloseRig;
   begin
     if Rig = nil then
       Exit;
+    if MayBeKeying then
     try
       Rig.StopMorse;
     except
@@ -536,8 +568,12 @@ begin
       FLock.Leave;
     end;
 
-    { 1. 止める。**何より先に。** / 1. Stop, **before anything else.** }
-    if StopNow and (Rig <> nil) then
+    { 1. 止める。**何より先に。**送っていない・渡した語も送り終えたのなら、
+       待ちの語は `Stop` が既に捨てたので、無線機へは何も送りません。
+       1. Stop, **before anything else.** If nothing is being sent and the
+       handed-over words are done, `Stop` has already dropped the pending ones
+       and nothing is sent to the rig. }
+    if StopNow and (Rig <> nil) and MayBeKeying then
     begin
       try
         Stopped := Rig.StopMorse;
@@ -661,10 +697,21 @@ begin
     if CanProbe and (State in [ksConnecting, ksReady, ksNoAnswer, ksPoweringOn]) and
        (GetTickCount64 >= NextProbe) then
     begin
-      Code := Rig.Probe;
+      Code := Rig.Probe(FreqHz);
       NowMs := GetTickCount64;
       if Code = RIG_OK then
       begin
+        { 答えた。周波数とモードを控えます（モードは読めなくても構わない）。
+          It answered: note the frequency and mode (the mode may be unreadable). }
+        ModeName := Rig.ReadMode;
+        FLock.Enter;
+        try
+          FStatus.RigFreqHz := FreqHz;
+          FStatus.RigMode := ModeName;
+          FStatus.RigReadAt := GetTickCount64;
+        finally
+          FLock.Leave;
+        end;
         if State <> ksReady then
         begin
           { 戻ってきた。**速度を合わせ直し、何も送らない。**
@@ -781,7 +828,11 @@ begin
               (GetTickCount64 >= QueuedUntil) then
       begin
         FStatus.State := ksReady;
-        NextProbe := GetTickCount64 + PROBE_READY_MS;
+        { 送り終えたらすぐ確かめます。送っている間は確かめないので、周波数が
+          古いままにならないように（要件 FR-T.7）。
+          Checked right after sending: no check runs while sending, so the
+          frequency must not be left stale (FR-T.7). }
+        NextProbe := GetTickCount64;
       end;
     finally
       FLock.Leave;

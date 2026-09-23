@@ -1315,6 +1315,11 @@ msgstr ""
 msgid "無線機の応答が戻りました。"
 msgstr ""
 
+#: frmmain.rsrigbandtext
+#, object-pascal-format
+msgid "%s MHz（無線機から）"
+msgstr ""
+
 #: frmmain.rsrigcannotstop
 msgid "（途中で止められない機種）"
 msgstr ""
@@ -1401,6 +1406,11 @@ msgstr ""
 
 #: frmmain.rsriglostanswer
 msgid "無線機が応答しなくなりました。送信はできません。電源を確かめてください（応答が戻れば自動で待機に戻ります）。"
+msgstr ""
+
+#: frmmain.rsrigmodenotcw
+#, object-pascal-format
+msgid "無線機のモードが CW ではありません（%s）。無線機を CW にしてから送ってください。"
 msgstr ""
 
 #: frmmain.rsrignoanswer
@@ -1981,6 +1991,10 @@ msgstr ""
 
 #: frmmain.rssetrigtimeout
 msgid "応答待ち (ms)"
+msgstr ""
+
+#: frmmain.rssetrigusefreq
+msgid "無線機の周波数を交信記録とバンドに使う（切ればバンドは手で選ぶ）"
 msgstr ""
 
 #: frmmain.rssetrigwritedelay

@@ -154,7 +154,13 @@ type
       answered). **The power-status query is not used**: the dummy returned
       success without writing a value, and through the network client the
       answers came one command late (appendix BT.2). }
-    function Probe: Integer;
+    function Probe(out FreqHz: Double): Integer;
+    { 無線機のモード（`CW`・`USB` など、Hamlib の名前）。**読むだけの命令**。
+      読めなければ空。表示と注意にだけ使います（要件 FR-T.7）。
+      The rig's mode (`CW`, `USB`, ... in Hamlib's names), **a read-only
+      command**; empty if it cannot be read. Only shown and warned about
+      (FR-T.7). }
+    function ReadMode: string;
     { 電源を入れる命令を送ります。**利用者が頼んだときだけ呼びます。**番号を
       返し、例外は投げません。
       Sends the power-on command. **Called only on the operator's request.**
@@ -212,6 +218,11 @@ type
   TRigSetPowerstat = function(Rig: Pointer; Status: cint): cint; cdecl;
   TRigGetConf2 = function(Rig: Pointer; Token: clong; Value: PAnsiChar;
     Length_: cint): cint; cdecl;
+  { `rmode_t` は `uint64_t`、`pbwidth_t` は C の `long`（`rig.h`）。
+    `rmode_t` is `uint64_t`, `pbwidth_t` is C `long` (`rig.h`). }
+  TRigGetMode = function(Rig: Pointer; Vfo: cuint; var Mode: cuint64;
+    var Width: clong): cint; cdecl;
+  TRigStrRMode = function(Mode: cuint64): PAnsiChar; cdecl;
   TRigSetDebug = procedure(Level: cint); cdecl;
 
 var
@@ -240,6 +251,10 @@ var
   { 4.5 から。無ければ `GetConf` は空を返します。
     From 4.5; without it `GetConf` returns empty. }
   rig_get_conf2: TRigGetConf2 = nil;
+  { 無ければモードは読みません（表示だけのため）。
+    Without them the mode is not read (it is only shown). }
+  rig_get_mode: TRigGetMode = nil;
+  rig_strrmode: TRigStrRMode = nil;
 
 function DefaultHamlibNames: TStringArray;
 begin
@@ -270,6 +285,8 @@ begin
   rig_get_freq := TRigGetFreq(GetProcedureAddress(GHandle, 'rig_get_freq'));
   rig_set_powerstat := TRigSetPowerstat(GetProcedureAddress(GHandle, 'rig_set_powerstat'));
   rig_get_conf2 := TRigGetConf2(GetProcedureAddress(GHandle, 'rig_get_conf2'));
+  rig_get_mode := TRigGetMode(GetProcedureAddress(GHandle, 'rig_get_mode'));
+  rig_strrmode := TRigStrRMode(GetProcedureAddress(GHandle, 'rig_strrmode'));
   { **止める手段が無い版は使いません**（`rig_stop_morse` は 4.0 から）。
     送れるのに止められないのは、fail-safe の逆です。
     **A version that cannot stop is not used** (`rig_stop_morse` arrived in
@@ -492,14 +509,35 @@ begin
   Check(rig_set_level(FRig, RIG_VFO_CURR, RIG_LEVEL_KEYSPD, Value), 'set KEYSPD');
 end;
 
-function THamlibRig.Probe: Integer;
+function THamlibRig.Probe(out FreqHz: Double): Integer;
 var
   Freq: cdouble;
 begin
+  FreqHz := 0;
   if not FOpen then
     Exit(-RIG_EIO);
   Freq := 0;
   Result := rig_get_freq(FRig, RIG_VFO_CURR, Freq);
+  if Result = RIG_OK then
+    FreqHz := Freq;
+end;
+
+function THamlibRig.ReadMode: string;
+var
+  Mode: cuint64;
+  Width: clong;
+  Name: PAnsiChar;
+begin
+  Result := '';
+  if not FOpen or not Assigned(rig_get_mode) or not Assigned(rig_strrmode) then
+    Exit;
+  Mode := 0;
+  Width := 0;
+  if rig_get_mode(FRig, RIG_VFO_CURR, Mode, Width) <> RIG_OK then
+    Exit;
+  Name := rig_strrmode(Mode);
+  if Name <> nil then
+    Result := string(Name);
 end;
 
 function THamlibRig.PowerOn: Integer;

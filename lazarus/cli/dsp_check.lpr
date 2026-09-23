@@ -4237,6 +4237,39 @@ begin
     Format('%.3f / %.3f 秒', [Sum, EstimateTransmitSeconds('CQ DE JA1ABC K', 20)]));
 end;
 
+{ 無線機の周波数を記録に使う（要件 FR-T.7）。/ Using the rig's frequency in
+  the log (FR-T.7). }
+procedure TestRigFrequency;
+var
+  Item: TAdifRecord;
+  Saved: Char;
+begin
+  WriteLn;
+  WriteLn('無線機の周波数と交信記録（要件 FR-T.7）');
+  Check('7.0234 MHz は 40M', AdifBandForMHz(7.0234) = '40M', AdifBandForMHz(7.0234));
+  Check('1.8 MHz ちょうどは 160M（下端を含む）', AdifBandForMHz(1.8) = '160M');
+  Check('10.12 MHz は 30M（WARC）', AdifBandForMHz(10.12) = '30M');
+  Check('7.35 MHz はどのバンドでもない（空）', AdifBandForMHz(7.35) = '');
+  Check('145 MHz は 2M', AdifBandForMHz(145) = '2M');
+  Check('433 MHz は 70CM', AdifBandForMHz(433) = '70CM');
+  Check('0 は空', AdifBandForMHz(0) = '');
+  Check('FREQ は MHz・小数 6 桁', AdifFreqText(7023400) = '7.023400',
+    AdifFreqText(7023400));
+  Saved := DefaultFormatSettings.DecimalSeparator;
+  DefaultFormatSettings.DecimalSeparator := ',';
+  try
+    Check('小数点が「,」の地域でも FREQ は「.」', AdifFreqText(14025000) = '14.025000',
+      AdifFreqText(14025000));
+  finally
+    DefaultFormatSettings.DecimalSeparator := Saved;
+  end;
+  Item := BuildContactAt('JA9XYZ', EncodeDate(2026, 9, 23), 'CW', '40M', '', 7023400);
+  Check('周波数があれば FREQ と BAND を書く', (AdifValue(Item, 'FREQ') = '7.023400') and
+    (AdifValue(Item, 'BAND') = '40M'));
+  Item := BuildContactAt('JA9XYZ', EncodeDate(2026, 9, 23), 'CW', '40M', '', 0);
+  Check('周波数が無ければ FREQ は書かない', AdifValue(Item, 'FREQ') = '');
+end;
+
 { 無線機の詳しい接続設定の確かめ・変換・保存（要件 FR-T.5）。Hamlib は
   使いません（渡るところは `rig_check` が確かめる）。
   Checking, converting and storing the detailed rig settings (FR-T.5); no
@@ -5301,6 +5334,7 @@ begin
     TestExtensionSeats;
     TestTxGate;
     TestRigConfig;
+    TestRigFrequency;
   finally
     Meta.Free;
   end;

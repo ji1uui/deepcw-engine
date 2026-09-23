@@ -286,6 +286,23 @@ function BuildContact(const Callsign: string; MomentUtc: TDateTime;
   const Mode: string = 'CW'; const Band: string = '';
   const Subdivision: string = ''): TAdifRecord;
 
+{ 無線機から読んだ周波数（Hz）も書きます（要件 FR-T.7）。0 以下なら `FREQ` は
+  書きません。/ Also writes the frequency read from the rig (Hz, FR-T.7); at
+  0 or below no `FREQ` is written. }
+function BuildContactAt(const Callsign: string; MomentUtc: TDateTime;
+  const Mode, Band, Subdivision: string; FreqHz: Double): TAdifRecord;
+
+{ 周波数（MHz）の ADIF のバンド名（ADIF 3.1 の Band 列挙）。どのバンドにも
+  入らなければ空。/ The ADIF band name for a frequency in MHz (the ADIF 3.1
+  Band enumeration); empty when it is in none. }
+function AdifBandForMHz(MHz: Double): string;
+
+{ ADIF の `FREQ` の書き方（MHz、小数点は必ず「.」、小数 6 桁）。
+  **地域の設定に左右されません**（小数点が「,」の地域でも「.」）。
+  How ADIF writes `FREQ`: MHz, always a '.' decimal point, 6 decimals.
+  **Independent of the locale** ('.' even where the decimal mark is ','). }
+function AdifFreqText(FreqHz: Double): string;
+
 type
   { 日本の第 2 行政区分コードの種別（要件 FR-E.7）。
 
@@ -451,6 +468,67 @@ begin
   Code := Work;
 end;
 
+type
+  TAdifBand = record
+    Name: string;
+    LowMHz, HighMHz: Double;
+  end;
+
+const
+  { ADIF 3.1 の Band 列挙（アマチュアの割り当てのうち、無線機が出るもの）。
+    The ADIF 3.1 Band enumeration (the amateur allocations a rig covers). }
+  ADIF_BANDS: array[0..21] of TAdifBand = (
+    (Name: '2190M'; LowMHz: 0.1357; HighMHz: 0.1378),
+    (Name: '630M'; LowMHz: 0.472; HighMHz: 0.479),
+    (Name: '160M'; LowMHz: 1.8; HighMHz: 2.0),
+    (Name: '80M'; LowMHz: 3.5; HighMHz: 4.0),
+    (Name: '60M'; LowMHz: 5.06; HighMHz: 5.45),
+    (Name: '40M'; LowMHz: 7.0; HighMHz: 7.3),
+    (Name: '30M'; LowMHz: 10.1; HighMHz: 10.15),
+    (Name: '20M'; LowMHz: 14.0; HighMHz: 14.35),
+    (Name: '17M'; LowMHz: 18.068; HighMHz: 18.168),
+    (Name: '15M'; LowMHz: 21.0; HighMHz: 21.45),
+    (Name: '12M'; LowMHz: 24.89; HighMHz: 24.99),
+    (Name: '10M'; LowMHz: 28.0; HighMHz: 29.7),
+    (Name: '6M'; LowMHz: 50.0; HighMHz: 54.0),
+    (Name: '4M'; LowMHz: 70.0; HighMHz: 71.0),
+    (Name: '2M'; LowMHz: 144.0; HighMHz: 148.0),
+    (Name: '1.25M'; LowMHz: 222.0; HighMHz: 225.0),
+    (Name: '70CM'; LowMHz: 420.0; HighMHz: 450.0),
+    (Name: '33CM'; LowMHz: 902.0; HighMHz: 928.0),
+    (Name: '23CM'; LowMHz: 1240.0; HighMHz: 1300.0),
+    (Name: '13CM'; LowMHz: 2300.0; HighMHz: 2450.0),
+    (Name: '9CM'; LowMHz: 3300.0; HighMHz: 3500.0),
+    (Name: '6CM'; LowMHz: 5650.0; HighMHz: 5925.0));
+
+function AdifBandForMHz(MHz: Double): string;
+var
+  Band: TAdifBand;
+begin
+  for Band in ADIF_BANDS do
+    if (MHz >= Band.LowMHz) and (MHz <= Band.HighMHz) then
+      Exit(Band.Name);
+  Result := '';
+end;
+
+function AdifFreqText(FreqHz: Double): string;
+var
+  Settings: TFormatSettings;
+begin
+  Settings := DefaultFormatSettings;
+  Settings.DecimalSeparator := '.';
+  Settings.ThousandSeparator := #0;
+  Result := FormatFloat('0.000000', FreqHz / 1000000, Settings);
+end;
+
+function BuildContactAt(const Callsign: string; MomentUtc: TDateTime;
+  const Mode, Band, Subdivision: string; FreqHz: Double): TAdifRecord;
+begin
+  Result := BuildContact(Callsign, MomentUtc, Mode, Band, Subdivision);
+  if FreqHz > 0 then
+    SetAdifValue(Result, 'FREQ', AdifFreqText(FreqHz));
+end;
+
 function BuildContact(const Callsign: string; MomentUtc: TDateTime;
   const Mode: string; const Band: string;
   const Subdivision: string): TAdifRecord;
@@ -462,13 +540,13 @@ begin
   SetAdifValue(Result, 'QSO_DATE', FormatDateTime('yyyymmdd', MomentUtc));
   SetAdifValue(Result, 'TIME_ON', FormatDateTime('hhnnss', MomentUtc));
   SetAdifValue(Result, 'MODE', Mode);
-  { バンドは分かるときだけ書きます。**この機械は電波の周波数を知りません**
-    （受信機との連携は別仕様）。運用者が選んだものをそのまま残します。空欄を
-    書くより、欄ごと無いほうがログソフトの扱いは素直です。
-    The band is written only when it is known: **this machine does not know the
-    radio's frequency** (the receiver link is a separate specification), so what
-    the operator chose is what is kept. Leaving the field out entirely sits
-    better with a logger than writing it empty. }
+  { バンドは分かるときだけ書きます。無線機から周波数を読めていればそこから、
+    読めなければ運用者が選んだものです（要件 FR-T.7。決めるのは呼ぶ側）。
+    空欄を書くより、欄ごと無いほうがログソフトの扱いは素直です。
+    The band is written only when it is known: from the frequency read from
+    the rig when there is one, otherwise what the operator chose (FR-T.7; the
+    caller decides). Leaving the field out entirely sits better with a logger
+    than writing it empty. }
   if Trim(Band) <> '' then
     SetAdifValue(Result, 'BAND', UpperCase(Trim(Band)));
   { JCC/JCG（要件 FR-E.7）。**`CNTY` だけでは読めません。**形式が `DXCC` の値で

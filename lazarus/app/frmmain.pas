@@ -399,6 +399,15 @@ type
     FSetRigWriteDelay: TSpinEdit;
     FSetRigPostDelay: TSpinEdit;
     FSetRigAutoConnect: TCheckBox;
+    { 無線機の周波数を記録とバンドに使うか（要件 FR-T.7）。使っている間は
+      バンドの選択を無線機に合わせ、運用者の選択は `FManualBand` に控えます。
+      Whether the rig's frequency sets the log and the band (FR-T.7). While it
+      does, the band choice follows the rig and the operator's own choice is
+      kept in `FManualBand`. }
+    FSetRigUseFreq: TCheckBox;
+    FRigBandActive: Boolean;
+    FRigBandName: string;
+    FManualBand: Integer;
     { 拡張の受け口（要件 FR-W・FR-N）。中身は保留。
       The extension seats (FR-W, FR-N); their contents are pending. }
     FSetAlphabet: TComboBox;
@@ -710,6 +719,9 @@ type
     procedure ExtensionChanged(Sender: TObject);
     function ForDecoderAudio(const Samples: TSingleArray; SampleRate: Integer): TSingleArray;
     function ReceiveMutedForTx: Boolean;
+    function RigReading(out FreqHz: Double; out Mode: string): Boolean;
+    function OperatingBand: string;
+    procedure UpdateRigBand;
     procedure RigPowerClick(Sender: TObject);
     function RigConfFromScreen: TRigConf;
     procedure RigConfToScreen(const Conf: TRigConf);
@@ -1412,6 +1424,9 @@ resourcestring
   RsRigSilentAfterOpen = '口は開けましたが、無線機が応答しません。電源を確かめてください（応答すれば自動で待機になります）。';
   RsRigBack = '無線機の応答が戻りました。';
   RsRigConnected = '無線機に繋がりました（応答を確かめました）。';
+  RsRigModeNotCw = '無線機のモードが CW ではありません（%s）。無線機を CW にしてから送ってください。';
+  RsRigBandText = '%s MHz（無線機から）';
+  RsSetRigUseFreq = '無線機の周波数を交信記録とバンドに使う（切ればバンドは手で選ぶ）';
   RsRigPowerAsked = '無線機に電源を入れるよう頼みました。';
   RsRigPowerNotSupported = 'この機種・接続では、遠隔で電源を入れられません。無線機の電源を手で入れてください。';
   RsRigPowerFailed = '電源を入れられませんでした。無線機が応答しないか、この機種・接続では遠隔で電源を入れられません。';
@@ -1497,6 +1512,7 @@ end;
 
 { 実装の後方で定義します。/ Defined further down. }
 function UserMessageFor(const Raw: string): string; forward;
+function BandNameAt(Index: Integer): string; forward;
 function StatusLine(const Raw: string): string; forward;
 
 { TDecodeThread }
@@ -2601,6 +2617,14 @@ begin
   FRxBand.Items.Add('50 MHz');
   FRxBand.Items.Add('144 MHz');
   FRxBand.Items.Add('430 MHz');
+  { WARC バンドは後から足したので末尾です。**保存するのは項目の番号**なので、
+    途中へ挟むと古い設定ファイルの番号がずれます（要件 FR-T.7）。
+    The WARC bands were added later and so sit at the end: **the settings file
+    stores the item's index**, and inserting them in between would shift the
+    indices of older files (FR-T.7). }
+  FRxBand.Items.Add('10 MHz');
+  FRxBand.Items.Add('18 MHz');
+  FRxBand.Items.Add('24 MHz');
   FRxBand.ItemIndex := 0;
   FRxBand.OnChange := @RxContestChanged;
 
@@ -3994,7 +4018,7 @@ begin
   RigGroup := TGroupBox.Create(Scroller);
   RigGroup.Parent := Scroller;
   RegisterCaption(RigGroup, @RsSetRigGroup);
-  RigGroup.Height := 236;
+  RigGroup.Height := 262;
   Stretch(RigGroup, alTop);
   AddLabel(RigGroup, @RsSetRigModel, 14, 10);
   FSetRigModel := AddSpin(RigGroup, 100, 6, 0, 99999, 0, @SettingChanged);
@@ -4041,6 +4065,12 @@ begin
   FSetRigAutoConnect.SetBounds(14, 196, 700, 22);
   RegisterCaption(FSetRigAutoConnect, @RsSetRigAutoConnect);
   FSetRigAutoConnect.OnChange := @SettingChanged;
+  FSetRigUseFreq := TCheckBox.Create(RigGroup);
+  FSetRigUseFreq.Parent := RigGroup;
+  FSetRigUseFreq.SetBounds(14, 222, 700, 22);
+  RegisterCaption(FSetRigUseFreq, @RsSetRigUseFreq);
+  FSetRigUseFreq.Checked := True;
+  FSetRigUseFreq.OnChange := @SettingChanged;
 
   { ── 無線機の詳しい接続設定: 要件 FR-T.5 ──
     **普通は既定のまま。**「機種の既定」と 0 ms は Hamlib へ渡しません。
@@ -4304,6 +4334,7 @@ begin
       RigValues.Free;
     end;
     FSetRigAutoConnect.Checked := Ini.ReadBool('rig', 'connect_at_start', False);
+    FSetRigUseFreq.Checked := Ini.ReadBool('rig', 'use_frequency', True);
     FSetTemplates.Lines.Clear;
     for Index := 1 to 8 do
       if Ini.ReadString('transmit', 'template' + IntToStr(Index), '') <> '' then
@@ -4456,6 +4487,7 @@ begin
         RigValues.Free;
       end;
       Ini.WriteBool('rig', 'connect_at_start', FSetRigAutoConnect.Checked);
+      Ini.WriteBool('rig', 'use_frequency', FSetRigUseFreq.Checked);
       Ini.WriteString('receive', 'alphabet',
         AlphabetKey(TCwAlphabet(Max(0, FSetAlphabet.ItemIndex))));
       Ini.WriteString('receive', 'noise_reduction', FReducer.Key);
@@ -4529,7 +4561,12 @@ begin
         Ini.WriteString('ui', 'language', FLangRemembered);
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('receive', 'watch', FRxWatch.Text);
-      Ini.WriteInteger('receive', 'band', FRxBand.ItemIndex);
+      { 無線機に合わせている間は、運用者の選択を残します（要件 FR-T.7）。
+        While following the rig, the operator's own choice is saved (FR-T.7). }
+      if FRigBandActive then
+        Ini.WriteInteger('receive', 'band', FManualBand)
+      else
+        Ini.WriteInteger('receive', 'band', FRxBand.ItemIndex);
       Ini.WriteBool('receive', 'hide_worked', FRxHideWorked.Checked);
       Ini.WriteString('audio', 'input_device', SelectedDeviceName);
       Ini.WriteBool('receive', 'track_signal', FRxTrack.Checked);
@@ -5410,6 +5447,100 @@ end;
   Whether the station is sending (or has just finished) and decoding is to be
   paused (FR-T.4). **The keyer is reported every time, whether or not the
   setting is on**, so that turning it on takes effect at once. }
+{ 無線機から読めた、新しい周波数とモード（要件 FR-T.7）。**応答している
+  （待機・送信中）ときの、15 秒以内の読み取りだけ**を使います。応答が無い・
+  切れた無線機の周波数は、もう合っているか分からないためです。送っている間は
+  確かめないので、送る直前の読み取りを使います。
+  A fresh frequency and mode read from the rig (FR-T.7). **Only a reading from
+  a rig that answers (ready or sending), at most 15 s old**, is used: the
+  frequency of a silent or lost rig may no longer be right. No check runs while
+  sending, so the reading from just before is used then. }
+function TMainForm.RigReading(out FreqHz: Double; out Mode: string): Boolean;
+const
+  FRESH_MS = 15000;
+var
+  Status: TKeyerStatus;
+begin
+  FreqHz := 0;
+  Mode := '';
+  Result := False;
+  if FKeyer = nil then
+    Exit;
+  Status := FKeyer.Snapshot;
+  if (Status.RigFreqHz <= 0) or (Status.RigReadAt = 0) then
+    Exit;
+  if not ((Status.State = ksSending) or
+          ((Status.State = ksReady) and
+           (GetTickCount64 - Status.RigReadAt <= FRESH_MS))) then
+    Exit;
+  FreqHz := Status.RigFreqHz;
+  Mode := Status.RigMode;
+  Result := True;
+end;
+
+{ 記録し、交信済みを問うバンド（要件 FR-T.7）。無線機の周波数を使っていれば
+  そのバンド、でなければ運用者の選択。**記録するバンドと問うバンドは必ず
+  同じ**です（`WorkedBefore` の注記）。
+  The band to record and to ask "worked?" about (FR-T.7): the rig's band while
+  its frequency is in use, otherwise the operator's choice. **The band recorded
+  and the band asked are always the same** (see `WorkedBefore`). }
+function TMainForm.OperatingBand: string;
+begin
+  if FRigBandActive then
+    Result := FRigBandName
+  else
+    Result := SelectedBand;
+end;
+
+{ 無線機の周波数に合わせてバンドの選択を動かします（要件 FR-T.7）。**運用者の
+  選択は控えて、読めなくなったら戻します**（無線機の値で上書きしたまま保存
+  しない）。使っている間は選択を押せなくします（どちらが効いているか迷わない）。
+  Moves the band choice to follow the rig's frequency (FR-T.7). **The
+  operator's own choice is kept aside and restored once the rig can no longer
+  be read** (never saved overwritten by the rig's value). While in use the
+  choice is disabled, so there is no doubt which one applies. }
+procedure TMainForm.UpdateRigBand;
+var
+  Hz: Double;
+  Mode, Band: string;
+  Index: Integer;
+begin
+  if (FRxBand = nil) or (FSetRigUseFreq = nil) then
+    Exit;
+  Band := '';
+  if FSetRigUseFreq.Checked and RigReading(Hz, Mode) then
+    Band := AdifBandForMHz(Hz / 1000000);
+  if Band <> '' then
+  begin
+    if not FRigBandActive then
+    begin
+      FManualBand := FRxBand.ItemIndex;
+      FRigBandActive := True;
+      FRxBand.Enabled := False;
+    end;
+    Index := 0;
+    while (Index < FRxBand.Items.Count) and
+          (not SameText(BandNameAt(Index), Band)) do
+      Inc(Index);
+    if Index >= FRxBand.Items.Count then
+      Index := 0;
+    if (Band <> FRigBandName) or (FRxBand.ItemIndex <> Index) then
+    begin
+      FRigBandName := Band;
+      FRxBand.ItemIndex := Index;
+      RxContestChanged(nil);
+    end;
+  end
+  else if FRigBandActive then
+  begin
+    FRigBandActive := False;
+    FRigBandName := '';
+    FRxBand.Enabled := True;
+    FRxBand.ItemIndex := FManualBand;
+    RxContestChanged(nil);
+  end;
+end;
+
 function TMainForm.ReceiveMutedForTx: Boolean;
 var
   Status: TKeyerStatus;
@@ -5648,6 +5779,8 @@ procedure TMainForm.RigSendClick(Sender: TObject);
 var
   Clean, Detail: string;
   Problem: TTxProblem;
+  RigHz: Double;
+  RigModeName: string;
 begin
   if not CheckTransmitText(FTxText.Text, FTxCharWpm.Value, Clean, Problem,
     Detail) then
@@ -5659,6 +5792,16 @@ begin
         [Detail, TX_MAX_CHARS, TX_MAX_SECONDS]));
       tpUnexpanded: SetStatus('', '', Format(RsTxProblemUnexpanded, [Detail]));
     end;
+    Exit;
+  end;
+  { 無線機のモードが読めて、CW でなければ送りません（要件 FR-T.7）。CW 以外で
+    送ると、断られて繋がりが「失敗」になる機種があります。読めなければ送ります。
+    Not sent when the rig's mode is read and is not CW (FR-T.7): on some models
+    sending outside CW is refused and the link fails. Unread, it is sent. }
+  if RigReading(RigHz, RigModeName) and (RigModeName <> '') and
+     not SameText(RigModeName, 'CW') and not SameText(RigModeName, 'CWR') then
+  begin
+    SetStatus('', '', Format(RsRigModeNotCw, [RigModeName]));
     Exit;
   end;
   if not FKeyer.Send(Clean) then
@@ -5699,6 +5842,8 @@ procedure TMainForm.UpdateRigStatus;
 var
   Status: TKeyerStatus;
   Caption_: string;
+  RigHz: Double;
+  RigModeName: string;
 begin
   if (FKeyer = nil) or (FRigStatus = nil) then
     Exit;
@@ -5724,6 +5869,10 @@ begin
   end;
   if (Status.State = ksReady) and not Status.CanProbe then
     Caption_ := Caption_ + RsRigNoProbe;
+  { 読めた周波数とモード（要件 FR-T.7）。/ The frequency and mode read (FR-T.7). }
+  if RigReading(RigHz, RigModeName) then
+    Caption_ := Caption_ + '  ' + AdifFreqText(RigHz) + ' MHz ' + RigModeName;
+  UpdateRigBand;
   if Status.Stop = ssNo then
     Caption_ := Caption_ + RsRigCannotStop;
   if FRigStatus.Caption <> Caption_ then
@@ -6800,17 +6949,23 @@ end;
 
 { 選ばれている運用バンドの ADIF 名。「指定なし」なら空を返します。
   The ADIF name of the band selected, or empty for "not set". }
-function TMainForm.SelectedBand: string;
+{ 選択肢の番号の ADIF 名。選択肢の並びと同じ順です。
+  The ADIF name of a choice's index, in the same order as the choices. }
+function BandNameAt(Index: Integer): string;
 const
-  { 選択肢の並びと同じ順です。ADIF の名前をそのまま使います。
-    In the same order as the choices, using ADIF's own names. }
-  NAMES: array[0..9] of string = ('', '160M', '80M', '40M', '20M', '15M',
-    '10M', '6M', '2M', '70CM');
+  NAMES: array[0..12] of string = ('', '160M', '80M', '40M', '20M', '15M',
+    '10M', '6M', '2M', '70CM', '30M', '17M', '12M');
 begin
-  if (FRxBand = nil) or (FRxBand.ItemIndex < Low(NAMES)) or
-     (FRxBand.ItemIndex > High(NAMES)) then
+  if (Index < Low(NAMES)) or (Index > High(NAMES)) then
     Exit('');
-  Result := NAMES[FRxBand.ItemIndex];
+  Result := NAMES[Index];
+end;
+
+function TMainForm.SelectedBand: string;
+begin
+  if FRxBand = nil then
+    Exit('');
+  Result := BandNameAt(FRxBand.ItemIndex);
 end;
 
 { 交信済みか。**運用バンドを選んでいれば、そのバンドだけを見ます。**7 MHz で
@@ -6839,7 +6994,7 @@ function TMainForm.WorkedBefore(const Callsign: string): Boolean;
 begin
   if FLog = nil then
     Exit(False);
-  Result := FLog.WorkedCountOn(Callsign, SelectedBand) > 0;
+  Result := FLog.WorkedCountOn(Callsign, OperatingBand) > 0;
 end;
 
 procedure TMainForm.RxContestChanged(Sender: TObject);
@@ -6971,7 +7126,7 @@ begin
       taking the date from every band would offer, as the evidence of a duplicate,
       a date on which that band was not worked. }
     FRxLogInfo.Caption := Format(RsLogWorkedOn,
-      [Call, Note, FLog.LastWorkedOn(Call, SelectedBand)])
+      [Call, Note, FLog.LastWorkedOn(Call, OperatingBand)])
   else
     FRxLogInfo.Caption := Call + Note;
   if FSetLogInfo <> nil then
@@ -7024,7 +7179,10 @@ var
   Code: string;
   Entered: string;
   Typed: Boolean;
+  RigHz: Double;
+  RigModeName: string;
 begin
+  RigHz := 0;
   Call := CallsignToLog;
   if Call = '' then
     Exit;
@@ -7047,8 +7205,14 @@ begin
   Entered := Trim(FRxSubdivision.Text);
   Typed := Entered <> '';
   ParseJapanSubdivision(Entered, Code);
-  Item := BuildContact(Call, Moment, 'CW', SelectedBand,
-    FRxSubdivision.Text);
+  { 無線機の周波数を使っているなら、その周波数も残します（要件 FR-T.7）。
+    **バンドと周波数は同じ読み取りから**採ります（別々に採ると食い違いうる）。
+    With the rig's frequency in use it is recorded too (FR-T.7). **Band and
+    frequency come from the same reading** (taken apart they could disagree). }
+  if not (FRigBandActive and RigReading(RigHz, RigModeName)) then
+    RigHz := 0;
+  Item := BuildContactAt(Call, Moment, 'CW', OperatingBand,
+    FRxSubdivision.Text, RigHz);
   if not FLog.Add(Item) then
   begin
     LogDiagnostic(RsCtxContactLog, FLog.LastError);
@@ -7089,7 +7253,11 @@ begin
   if Typed and (Code = '') then
     SetStatus('', '', Format(RsLoggedBadSubdivision,
       [Call, Entered]))
-  else if SelectedBand <> '' then
+  else if RigHz > 0 then
+    SetStatus('', '', Format(RsLoggedWithBand,
+      [Call, Format(RsRigBandText, [AdifFreqText(RigHz)]),
+       FormatDateTime('yyyy-mm-dd hh":"nn', Moment)]))
+  else if OperatingBand <> '' then
     SetStatus('', '', Format(RsLoggedWithBand,
       [Call, FRxBand.Text, FormatDateTime('yyyy-mm-dd hh":"nn', Moment)]))
   else

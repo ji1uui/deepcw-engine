@@ -122,6 +122,22 @@ begin
   Result := Keyer.Snapshot.State = State;
 end;
 
+function WaitForFreq(Keyer: TRigKeyer; Hz: Integer; const Mode: string;
+  Seconds: Double): Boolean;
+var
+  Until_: QWord;
+  Status: TKeyerStatus;
+begin
+  Until_ := GetTickCount64 + QWord(Round(Seconds * 1000));
+  repeat
+    Status := Keyer.Snapshot;
+    if (Round(Status.RigFreqHz) = Hz) and (Status.RigMode = Mode) then
+      Exit(True);
+    Sleep(50);
+  until GetTickCount64 > Until_;
+  Result := False;
+end;
+
 function WaitForPower(Keyer: TRigKeyer; Power: TPowerResult; Seconds: Double): Boolean;
 var
   Until_: QWord;
@@ -373,6 +389,10 @@ begin
     Check('応答を確かめてから「待機」になる', WaitFor(Keyer, ksReady, 10),
       Keyer.Snapshot.Detail);
     Check('待機中は電源を頼めない', not Keyer.PowerOn);
+    Keyer.Stop;
+    Sleep(300);
+    Check('送っていなければ、止めても無線機へ止める命令を送らない',
+      CountLines(RelayLog, 'stop_morse') = 0, IntToStr(CountLines(RelayLog, 'stop_morse')));
     Speeds := RelayCount(RelayLog, 'KEYSPD');
 
     WriteLn('  途中で応答しなくなる / the rig stops answering');
@@ -381,6 +401,15 @@ begin
       WaitFor(Keyer, ksNoAnswer, 10), IntToStr(Ord(Keyer.Snapshot.State)));
     Check('応答なしのときは送らない（断る）', not Keyer.Send('CQ'));
     Check('口は閉じない（失敗にしない）', Keyer.Snapshot.Fault = kfNone);
+    { 送っていないのに「止める」を押しても（音の停止ボタンも無線機を止める）、
+      応答しない無線機へ止める命令を送って「失敗」にしない（付録 BU.1）。
+      Pressing a stop while nothing is being sent (the audio stop button stops
+      the rig too) must not send a stop to a silent rig and fail (BU.1). }
+    Keyer.Stop;
+    Sleep(2500);
+    Check('送っていなければ、止めても「応答なし」のまま（止める命令を送らない）',
+      (Keyer.Snapshot.State = ksNoAnswer) and (Keyer.Snapshot.Fault = kfNone),
+      IntToStr(Ord(Keyer.Snapshot.State)) + ' ' + Keyer.Snapshot.Detail);
     SetMode(Control, 'pass');
     Check('応答が戻れば「待機」に戻る（6 秒以内）', WaitFor(Keyer, ksReady, 6),
       IntToStr(Ord(Keyer.Snapshot.State)));
@@ -444,6 +473,7 @@ var
   HandedAtStop: Integer;
   Started: QWord;
   Elapsed: Double;
+  Output_: string;
 begin
   I := 1;
   while I <= CommandLineArgCount do
@@ -497,6 +527,19 @@ begin
     Check('速度を無線機に合わせた', Keyer.Snapshot.SpeedSet);
     Check('無線機に訊き直した速度で間合いを計る', Keyer.Snapshot.RigWpm = 40,
       IntToStr(Keyer.Snapshot.RigWpm));
+    { 周波数とモード（要件 FR-T.7）。ダミーは 145 MHz・FM で始まります。別の
+      口から 7.0234 MHz・CW にすると、次の確かめ（5 秒以内）で読める。
+      Frequency and mode (FR-T.7). The dummy starts at 145 MHz FM; set to
+      7.0234 MHz CW from another client, the next check (within 5 s) reads it. }
+    Status := Keyer.Snapshot;
+    Check('繋いだときに周波数とモードを読む（145 MHz・FM）',
+      (Round(Status.RigFreqHz) = 145000000) and (Status.RigMode = 'FM'),
+      Format('%.0f %s', [Status.RigFreqHz, Status.RigMode]));
+    RunCommand('rigctl', ['-m', '2', '-r', Format('localhost:%d', [Port]),
+      'F', '7023400', 'M', 'CW', '500'], Output_);
+    Check('無線機で周波数とモードを変えれば、読み取りも変わる（7 秒以内）',
+      WaitForFreq(Keyer, 7023400, 'CW', 7),
+      Format('%.0f %s', [Keyer.Snapshot.RigFreqHz, Keyer.Snapshot.RigMode]));
     Started := GetTickCount64;
     Check('送る', Keyer.Send('CQ DE JA1ABC K'));
     Check('送っている間は、次の文を受け付けない', not Keyer.Send('TEST'));
