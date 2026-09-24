@@ -172,6 +172,17 @@ begin
   end;
 end;
 
+{ 立てたダミーの無線機を CW にします（ダミーは FM で始まり、CW 以外では送らない。
+  付録 BV.1）。/ Puts the dummy rig just started into CW (it starts in FM, and
+  nothing is sent outside CW; appendix BV.1). }
+procedure SetRigCw;
+var
+  Output_: string;
+begin
+  RunCommand('rigctl', ['-m', '2', '-r', Format('localhost:%d', [Port]),
+    'M', 'CW', '500'], Output_);
+end;
+
 function Settings: TRigSettings;
 begin
   Result.Model := HAMLIB_MODEL_NETRIGCTL;
@@ -347,6 +358,7 @@ begin
   RelayPort := Port + 1;
   SetMode(Control, 'off');
   Daemon := StartRigctld(DaemonLog);
+  SetRigCw;
   Relay := TProcess.Create(nil);
   Relay.Executable := 'python3';
   Relay.Parameters.Add(ProxyPath);
@@ -474,6 +486,7 @@ var
   Started: QWord;
   Elapsed: Double;
   Output_: string;
+  Refusals: Integer;
 begin
   I := 1;
   while I <= CommandLineArgCount do
@@ -609,6 +622,7 @@ begin
       Keyer.Snapshot.KeyedUntil > 0);
 
     Daemon := StartRigctld(LogB);
+    SetRigCw;
     Sleep(1500);
     Check('繋ぎ直さない（「失敗」のまま）', Keyer.Snapshot.State = ksFailed);
     Check('失敗のあとは送らない（断る）', not Keyer.Send('CQ'));
@@ -627,6 +641,33 @@ begin
     Sent := MorseSent(LogB);
     try
       Check('新しい文だけが届いた', Sent.CommaText = 'TU', Sent.CommaText);
+    finally
+      Sent.Free;
+    end;
+    { モードは**送る直前に読み直して**確かめる（付録 BV.1）。5 秒ごとの読み取り
+      だけで判じると、切り替えた直後に取り違える。
+      The mode is **read again right before sending** (appendix BV.1): judged
+      from the 5-second reading alone, a switch just made is misread. }
+    RunCommand('rigctl', ['-m', '2', '-r', Format('localhost:%d', [Port]),
+      'M', 'FM', '15000'], Output_);
+    Refusals := Keyer.Snapshot.Refusals;
+    Check('FM に切り替えた直後でも、送る直前に読み直して断る', Keyer.Send('TEST') and
+      WaitFor(Keyer, ksReady, 5) and (Keyer.Snapshot.Refusals = Refusals + 1) and
+      (Keyer.Snapshot.RefusedMode = 'FM'), Keyer.Snapshot.RefusedMode);
+    Sent := MorseSent(LogB);
+    try
+      Check('断ったときは 1 語も渡さない', Sent.IndexOf('TEST') < 0, Sent.CommaText);
+    finally
+      Sent.Free;
+    end;
+    Check('断っても繋がりは失敗にしない', Keyer.Snapshot.Fault = kfNone);
+    RunCommand('rigctl', ['-m', '2', '-r', Format('localhost:%d', [Port]),
+      'M', 'CW', '500'], Output_);
+    Check('CW に切り替えた直後なら、すぐ送れる', Keyer.Send('TEST') and
+      WaitFor(Keyer, ksReady, 8) and (Keyer.Snapshot.Refusals = Refusals + 1));
+    Sent := MorseSent(LogB);
+    try
+      Check('CW では渡す', Sent.IndexOf('TEST') >= 0, Sent.CommaText);
     finally
       Sent.Free;
     end;

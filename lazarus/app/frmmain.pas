@@ -373,6 +373,7 @@ type
       To announce each change of state and power result once. }
     FRigLastState: TKeyerState;
     FRigLastPower: TPowerResult;
+    FRigLastRefusals: Integer;
     FRigAutoConnectPending: Boolean;
     { 同じ失敗を診断へ 2 度書かないため。/ Not to log the same failure twice. }
     FRigFaultLogged: Boolean;
@@ -405,6 +406,16 @@ type
       does, the band choice follows the rig and the operator's own choice is
       kept in `FManualBand`. }
     FSetRigUseFreq: TCheckBox;
+    { 記録する RST（要件 FR-E.11）。受けたものは読めた RST、送ったものは送信
+      タブの RST が入り、**打てばそちらが勝ちます**（`*Typed`）。
+      The reports to record (FR-E.11): received from the RST read, sent from
+      the transmit tab's RST; **what is typed wins** (`*Typed`). }
+    FRxRstRcvd: TEdit;
+    FRxRstSent: TEdit;
+    FRxRstInfo: TLabel;
+    FRstRcvdTyped: Boolean;
+    FRstSentTyped: Boolean;
+    FRstFilling: Boolean;
     FRigBandActive: Boolean;
     FRigBandName: string;
     FManualBand: Integer;
@@ -427,6 +438,12 @@ type
     FRxConfirmSpeed: TComboBox;
     FRxAntiAlias: TCheckBox;
     FRxTranscript: TTranscriptView;
+    FRxSheet: TTabSheet;
+    { ウォーターフォールの枠。受信テキストに高さを譲るために手元に控えます
+      （付録 BV.4）。/ The waterfall's panel, kept to hand so that it can give
+      height to the received text (appendix BV.4). }
+    FRxWaterfallPanel: TPanel;
+    FAdjustingLayout: Boolean;
     FRxShowDoubt: TCheckBox;
     FRxAlign: TCheckBox;
     FRxDoubtStrength: TTrackBar;
@@ -719,6 +736,8 @@ type
     procedure ExtensionChanged(Sender: TObject);
     function ForDecoderAudio(const Samples: TSingleArray; SampleRate: Integer): TSingleArray;
     function ReceiveMutedForTx: Boolean;
+    procedure CheckTranscriptHeight(Problems: TStringList);
+    procedure RxTranscriptResized(Sender: TObject);
     function RigReading(out FreqHz: Double; out Mode: string): Boolean;
     function OperatingBand: string;
     procedure UpdateRigBand;
@@ -737,6 +756,9 @@ type
     function WorkedBefore(const Callsign: string): Boolean;
     procedure RxWorkedClick(Sender: TObject);
     procedure RxSubdivisionChanged(Sender: TObject);
+    procedure RxRstChanged(Sender: TObject);
+    procedure TxRstChanged(Sender: TObject);
+    procedure FillRstFields;
     { 画面の言語を変えます（要件 NFR-7.6）。**押したその場で入れ直します。**
       Changes the language of the screen (NFR-7.6), **putting the words back in
       place as it is chosen.** }
@@ -1424,6 +1446,11 @@ resourcestring
   RsRigSilentAfterOpen = '口は開けましたが、無線機が応答しません。電源を確かめてください（応答すれば自動で待機になります）。';
   RsRigBack = '無線機の応答が戻りました。';
   RsRigConnected = '無線機に繋がりました（応答を確かめました）。';
+  RsRxRstRcvd = '受けた RST';
+  RsRxRstSent = '送った RST';
+  RsRxRstNote = '受けた RST は読めたもの、送った RST は送信タブのものが入ります（直せます）。';
+  RsRxRstBad = 'RST は 3 桁で書いてください（例: 599・5NN）。このままでは記録に書きません。';
+  RsLoggedBadRst = '%0:s との交信を記録しました。RST「%1:s」は形が違うので書いていません。';
   RsRigModeNotCw = '無線機のモードが CW ではありません（%s）。無線機を CW にしてから送ってください。';
   RsRigBandText = '%s MHz（無線機から）';
   RsSetRigUseFreq = '無線機の周波数を交信記録とバンドに使う（切ればバンドは手で選ぶ）';
@@ -1493,6 +1520,15 @@ resourcestring
   変わるものは 1 か所へ。**
   The line-ending fix (`AsLines`) lives in `DeepCW.Platform`: **what behaves
   differently by platform goes in one place.** }
+
+const
+  { 受信テキストに必ず残す高さと、ウォーターフォールの枠の既定・最小の高さ
+    （96 dpi での画素。付録 BV.4）。/ The height always left to the received
+    text, and the waterfall panel's default and least heights (pixels at
+    96 dpi; appendix BV.4). }
+  RX_TRANSCRIPT_MIN_96 = 80;
+  RX_WATERFALL_DEFAULT_96 = 230;
+  RX_WATERFALL_MIN_96 = 120;
 
 { ノイズ低減の選択肢の鍵。**画面の項目と同じ順**です（要件 FR-N）。
   The noise-reduction keys, **in the order of the items on screen** (FR-N). }
@@ -1637,7 +1673,12 @@ begin
     The control rows inside the group boxes are laid out at fixed offsets and
     need roughly this much width to stay readable. }
   Constraints.MinWidth := 1040;
-  Constraints.MinHeight := 560;
+  { 受信テキスト（80）とウォーターフォールの最小（120）が両方入る高さ
+    （付録 BV.4。以前の 560 では受信テキストが見えなくなっていた）。
+    Tall enough for both the received text (80) and the waterfall's least
+    height (120) (appendix BV.4; at the former 560 the received text
+    disappeared). }
+  Constraints.MinHeight := 660;
   Position := poScreenCenter;
 
   FDiagnostics := TStringList.Create;
@@ -1872,7 +1913,7 @@ begin
   FPages.Align := alClient;
   FPages.AddTabSheet.Free;      { 仮のシートを取り除きます / drop the placeholder sheet }
   BuildTransmitTab;
-  BuildReceiveTab;
+  FRxSheet := BuildReceiveTab;
   BuildPracticeTab;
   BuildFistTab;
   FSettingsSheet := BuildSettingsTab;
@@ -2068,6 +2109,7 @@ begin
   FTxRst.Parent := Compose;
   FTxRst.SetBounds(486, 4, 50, 28);
   FTxRst.Text := '599';
+  FTxRst.OnChange := @TxRstChanged;
   AddButton(Compose, @RsTxFromRx, 544, 4, 90, @TxFromRxClick);
   AddButton(Compose, @RsTxMake, 642, 4, 70, @TxAutoClick);
   AddLabel(Compose, @RsTxTemplateLabel, 726, 8);
@@ -2313,7 +2355,8 @@ begin
   WaterfallPanel := TPanel.Create(Sheet);
   WaterfallPanel.Parent := Sheet;
   WaterfallPanel.Align := alBottom;
-  WaterfallPanel.Height := 230;
+  WaterfallPanel.Height := RX_WATERFALL_DEFAULT_96;
+  FRxWaterfallPanel := WaterfallPanel;
   WaterfallPanel.BevelOuter := bvNone;
 
   { 同調の操作はウォーターフォールのすぐ上に置きます。読みたい信号を選ぶ
@@ -2452,7 +2495,7 @@ begin
     と、状態の文が行の外へ出て、一度も見えませんでした**（付録 AW.3）。
     Two rows: the controls above, the replay's state below. **On one row the
     state ran off the end and was never once visible** (appendix AW.3). }
-  FindTools.Height := 62;
+  FindTools.Height := 94;
   StackBelow(FindTools);
   FindTools.Align := alTop;
   FindTools.BevelOuter := bvNone;
@@ -2521,6 +2564,25 @@ begin
   FRxSubdivisionInfo := AddLabel(FindTools, '', 190, 40);
   RxSubdivisionChanged(nil);
 
+  { 送った・受けた RST（要件 FR-E.11）。記録の行に置きます（見て、直して、
+    記録する）。/ The reports sent and received (FR-E.11), on the logging row:
+    look, correct, record. }
+  AddLabel(FindTools, @RsRxRstRcvd, 6, 72);
+  FRxRstRcvd := TEdit.Create(FindTools);
+  FRxRstRcvd.Parent := FindTools;
+  FRxRstRcvd.SetBounds(110, 68, 60, 26);
+  FRxRstRcvd.MaxLength := 3;
+  FRxRstRcvd.CharCase := ecUppercase;
+  FRxRstRcvd.OnChange := @RxRstChanged;
+  AddLabel(FindTools, @RsRxRstSent, 190, 72);
+  FRxRstSent := TEdit.Create(FindTools);
+  FRxRstSent.Parent := FindTools;
+  FRxRstSent.SetBounds(294, 68, 60, 26);
+  FRxRstSent.MaxLength := 3;
+  FRxRstSent.CharCase := ecUppercase;
+  FRxRstSent.OnChange := @RxRstChanged;
+  FRxRstInfo := AddLabel(FindTools, '', 370, 72);
+
   { 読みの札（`FRxSubdivisionInfo`）が伸びる先を空けておきます。**実機で
     重なりました。**組み方の検査は、部品が生まれたときの文字しか見ていない
     ——起動時の「相手局の市郡区番号（任意）」は短く、打ってから出る
@@ -2544,6 +2606,7 @@ begin
   RegisterCaption(FRxReplayInfo, @RsRxReplayHint);
 
   FRxTranscript := TTranscriptView.Create(TextPanel);
+  FRxTranscript.OnResize := @RxTranscriptResized;
   FRxTranscript.Parent := TextPanel;
   FRxTranscript.OnCharChosen := @RxCharChosen;
   FRxTranscript.Font.Size := 14;
@@ -5504,13 +5567,21 @@ var
   Hz: Double;
   Mode, Band: string;
   Index: Integer;
+  Reading: Boolean;
 begin
   if (FRxBand = nil) or (FSetRigUseFreq = nil) then
     Exit;
+  { 読めていれば、**アマチュアバンドの外でも無線機に従います**（バンドは空、
+    記録には FREQ だけ）。外にいるときに手の選択へ戻すと、古い選択のバンドで
+    記録してしまいます（付録 BV.2）。
+    With a reading, **the rig is followed even outside the amateur bands**
+    (empty band, only FREQ in the log): falling back to the hand choice there
+    would record under a stale band (appendix BV.2). }
   Band := '';
-  if FSetRigUseFreq.Checked and RigReading(Hz, Mode) then
+  Reading := FSetRigUseFreq.Checked and RigReading(Hz, Mode);
+  if Reading then
     Band := AdifBandForMHz(Hz / 1000000);
-  if Band <> '' then
+  if Reading then
   begin
     if not FRigBandActive then
     begin
@@ -5779,8 +5850,6 @@ procedure TMainForm.RigSendClick(Sender: TObject);
 var
   Clean, Detail: string;
   Problem: TTxProblem;
-  RigHz: Double;
-  RigModeName: string;
 begin
   if not CheckTransmitText(FTxText.Text, FTxCharWpm.Value, Clean, Problem,
     Detail) then
@@ -5794,16 +5863,12 @@ begin
     end;
     Exit;
   end;
-  { 無線機のモードが読めて、CW でなければ送りません（要件 FR-T.7）。CW 以外で
-    送ると、断られて繋がりが「失敗」になる機種があります。読めなければ送ります。
-    Not sent when the rig's mode is read and is not CW (FR-T.7): on some models
-    sending outside CW is refused and the link fails. Unread, it is sent. }
-  if RigReading(RigHz, RigModeName) and (RigModeName <> '') and
-     not SameText(RigModeName, 'CW') and not SameText(RigModeName, 'CWR') then
-  begin
-    SetStatus('', '', Format(RsRigModeNotCw, [RigModeName]));
-    Exit;
-  end;
+  { モードの確かめは鍵のスレッドが**送る直前に読み直して**行います（付録
+    BV.1）。ここで 5 秒ごとの読み取りを見て判じると、切り替えた直後に取り違え
+    ます。断ったことは `UpdateRigStatus` が言います。
+    The mode is checked by the keyer thread, **read again right before
+    sending** (appendix BV.1); judging here from the 5-second reading would
+    misread a switch just made. `UpdateRigStatus` reports a refusal. }
   if not FKeyer.Send(Clean) then
   begin
     SetStatus('', '', RsRigNotReady);
@@ -5925,6 +5990,13 @@ begin
     else
       SetStatus('', '', RsRigFailSend);
     end;
+  end;
+  { 送る直前にモードで断った（付録 BV.1）。/ Refused on the mode right before
+    sending (appendix BV.1). }
+  if Status.Refusals <> FRigLastRefusals then
+  begin
+    FRigLastRefusals := Status.Refusals;
+    SetStatus('', '', Format(RsRigModeNotCw, [Status.RefusedMode]));
   end;
   { 電源を頼んだ結果（要件 FR-T.6）。変わったときに 1 度だけ言います。
     The outcome of a power-on request (FR-T.6), said once when it changes. }
@@ -7103,6 +7175,7 @@ var
 begin
   if FRxWorked = nil then
     Exit;
+  FillRstFields;
   Call := CallsignToLog;
   FRxWorked.Enabled := Call <> '';
   FRxCopyCall.Enabled := Call <> '';
@@ -7152,6 +7225,64 @@ end;
   **Telling someone after the fact that it could not be recorded comes too
   late.** With "city" or "gun" appearing as they type, a wrong digit count
   shows itself there and then. }
+{ RST の欄を打ったとき（要件 FR-E.11）。**打った欄は、以後自動では書き換え
+  ません**（記録すれば戻る）。形が違えばそう言います——記録を押してから
+  「書けませんでした」では遅い。
+  An RST box was typed in (FR-E.11). **A typed box is no longer filled
+  automatically** (until the contact is recorded). A malformed value is said at
+  once: "could not be written" after pressing record comes too late. }
+procedure TMainForm.RxRstChanged(Sender: TObject);
+begin
+  if (FRxRstRcvd = nil) or (FRxRstSent = nil) or (FRxRstInfo = nil) then
+    Exit;
+  if not FRstFilling then
+  begin
+    if Sender = FRxRstRcvd then
+      FRstRcvdTyped := True
+    else if Sender = FRxRstSent then
+      FRstSentTyped := True;
+  end;
+  if ((Trim(FRxRstRcvd.Text) <> '') and (RstDigits(FRxRstRcvd.Text) = '')) or
+     ((Trim(FRxRstSent.Text) <> '') and (RstDigits(FRxRstSent.Text) = '')) then
+    FRxRstInfo.Caption := RsRxRstBad
+  else
+    FRxRstInfo.Caption := RsRxRstNote;
+end;
+
+procedure TMainForm.TxRstChanged(Sender: TObject);
+begin
+  FillRstFields;
+end;
+
+{ 打たれていない RST の欄を埋めます。受けたものは読めた RST（読めなければ空。
+  **599 で埋めない**——付録 S.4 と同じ考え）、送ったものは送信タブの RST。
+  Fills the RST boxes not typed in: received from the RST read (empty if none;
+  **never filled with 599**, as in appendix S.4), sent from the transmit tab's
+  RST. }
+procedure TMainForm.FillRstFields;
+var
+  Rcvd, Sent: string;
+begin
+  if (FRxRstRcvd = nil) or (FRxRstSent = nil) then
+    Exit;
+  Rcvd := '';
+  if FExchange.Rst.First >= 0 then
+    Rcvd := RstDigits(FExchange.Rst.Text);
+  Sent := '';
+  if FTxRst <> nil then
+    Sent := RstDigits(FTxRst.Text);
+  FRstFilling := True;
+  try
+    if (not FRstRcvdTyped) and (FRxRstRcvd.Text <> Rcvd) then
+      FRxRstRcvd.Text := Rcvd;
+    if (not FRstSentTyped) and (FRxRstSent.Text <> Sent) then
+      FRxRstSent.Text := Sent;
+  finally
+    FRstFilling := False;
+  end;
+  RxRstChanged(nil);
+end;
+
 procedure TMainForm.RxSubdivisionChanged(Sender: TObject);
 var
   Code: string;
@@ -7181,6 +7312,7 @@ var
   Typed: Boolean;
   RigHz: Double;
   RigModeName: string;
+  RstSent, RstRcvd, BadRst: string;
 begin
   RigHz := 0;
   Call := CallsignToLog;
@@ -7211,8 +7343,24 @@ begin
     frequency come from the same reading** (taken apart they could disagree). }
   if not (FRigBandActive and RigReading(RigHz, RigModeName)) then
     RigHz := 0;
+  { RST は交信モードの行にだけあります（要件 FR-E.11）。形の違うものは
+    書かず、あとでそう言います（交信そのものは残す）。
+    The reports exist only on the contact mode row (FR-E.11). A malformed one
+    is not written, and that is said afterwards (the contact itself is kept). }
+  RstSent := '';
+  RstRcvd := '';
+  BadRst := '';
+  if FMode = rmContact then
+  begin
+    RstSent := RstDigits(FRxRstSent.Text);
+    RstRcvd := RstDigits(FRxRstRcvd.Text);
+    if (Trim(FRxRstRcvd.Text) <> '') and (RstRcvd = '') then
+      BadRst := Trim(FRxRstRcvd.Text)
+    else if (Trim(FRxRstSent.Text) <> '') and (RstSent = '') then
+      BadRst := Trim(FRxRstSent.Text);
+  end;
   Item := BuildContactAt(Call, Moment, 'CW', OperatingBand,
-    FRxSubdivision.Text, RigHz);
+    FRxSubdivision.Text, RigHz, RstSent, RstRcvd);
   if not FLog.Add(Item) then
   begin
     LogDiagnostic(RsCtxContactLog, FLog.LastError);
@@ -7230,6 +7378,11 @@ begin
     would be filed under the previous station's city. }
   FRxSubdivision.Text := '';
   RxSubdivisionChanged(nil);
+  { RST も局ごとです。打った印を外し、元の出どころから埋め直します。
+    The reports are per station too: the typed marks are cleared and the boxes
+    refilled from their sources. }
+  FRstRcvdTyped := False;
+  FRstSentTyped := False;
   UpdateLogInfo;
   UpdateRate(True);
   FBandMapAt := 0;
@@ -7253,6 +7406,8 @@ begin
   if Typed and (Code = '') then
     SetStatus('', '', Format(RsLoggedBadSubdivision,
       [Call, Entered]))
+  else if BadRst <> '' then
+    SetStatus('', '', Format(RsLoggedBadRst, [Call, BadRst]))
   else if RigHz > 0 then
     SetStatus('', '', Format(RsLoggedWithBand,
       [Call, Format(RsRigBandText, [AdifFreqText(RigHz)]),
@@ -8676,8 +8831,74 @@ begin
         Result.Add(Format('[%s] %s',
           [FPages.Pages[I].Caption, DescribeProblem(Problems[J])]));
     end;
+    { 受信テキストの高さ（付録 BV.4）。**重なりを見る検査は、欄が押し潰されても
+      気付かない**——受信タブへ行を 1 つ足したら、受信テキストが数画素に潰れた
+      のに 0 件と言いました。いちばん狭い場合（「デコード中」の行が出ている・
+      窓がいちばん低い）でも、決めた高さがあることを確かめます。
+      The received text's height (appendix BV.4). **A check for overlaps never
+      notices a squashed box**: one more row on the receive tab crushed the
+      received text to a few pixels while the check said 0. Even in the
+      tightest case (the "decoding" row showing, the window at its lowest) the
+      set height must be there. }
+    CheckTranscriptHeight(Result);
   finally
     FPages.ActivePageIndex := Was;
+  end;
+end;
+
+{ 受信テキストに高さを残します（付録 BV.4）。**狭くなったらウォーターフォールが
+  譲り**（最小まで）、広くなれば既定の高さへ戻します。受信テキストは受信タブの
+  いちばん大事な欄で、欄が 1 つ増えるたびに押し潰されていました。
+  Keeps height for the received text (appendix BV.4). **When space runs short
+  the waterfall gives way** (down to its least height), and returns to its
+  default when there is room. The received text is the most important box on
+  the receive tab, and every added row was crushing it. }
+procedure TMainForm.RxTranscriptResized(Sender: TObject);
+var
+  Wanted: Integer;
+begin
+  if FAdjustingLayout or (FRxWaterfallPanel = nil) or (FRxTranscript = nil) then
+    Exit;
+  Wanted := EnsureRange(
+    FRxWaterfallPanel.Height + FRxTranscript.Height - Scale96ToForm(RX_TRANSCRIPT_MIN_96),
+    Scale96ToForm(RX_WATERFALL_MIN_96), Scale96ToForm(RX_WATERFALL_DEFAULT_96));
+  if Wanted = FRxWaterfallPanel.Height then
+    Exit;
+  FAdjustingLayout := True;
+  try
+    FRxWaterfallPanel.Height := Wanted;
+  finally
+    FAdjustingLayout := False;
+  end;
+end;
+
+procedure TMainForm.CheckTranscriptHeight(Problems: TStringList);
+var
+  WasHeight, Want: Integer;
+  WasBusy: string;
+
+  procedure Measure(const Situation: string);
+  begin
+    Application.ProcessMessages;
+    Want := Scale96ToForm(RX_TRANSCRIPT_MIN_96);
+    if FRxTranscript.Height < Want then
+      Problems.Add(Format('[%0:s] 受信テキストが低すぎる（%1:s）: %2:d < %3:d 画素',
+        [FRxSheet.Caption, Situation, FRxTranscript.Height, Want]));
+  end;
+
+begin
+  FPages.ActivePage := FRxSheet;
+  WasHeight := Height;
+  WasBusy := FRxBusy.Caption;
+  try
+    FRxBusy.Caption := RsDecodingBusy;
+    Measure(Format('窓 %d', [Height]));
+    Height := Constraints.MinHeight;
+    Measure(Format('窓 %d（最小）', [Height]));
+  finally
+    FRxBusy.Caption := WasBusy;
+    Height := WasHeight;
+    Application.ProcessMessages;
   end;
 end;
 

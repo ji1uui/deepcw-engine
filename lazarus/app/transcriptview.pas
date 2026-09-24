@@ -267,6 +267,10 @@ type
     property Color;
     property Font;
     property TabStop;
+    { 大きさが変わったとき。画面が、受信テキストに高さを残すために使います
+      （付録 BV.4）。/ When the size changes; the screen uses it to keep height
+      for the received text (appendix BV.4). }
+    property OnResize;
   end;
 
 implementation

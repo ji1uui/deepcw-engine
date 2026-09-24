@@ -287,10 +287,14 @@ function BuildContact(const Callsign: string; MomentUtc: TDateTime;
   const Subdivision: string = ''): TAdifRecord;
 
 { 無線機から読んだ周波数（Hz）も書きます（要件 FR-T.7）。0 以下なら `FREQ` は
-  書きません。/ Also writes the frequency read from the rig (Hz, FR-T.7); at
-  0 or below no `FREQ` is written. }
+  書きません。送った・受けた RST（要件 FR-E.11、数字 3 桁）は、空でなければ
+  `RST_SENT`・`RST_RCVD` に書きます。**確かめるのは呼ぶ側**です。
+  Also writes the frequency read from the rig (Hz, FR-T.7); at 0 or below no
+  `FREQ` is written. The reports sent and received (FR-E.11, three digits)
+  go into `RST_SENT` and `RST_RCVD` when not empty; **the caller checks them.** }
 function BuildContactAt(const Callsign: string; MomentUtc: TDateTime;
-  const Mode, Band, Subdivision: string; FreqHz: Double): TAdifRecord;
+  const Mode, Band, Subdivision: string; FreqHz: Double;
+  const RstSent: string = ''; const RstRcvd: string = ''): TAdifRecord;
 
 { 周波数（MHz）の ADIF のバンド名（ADIF 3.1 の Band 列挙）。どのバンドにも
   入らなければ空。/ The ADIF band name for a frequency in MHz (the ADIF 3.1
@@ -522,11 +526,16 @@ begin
 end;
 
 function BuildContactAt(const Callsign: string; MomentUtc: TDateTime;
-  const Mode, Band, Subdivision: string; FreqHz: Double): TAdifRecord;
+  const Mode, Band, Subdivision: string; FreqHz: Double;
+  const RstSent: string; const RstRcvd: string): TAdifRecord;
 begin
   Result := BuildContact(Callsign, MomentUtc, Mode, Band, Subdivision);
   if FreqHz > 0 then
     SetAdifValue(Result, 'FREQ', AdifFreqText(FreqHz));
+  if Trim(RstSent) <> '' then
+    SetAdifValue(Result, 'RST_SENT', Trim(RstSent));
+  if Trim(RstRcvd) <> '' then
+    SetAdifValue(Result, 'RST_RCVD', Trim(RstRcvd));
 end;
 
 function BuildContact(const Callsign: string; MomentUtc: TDateTime;

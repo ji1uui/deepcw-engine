@@ -188,6 +188,8 @@ const
   RIG_DEBUG_NONE = 0;
   { `powerstat_t` の「入」（`rig.h`）。/ `RIG_POWER_ON` in `rig.h`. }
   RIG_POWER_ON = 1;
+  { `hamlib_cache_t` の先頭（すべての貯め）。/ The first `hamlib_cache_t` (all). }
+  HAMLIB_CACHE_ALL = 0;
   { `RIG_VFO_N(29)` = `1 shl 29`（`rig.h`）。/ `RIG_VFO_N(29)` in `rig.h`. }
   RIG_VFO_CURR = cuint(1 shl 29);
   { `CONSTANT_64BIT_FLAG(14)`。/ `CONSTANT_64BIT_FLAG(14)` in `rig.h`. }
@@ -223,6 +225,8 @@ type
   TRigGetMode = function(Rig: Pointer; Vfo: cuint; var Mode: cuint64;
     var Width: clong): cint; cdecl;
   TRigStrRMode = function(Mode: cuint64): PAnsiChar; cdecl;
+  { `hamlib_cache_t` は C の列挙（`int`）。/ `hamlib_cache_t` is a C enum (`int`). }
+  TRigSetCacheTimeout = function(Rig: Pointer; Selection: cint; Ms: cint): cint; cdecl;
   TRigSetDebug = procedure(Level: cint); cdecl;
 
 var
@@ -255,6 +259,9 @@ var
     Without them the mode is not read (it is only shown). }
   rig_get_mode: TRigGetMode = nil;
   rig_strrmode: TRigStrRMode = nil;
+  { 4.x の途中から。無ければ Hamlib の既定の貯め（500 ms）のまま。
+    From partway through 4.x; without it Hamlib's default cache (500 ms) stays. }
+  rig_set_cache_timeout_ms: TRigSetCacheTimeout = nil;
 
 function DefaultHamlibNames: TStringArray;
 begin
@@ -287,6 +294,8 @@ begin
   rig_get_conf2 := TRigGetConf2(GetProcedureAddress(GHandle, 'rig_get_conf2'));
   rig_get_mode := TRigGetMode(GetProcedureAddress(GHandle, 'rig_get_mode'));
   rig_strrmode := TRigStrRMode(GetProcedureAddress(GHandle, 'rig_strrmode'));
+  rig_set_cache_timeout_ms := TRigSetCacheTimeout(GetProcedureAddress(GHandle,
+    'rig_set_cache_timeout_ms'));
   { **止める手段が無い版は使いません**（`rig_stop_morse` は 4.0 から）。
     送れるのに止められないのは、fail-safe の逆です。
     **A version that cannot stop is not used** (`rig_stop_morse` arrived in
@@ -466,6 +475,19 @@ begin
   if Code <> RIG_OK then
     raise HamlibError(Format('open: %s (%d)', [ErrorLine(Code), Code]), Code, hsOpen);
   FOpen := True;
+  { **Hamlib の貯めを切ります**（付録 BV.1）。既定では周波数・モードの答えを
+    500 ms 貯め、無線機に訊かずに返します。実測で、別の口からモードを変えた
+    直後に古い CW を返しました。貯めた答えでは、応答の確かめも無線機が答えた
+    ことになりません。こちらの読み取りは 5 秒ごとと送る直前だけなので、貯める
+    益もありません。
+    **Hamlib's cache is turned off** (appendix BV.1). By default it keeps
+    frequency and mode answers for 500 ms and returns them without asking the
+    rig; measured, it returned the old CW right after another client changed
+    the mode. A cached answer also proves nothing about the rig answering. Our
+    reads are only every 5 s and right before sending, so caching gains
+    nothing. }
+  if Assigned(rig_set_cache_timeout_ms) then
+    rig_set_cache_timeout_ms(FRig, HAMLIB_CACHE_ALL, 0);
 end;
 
 procedure THamlibRig.Close;

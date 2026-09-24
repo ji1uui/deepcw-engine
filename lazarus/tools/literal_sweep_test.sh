@@ -33,6 +33,7 @@ import glob, re, sys
 # (ファイル, 手続きまたは定数の名前) -> 理由 / (file, routine or constant) -> reason
 ALLOWED = {
     ('app/frmmain.pas', 'TMainForm.ReportLanguage'): '試験の報告（回帰試験が読む） / test report',
+    ('app/frmmain.pas', 'TMainForm.CheckTranscriptHeight'): '試験の報告（組み方の検査が出す） / test report (layout check)',
     ('app/layoutcheck.pas', '*'): '試験の報告 / test report',
     ('app/textcheck.pas', '*'): '試験の報告 / test report',
     ('app/uilang.pas', 'UiLangCaption'): '言語名はその言語で書く / a language is named in itself',

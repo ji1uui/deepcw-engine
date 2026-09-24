@@ -128,6 +128,11 @@ procedure ChooseCallsign(const Words: TWords; out Callsign: string;
   nothing than to read it wrong.** }
 function IsRst(const Token: string): Boolean;
 
+{ 記録に書く RST（数字 3 桁）。短縮数字 N を 9 に直します。RST の形でなければ
+  空です（要件 FR-E.11）。/ The RST to record (three digits), cut number N
+  turned into 9; empty unless it has the shape of an RST (FR-E.11). }
+function RstDigits(const Token: string): string;
+
 { 受信文をひととおり読み取ります。1 度の走査で済みます。
   Reads a transcript through in a single pass. }
 function ReadExchange(const Chars: TDecodedChars): TExchange;
@@ -262,6 +267,16 @@ begin
       Confidence := Tally[J].Best;
       Break;
     end;
+end;
+
+function RstDigits(const Token: string): string;
+var
+  Work: string;
+begin
+  Work := UpperCase(Trim(Token));
+  if not IsRst(Work) then
+    Exit('');
+  Result := StringReplace(Work, 'N', '9', [rfReplaceAll]);
 end;
 
 function IsRst(const Token: string): Boolean;

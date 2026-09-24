@@ -1014,6 +1014,11 @@ msgstr ""
 msgid "受信テキストを %s に記録します。"
 msgstr ""
 
+#: frmmain.rsloggedbadrst
+#, object-pascal-format
+msgid "%0:s との交信を記録しました。RST「%1:s」は形が違うので書いていません。"
+msgstr ""
+
 #: frmmain.rsloggedbadsubdivision
 #, object-pascal-format
 msgid "%0:s との交信を記録しました。JCC/JCG「%1:s」は形が違うので書いていません。"
@@ -1649,6 +1654,22 @@ msgstr ""
 
 #: frmmain.rsrxrescan
 msgid "再検出"
+msgstr ""
+
+#: frmmain.rsrxrstbad
+msgid "RST は 3 桁で書いてください（例: 599・5NN）。このままでは記録に書きません。"
+msgstr ""
+
+#: frmmain.rsrxrstnote
+msgid "受けた RST は読めたもの、送った RST は送信タブのものが入ります（直せます）。"
+msgstr ""
+
+#: frmmain.rsrxrstrcvd
+msgid "受けた RST"
+msgstr ""
+
+#: frmmain.rsrxrstsent
+msgid "送った RST"
 msgstr ""
 
 #: frmmain.rsrxsettlefast

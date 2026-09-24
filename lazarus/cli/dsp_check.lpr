@@ -4268,6 +4268,22 @@ begin
     (AdifValue(Item, 'BAND') = '40M'));
   Item := BuildContactAt('JA9XYZ', EncodeDate(2026, 9, 23), 'CW', '40M', '', 0);
   Check('周波数が無ければ FREQ は書かない', AdifValue(Item, 'FREQ') = '');
+
+  WriteLn;
+  WriteLn('交信記録の RST（要件 FR-E.11）');
+  Check('5NN は 599 として書く', RstDigits('5NN') = '599', RstDigits('5NN'));
+  Check('小文字・前後の空白も読む', RstDigits(' 5nn ') = '599', RstDigits(' 5nn '));
+  Check('579 はそのまま', RstDigits('579') = '579');
+  Check('EEE（訂正の合図）は RST にしない', RstDigits('EEE') = '');
+  Check('了解度 6 は RST にしない', RstDigits('699') = '');
+  Check('空は空', RstDigits('') = '');
+  Item := BuildContactAt('JA9XYZ', EncodeDate(2026, 9, 23), 'CW', '40M', '', 0,
+    '599', '579');
+  Check('送った・受けた RST を書く', (AdifValue(Item, 'RST_SENT') = '599') and
+    (AdifValue(Item, 'RST_RCVD') = '579'));
+  Item := BuildContactAt('JA9XYZ', EncodeDate(2026, 9, 23), 'CW', '40M', '', 0, '', '');
+  Check('RST が無ければ欄を書かない（599 で埋めない）',
+    (AdifValue(Item, 'RST_SENT') = '') and (AdifValue(Item, 'RST_RCVD') = ''));
 end;
 
 { 無線機の詳しい接続設定の確かめ・変換・保存（要件 FR-T.5）。Hamlib は

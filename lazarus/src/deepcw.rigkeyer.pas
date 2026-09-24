@@ -146,6 +146,13 @@ type
     RigFreqHz: Double;
     RigMode: string;
     RigReadAt: QWord;
+    { 送る直前にモードを読み直して断った回数と、そのときのモード（付録 BV.1）。
+      画面は回数の変化で「断った」を知ります。
+      How many sends were refused after re-reading the mode right before
+      sending, and the mode then (appendix BV.1); the screen notices a refusal
+      by the count changing. }
+    Refusals: Integer;
+    RefusedMode: string;
   end;
 
   TRigKeyer = class
@@ -196,6 +203,10 @@ type
     function Snapshot: TKeyerStatus;
   end;
 
+{ CW で送れるモードか（Hamlib の名前 `CW`・`CWR`）。/ Whether a mode (Hamlib's
+  name) can key CW: `CW` or `CWR`. }
+function IsCwMode(const Mode: string): Boolean;
+
 { Hamlib の番号が「応答が無い」類か（口は開けた・開いているが、無線機が
   答えない）。/ Whether a Hamlib code means "no answer" (the port opened or is
   open, but the rig does not reply). }
@@ -215,6 +226,11 @@ type
   public
     constructor Create(AOwner: TRigKeyer);
   end;
+
+function IsCwMode(const Mode: string): Boolean;
+begin
+  Result := SameText(Mode, 'CW') or SameText(Mode, 'CWR');
+end;
 
 function IsNoAnswerCode(Code: Integer): Boolean;
 begin
@@ -403,7 +419,7 @@ var
   Wpm, WantedWpm, PaceWpm, Code: Integer;
   FreqHz: Double;
   ModeName: string;
-  Stopped, SpeedTaken, CanProbe: Boolean;
+  Stopped, SpeedTaken, CanProbe, FirstWord: Boolean;
   State: TKeyerState;
   Wait: Cardinal;
 
@@ -816,12 +832,14 @@ begin
     { 7. 次の語を渡す。**取るのは錠の下**、渡すのは錠の外。
        7. Hand over the next word: **taken under the lock**, handed outside it. }
     Word_ := '';
+    FirstWord := False;
     FLock.Enter;
     try
       if (FStatus.State = ksSending) and (FNextWord <= High(FWords)) and
          (Int64(QueuedUntil) - Int64(GetTickCount64) < KEYER_LEAD_MS) then
       begin
         Word_ := FWords[FNextWord];
+        FirstWord := FNextWord = 0;
         Inc(FNextWord);
       end
       else if (FStatus.State = ksSending) and (FNextWord > High(FWords)) and
@@ -836,6 +854,36 @@ begin
       end;
     finally
       FLock.Leave;
+    end;
+    { 最初の語を渡す前に、**モードを読み直します**（付録 BV.1）。5 秒ごとの
+      読み取りだけで判じると、切り替えた直後に取り違えます——CW にした直後を
+      断り、CW から外した直後を通して無線機に断られ、繋がりが「失敗」になる。
+      読めて CW でなければ、1 語も渡さずに「待機」へ戻し、断ったと知らせます
+      （失敗にはしない）。読めなければ送ります。
+      Before the first word, **the mode is read again** (appendix BV.1). Judged
+      from the 5-second reading alone, a switch just made is misread: refusing
+      right after CW was chosen, or letting through right after it was left so
+      that the rig refuses and the link fails. Read and not CW, nothing is
+      handed over, the state returns to ready and a refusal is reported (not a
+      failure). Unread, it is sent. }
+    if (Word_ <> '') and FirstWord then
+    begin
+      ModeName := Rig.ReadMode;
+      if (ModeName <> '') and not IsCwMode(ModeName) then
+      begin
+        FLock.Enter;
+        try
+          FWords := nil;
+          FNextWord := 0;
+          FStatus.State := ksReady;
+          FStatus.RigMode := ModeName;
+          FStatus.RefusedMode := ModeName;
+          Inc(FStatus.Refusals);
+        finally
+          FLock.Leave;
+        end;
+        Continue;
+      end;
     end;
     if Word_ <> '' then
     begin
