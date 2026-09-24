@@ -30,7 +30,7 @@
 
 **確かめ方**: `dsp_check` に RST の境 4 件・地方時 9 件、`tools/local_clock_test.sh`
 （9 通りの時間帯の与え方を `date +%z` と突き合わせる。合わせる前は 6 通りが
-食い違っていた。CI の 3 つの OS でも走らせる）。どれも変異で落ちる。実画面で、
+食い違っていた。CI で Linux と macOS ARM64 の両方で通った）。どれも変異で落ちる。実画面で、
 RST の境（記録のあと空・RST の無い次の局でも空・「UR 559」で 559）と、地方時
 （受信テキストの記録が OS の地方時、交信記録は UTC のまま、診断に「地方時を OS に
 合わせました（UTC+00:00 → UTC+09:00）」）を確かめた。
@@ -1765,7 +1765,7 @@ Android・iOS で動作する。**Lazarus 版がモバイルを追うより、�
 | 23 | 高 DPI 環境の配置 | NFR-5.1 | **解決（版 2.49）。**`Xvfb -dpi` で画素密度の違う画面を作れる。96／144／192 dpi で破綻 0 件を実測し、回帰試験に 2 つの密度を入れた（付録 AW）。**実機の高 DPI 画面（Retina・Windows 150%）での確認は残る** |
 | 25 | **macOS で画面のアプリがリンクできない（3.2.4 待ち）** | NFR-3.1 | FPC 3.2.2 が出す Objective-C の並びを Apple のリンカ（ld-1267）が受け付けない。落ちるのは LCL の cocoa で、この木のコードではない。**原因は特定済み**——FPC のコミット `55b9954619`「objc: fix compatibility with recent Xcode linkers」が直しており、症状（`ltmp5` という一時ラベルを跨ぐ fixup の拒否）と一致する。この修正は `release_3_2_4_rc2` に入っているが**3.2.4 はまだ正式リリースされていない**。**版 2.64 の判断: 3.2.4 の正式版を待ち、FPC は 3.2.2 のまま進める**（付録 BK.4）。正式版が出たら Homebrew formula の更新を待って matrix を再実行する。**CI は版 2.67 から #25 の印だけを警告として通す**（`tools/known_link_failure.sh`、付録 BO.1）。**3.2.2 以外で同じ印が出たら落とす**ので、3.2.4 に上げても直らなければ気づける |
 | 24 | ~~Windows で命令行の道具の日本語が化ける~~ | NFR-7.6 | **解決（版 2.69）。**CI でバイト列を見て切り分けた——プログラムの中の札（RTL の既定 1252）が原因で、コンソールではなかった。既定を UTF-8 にし、置き場所と引数を `W` 版の API から受け取る（`DeepCW.Platform`）。**Windows の CI で 5 つの確かめが通る**（付録 BQ）。**実物の日本語版 Windows のコンソールでの見え方は未確認**（CI はパイプのバイト列を見ている） |
-| 20 | ~~FPC の RTL が読む時間帯の設定元~~ | FR-E.3、画面の時刻表示 | **解決（版 2.75、付録 BW.4）。**版 2.21 の見立て「`/etc/timezone` が無い機械では UTC」は誤りで、FPC 3.2.2 は無ければ `/etc/localtime` を読む。本当に食い違うのは、slim 形式の時間帯ファイル・`TZ=Asia/Tokyo`（`:` 無し）・古い `/etc/timezone`・稼働中の夏時間の切り替え（すべて実測）。起動時と 1 分ごとに、RTL の時差を C ライブラリの `localtime_r` に合わせる。**記録の UTC は合わせる前も後も正しい**（動かないことを試験で確かめる）。macOS は CI の `dsp_check`・`tools/local_clock_test.sh` の結果待ち、Windows は RTL が OS に尋ねるので何もしない |
+| 20 | ~~FPC の RTL が読む時間帯の設定元~~ | FR-E.3、画面の時刻表示 | **解決（版 2.75、付録 BW.4）。**版 2.21 の見立て「`/etc/timezone` が無い機械では UTC」は誤りで、FPC 3.2.2 は無ければ `/etc/localtime` を読む。本当に食い違うのは、slim 形式の時間帯ファイル・`TZ=Asia/Tokyo`（`:` 無し）・古い `/etc/timezone`・稼働中の夏時間の切り替え（すべて実測）。起動時と 1 分ごとに、RTL の時差を C ライブラリの `localtime_r` に合わせる。**記録の UTC は合わせる前も後も正しい**（動かないことを試験で確かめる）。**macOS ARM64 でも CI で 9 通りすべて一致**（合わせる前は 6 通りが食い違い。macOS の `zic` で作った slim 形式を含む）。Windows は RTL が OS に尋ねるので何もしない |
 
 **版 2.0 で挙げた「練習機能の帰属」は解決した**（7.1）。
 **版 2.7 では、リファレンス実装の機能一覧のうち 4 つを「採らない」と決めた**（3.5）。
@@ -10507,16 +10507,20 @@ C ライブラリの `localtime_r` に今の時差（`tm_gmtoff`）を尋ね、R
 
 - `dsp_check`: RST の境 4 件（BW.1）、地方時 9 件（BW.4）
 - 組み方の検査: 3 つのモード × 既定・最小の窓（BW.2）
-- `tools/local_clock_test.sh`（BW.4）
+- `tools/local_clock_test.sh`（BW.4）。CI では Linux・macOS ARM64 で 9 通りすべて
+  一致、Windows はすぐ終わる。`dsp_check` は 3 つの OS で通った
 - 実画面: RST の境（BW.1）、地方時と診断（BW.4）
 - 回帰試験 33 件すべて通る（Linux）
 
 ### BW.6 確かめていないこと（NOT VERIFIED）
 
-- **macOS・Windows での地方時**。macOS は CI の `dsp_check` と
-  `tools/local_clock_test.sh` の結果で確かめる（`struct tm` の並びは glibc・musl・
-  macOS で同じはずだが、実行したのは Linux だけ）。Windows は RTL の振る舞いを
-  原典で読んだだけ
+- **macOS の画面のアプリの中での地方時**。CI（macOS ARM64）で `dsp_check` と
+  `tools/local_clock_test.sh` は通った（9 通りすべて `date` と一致、合わせる前は
+  6 通りが食い違い）ので、`struct tm` の読み方は macOS でも正しい。ただ画面の
+  アプリは #25 で macOS ではリンクできず、起動時と 1 分ごとの呼び出しは macOS で
+  走らせていない
+- **Windows での地方時**。`dsp_check` は CI で通った（`Known = False` の枝）が、
+  RTL が OS に尋ねるという振る舞いは原典で読んだだけ
 - 稼働中の夏時間の切り替えに 1 分以内に付いていくこと（1 分ごとに合わせる作りだが、
   切り替えの瞬間を跨いで走らせてはいない）
 - BW.3 の頻度の見直しの、Intel N150 相当での効果
