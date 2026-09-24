@@ -137,6 +137,15 @@ function RstDigits(const Token: string): string;
   Reads a transcript through in a single pass. }
 function ReadExchange(const Chars: TDecodedChars): TExchange;
 
+{ 文字の位置 `FromChar` から後ろだけで選んだ RST（選び方は `ReadExchange` と
+  同じ）。無ければ `First` が負。**記録した交信より前の RST を、次の交信に
+  付けないため**です（要件 FR-E.11、付録 BW.1）。
+  The RST chosen from position `FromChar` onward only (chosen as in
+  `ReadExchange`); `First` is negative when there is none. **So that an RST
+  from before the last logged contact is never given to the next one**
+  (FR-E.11, appendix BW.1). }
+function RstAfter(const Chars: TDecodedChars; FromChar: Integer): TExchangeSpan;
+
 implementation
 
 function SplitWords(const Chars: TDecodedChars): TWords;
@@ -300,11 +309,16 @@ begin
     and (Value(Token[3]) >= 1) and (Value(Token[3]) <= 9);
 end;
 
+{ RST の選び方（`ReadExchange` と `RstAfter` が共に使う）。`FromWord` より前の
+  語は見ません。/ How the RST is chosen (shared by `ReadExchange` and
+  `RstAfter`); words before `FromWord` are not looked at. }
+function ChooseRst(const Words: TWords; FromWord: Integer): TExchangeSpan; forward;
+
 function ReadExchange(const Chars: TDecodedChars): TExchange;
 var
   Words: TWords;
   Named: TReferenceWords;
-  I, Count, Taken, AfterUr, LastRst: Integer;
+  I, Count: Integer;
   Parsed: TCallsign;
 begin
   Result.Callsigns := nil;
@@ -338,8 +352,6 @@ begin
 
   SetLength(Result.Callsigns, Length(Words));
   Count := 0;
-  AfterUr := -1;
-  LastRst := -1;
   for I := 0 to High(Words) do
     if ParseCallsign(Words[I].Text, Parsed) then
     begin
@@ -353,14 +365,39 @@ begin
       if Words[I].Text = Result.Callsign then
         Result.Chosen := Count;
       Inc(Count);
-    end
-    else if IsRst(Words[I].Text) then
+    end;
+  SetLength(Result.Callsigns, Count);
+  Result.Rst := ChooseRst(Words, 0);
+end;
+
+function RstAfter(const Chars: TDecodedChars; FromChar: Integer): TExchangeSpan;
+var
+  Words: TWords;
+  FromWord: Integer;
+begin
+  Words := SplitWords(Chars);
+  FromWord := 0;
+  while (FromWord <= High(Words)) and (Words[FromWord].First < FromChar) do
+    Inc(FromWord);
+  Result := ChooseRst(Words, FromWord);
+end;
+
+function ChooseRst(const Words: TWords; FromWord: Integer): TExchangeSpan;
+var
+  I, Taken, AfterUr, LastRst: Integer;
+begin
+  Result.First := -1;
+  Result.Last := -1;
+  Result.Text := '';
+  AfterUr := -1;
+  LastRst := -1;
+  for I := Max(0, FromWord) to High(Words) do
+    if IsRst(Words[I].Text) then
     begin
       LastRst := I;
       if (I > 0) and ((Words[I - 1].Text = 'UR') or (Words[I - 1].Text = 'RST')) then
         AfterUr := I;
     end;
-  SetLength(Result.Callsigns, Count);
 
   { どの RST を採るか。UR・RST の直後があればそれです。符号を DE の後ろから
     採るのと同じ考えで、送り手が「これがあなたの信号報告です」と明示した箇所を
@@ -381,14 +418,14 @@ begin
   if Taken < 0 then
   begin
     Taken := LastRst;
-    while (Taken > 0) and IsRst(Words[Taken - 1].Text) do
+    while (Taken > Max(0, FromWord)) and IsRst(Words[Taken - 1].Text) do
       Dec(Taken);
   end;
   if Taken >= 0 then
   begin
-    Result.Rst.First := Words[Taken].First;
-    Result.Rst.Last := Words[Taken].Last;
-    Result.Rst.Text := Words[Taken].Text;
+    Result.First := Words[Taken].First;
+    Result.Last := Words[Taken].Last;
+    Result.Text := Words[Taken].Text;
   end;
 end;
 

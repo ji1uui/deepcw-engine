@@ -94,6 +94,11 @@ step "dsp_check（数値・記録・読み取り・待ち符号）" ./cli/dsp_ch
 # Windows matter, but the same test runs here so that the check itself is known
 # to work every time.**
 step "日本語の出力・置き場所・引数（命令行）" ./tools/text_output_test.sh
+# 地方時が、時間帯の与え方によらず OS（`date`）と一致する（未解決 #20、
+# 付録 BW.4）。
+# Local time agrees with the OS (`date`) however the time zone is given (open
+# question #20, appendix BW.4).
+step "地方時が OS と一致する" ./tools/local_clock_test.sh
 if command -v xvfb-run >/dev/null 2>&1; then
   step "gui_probe（画面部品）" gui_env xvfb-run -a ./app/gui_probe
 else

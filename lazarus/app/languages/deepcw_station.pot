@@ -402,6 +402,11 @@ msgstr ""
 msgid "%s をコピーしました（RST は聞こえていません）。"
 msgstr ""
 
+#: frmmain.rsclockaligned
+#, object-pascal-format
+msgid "地方時を OS に合わせました（%0:s → %1:s）"
+msgstr ""
+
 #: frmmain.rscountandname
 #, object-pascal-format
 msgid "%0:d 件 / %1:s"
@@ -409,6 +414,10 @@ msgstr ""
 
 #: frmmain.rsctxcapture
 msgid "取り込み"
+msgstr ""
+
+#: frmmain.rsctxclock
+msgid "時刻"
 msgstr ""
 
 #: frmmain.rsctxcontactlog

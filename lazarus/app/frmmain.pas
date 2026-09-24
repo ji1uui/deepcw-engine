@@ -416,6 +416,24 @@ type
     FRstRcvdTyped: Boolean;
     FRstSentTyped: Boolean;
     FRstFilling: Boolean;
+    { 最後に記録した交信の時点の、受信テキストの長さ。受けた RST はこれより
+      後ろからだけ採ります（付録 BW.1）。受信テキストを空にする・入れ替える
+      ときに 0 へ戻します。
+      The received text's length when the last contact was logged; the RST
+      received is taken only from after it (appendix BW.1). Reset to 0 whenever
+      the received text is emptied or replaced. }
+    FRstFromChar: Integer;
+    { 受けた RST の読み取り。受信テキストか境が変わるときにだけ読み直します。
+      0.2 秒ごとの `UpdateLogInfo` で毎回読むと、長い受信で画面のスレッドを
+      無駄に使います（付録 BW.3）。
+      The RST received, read again only when the received text or the boundary
+      changes; reading it on every 0.2 s `UpdateLogInfo` would spend the UI
+      thread for nothing on a long reception (appendix BW.3). }
+    FRstRead: TExchangeSpan;
+    { 地方時を OS に合わせた時刻（`GetTickCount64`、未解決 #20・付録 BW.4）。
+      When local time was last aligned with the OS (`GetTickCount64`; open
+      question #20, appendix BW.4). }
+    FClockSyncedAt: QWord;
     FRigBandActive: Boolean;
     FRigBandName: string;
     FManualBand: Integer;
@@ -758,6 +776,7 @@ type
     procedure RxSubdivisionChanged(Sender: TObject);
     procedure RxRstChanged(Sender: TObject);
     procedure TxRstChanged(Sender: TObject);
+    procedure ReadRst;
     procedure FillRstFields;
     { 画面の言語を変えます（要件 NFR-7.6）。**押したその場で入れ直します。**
       Changes the language of the screen (NFR-7.6), **putting the words back in
@@ -885,6 +904,7 @@ type
     procedure UpdateLiveReceive;
     procedure SetStatus(const Engine, Audio, Message_: string);
     procedure ReportError(const Context: string; E: Exception);
+    procedure SyncClock;
     procedure LogDiagnostic(const Context, Raw: string);
   public
     constructor Create(AOwner: TComponent); override;
@@ -1489,6 +1509,11 @@ resourcestring
   RsRigStarted = '無線機で送り始めました。止めるときは Esc。';
   RsRigStopped = '送信を止めました。';
   RsCtxRig = '無線機';
+  { 地方時を OS に合わせたときの診断（未解決 #20、付録 BW.4）。
+    The diagnostic when local time is aligned with the OS (open question #20,
+    appendix BW.4). }
+  RsCtxClock = '時刻';
+  RsClockAligned = '地方時を OS に合わせました（%0:s → %1:s）';
   RsTxProblemEmpty = '送信文が空です。';
   RsTxProblemUnsendable = '送れない文字があります: 「%s」';
   RsTxProblemTooLong = '長すぎます（%0:s 文字）。%1:d 文字・%2:d 秒までにしてください。';
@@ -1682,6 +1707,12 @@ begin
   Position := poScreenCenter;
 
   FDiagnostics := TStringList.Create;
+  { 地方時は、日付で名付ける記録（`FJournal`）を開く**前に** OS へ合わせます。
+    後にすると、起動した日の記録が UTC の日付で作られえます（付録 BW.4）。
+    Local time is aligned with the OS **before** the date-named journal
+    (`FJournal`) is opened; afterwards, the day's journal could be created
+    under the UTC date (appendix BW.4). }
+  SyncClock;
   FCaptureRate := 8000;
   FTxSampleRate := 8000;
   FRing := TAudioRing.Create(FCaptureRate * 30);
@@ -4659,6 +4690,14 @@ begin
   end;
   FreeAndNil(FCompletedThread);
   FreeAndNil(FStream);
+  { 次の受信は空の受信テキストから始まり、今の文字と入れ替わります。受けた
+    RST の境も 0 へ戻します（付録 BW.1）。戻さないと、新しい受信テキストが前の
+    長さを超えるまで RST を読みません（実画面で確かめた）。
+    The next reception starts from an empty text that replaces the current
+    one, so the RST boundary goes back to 0 too (appendix BW.1); otherwise no
+    RST is read until the new text grows past the old length (seen on the
+    running program). }
+  FRstFromChar := 0;
   FreeAndNil(FMulti);
   FreeAndNil(FDecoder);
   FEngineError := '';
@@ -5353,6 +5392,7 @@ begin
     else
     begin
       FLiveChars := Thread.Chars;
+      FRstFromChar := 0;
       FRxTranscript.PendingFrom := MaxInt;
       FRxTranscript.SetChars(FLiveChars);
       ReadTranscript;
@@ -6243,6 +6283,7 @@ begin
   if not EnsureDecoder then
     Exit;
   FLiveChars := nil;
+  FRstFromChar := 0;
   ReadTranscript;
   FAppendMode := False;
   { ファイルの復号は受信をやり直すのと同じ扱いにします。前の受信の続きとして
@@ -6546,6 +6587,7 @@ end;
 procedure TMainForm.RxClearClick(Sender: TObject);
 begin
   FLiveChars := nil;
+  FRstFromChar := 0;
   { 消した受信文の添字は、もう何も指しません。頼まれていた読み直しは捨てます。
     An index into a cleared transcript points at nothing; a re-reading that was
     asked for is dropped. }
@@ -6609,6 +6651,7 @@ end;
 procedure TMainForm.ReadTranscript;
 begin
   FExchange := ReadExchange(FLiveChars);
+  ReadRst;
   FRxTranscript.SetCallsigns(FExchange.Callsigns, FExchange.Chosen);
   { 参照番号も同じ文字の並びの上に印を付けます（要件 FR-E.6）。**読み取りは
     1 度で済んでいます。**`ReadExchange` が符号と一緒に返しているためです。
@@ -7259,6 +7302,18 @@ end;
   Fills the RST boxes not typed in: received from the RST read (empty if none;
   **never filled with 599**, as in appendix S.4), sent from the transmit tab's
   RST. }
+procedure TMainForm.ReadRst;
+begin
+  { 記録した交信より後ろの RST だけ（付録 BW.1）。記録する前は受信テキスト
+    全体から選んだもの（`FExchange`）と同じです。
+    Only an RST after the last logged contact (appendix BW.1); before any
+    contact is logged it is the one chosen from the whole text (`FExchange`). }
+  if FRstFromChar <= 0 then
+    FRstRead := FExchange.Rst
+  else
+    FRstRead := RstAfter(FLiveChars, FRstFromChar);
+end;
+
 procedure TMainForm.FillRstFields;
 var
   Rcvd, Sent: string;
@@ -7266,8 +7321,8 @@ begin
   if (FRxRstRcvd = nil) or (FRxRstSent = nil) then
     Exit;
   Rcvd := '';
-  if FExchange.Rst.First >= 0 then
-    Rcvd := RstDigits(FExchange.Rst.Text);
+  if FRstRead.First >= 0 then
+    Rcvd := RstDigits(FRstRead.Text);
   Sent := '';
   if FTxRst <> nil then
     Sent := RstDigits(FTxRst.Text);
@@ -7383,6 +7438,10 @@ begin
     refilled from their sources. }
   FRstRcvdTyped := False;
   FRstSentTyped := False;
+  { ここまでの RST は、今記録した交信のものです（付録 BW.1）。
+    Every RST so far belongs to the contact just logged (appendix BW.1). }
+  FRstFromChar := Length(FLiveChars);
+  ReadRst;
   UpdateLogInfo;
   UpdateRate(True);
   FBandMapAt := 0;
@@ -7537,6 +7596,7 @@ begin
   FJournalled := 0;
   FClockOrigin := 0;
   FLiveChars := nil;
+  FRstFromChar := 0;
   FRecheckPending := False;
   ReadTranscript;
   FRxTranscript.Clear;
@@ -8876,26 +8936,45 @@ procedure TMainForm.CheckTranscriptHeight(Problems: TStringList);
 var
   WasHeight, Want: Integer;
   WasBusy: string;
+  WasMode, Mode: TReceiveMode;
 
+  { 交信モードは受信テキスト、待機・コンテストはバンドマップが主役です。
+    The received text is the main box in contact mode, the band map in the
+    waiting and contest modes. }
   procedure Measure(const Situation: string);
+  var
+    Box: TControl;
   begin
     Application.ProcessMessages;
     Want := Scale96ToForm(RX_TRANSCRIPT_MIN_96);
-    if FRxTranscript.Height < Want then
+    if FMode = rmContact then
+      Box := FRxTranscript
+    else
+      Box := FRxBandMap;
+    if Box.Height < Want then
       Problems.Add(Format('[%0:s] 受信テキストが低すぎる（%1:s）: %2:d < %3:d 画素',
-        [FRxSheet.Caption, Situation, FRxTranscript.Height, Want]));
+        [FRxSheet.Caption, Situation, Box.Height, Want]));
   end;
 
 begin
   FPages.ActivePage := FRxSheet;
   WasHeight := Height;
   WasBusy := FRxBusy.Caption;
+  WasMode := FMode;
   try
     FRxBusy.Caption := RsDecodingBusy;
-    Measure(Format('窓 %d', [Height]));
-    Height := Constraints.MinHeight;
-    Measure(Format('窓 %d（最小）', [Height]));
+    for Mode := Low(TReceiveMode) to High(TReceiveMode) do
+    begin
+      FMode := Mode;
+      ApplyMode;
+      Height := WasHeight;
+      Measure(Format('モード %0:d・窓 %1:d', [Ord(Mode), Height]));
+      Height := Constraints.MinHeight;
+      Measure(Format('モード %0:d・窓 %1:d（最小）', [Ord(Mode), Height]));
+    end;
   finally
+    FMode := WasMode;
+    ApplyMode;
     FRxBusy.Caption := WasBusy;
     Height := WasHeight;
     Application.ProcessMessages;
@@ -9147,6 +9226,13 @@ end;
 
 procedure TMainForm.PollTimer(Sender: TObject);
 begin
+  { 1 分ごとに地方時を OS に合わせ直します。夏時間の切り替え・利用者による
+    時間帯の変更に、再起動せずに付いていきます（付録 BW.4）。
+    Local time is re-aligned with the OS every minute, following a
+    daylight-saving change or the operator changing the time zone without a
+    restart (appendix BW.4). }
+  if GetTickCount64 - FClockSyncedAt >= 60000 then
+    SyncClock;
   if FRigAutoConnectPending then
   begin
     FRigAutoConnectPending := False;
@@ -9323,6 +9409,20 @@ begin
     exception comes from the platform and its libraries, not from the language
     of the screen. }
   Result := AsLines(Result);
+end;
+
+procedure TMainForm.SyncClock;
+var
+  Sync: TLocalClockSync;
+begin
+  FClockSyncedAt := GetTickCount64;
+  Sync := SyncLocalClock;
+  { 変えたときだけ残します。毎分同じ行が並ぶと、ほかの診断が押し出されます。
+    Kept only when something changed; the same line every minute would push
+    the other diagnostics out. }
+  if Sync.Changed then
+    LogDiagnostic(RsCtxClock, Format(RsClockAligned,
+      [UtcOffsetText(Sync.RtlMinutes), UtcOffsetText(Sync.OsMinutes)]));
 end;
 
 procedure TMainForm.LogDiagnostic(const Context, Raw: string);

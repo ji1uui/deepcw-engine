@@ -352,6 +352,20 @@ jobs:
             "$app/Contents/Info.plist"
 
 
+      # **地方時が OS（`date`）と一致するか**（未解決 #20、付録 BW.4）。FPC の
+      # Unix の RTL は時差を自前で読み、`TZ=Asia/Tokyo` や「slim」形式の
+      # 時間帯ファイルで UTC になります。`struct tm` の並びを読むので、**macOS
+      # での結果はここでしか得られません。**Windows では確かめるものが無く、
+      # すぐ終わります。
+      # **Whether local time agrees with the OS (`date`)** (open question #20,
+      # appendix BW.4). FPC's Unix RTL reads the offset itself and falls back to
+      # UTC with `TZ=Asia/Tokyo` or a "slim" zone file. It reads the layout of
+      # `struct tm`, so **this is the only place a macOS result comes from.** On
+      # Windows there is nothing to check and it ends at once.
+      - name: 地方時と OS の一致
+        working-directory: lazarus
+        run: ./tools/local_clock_test.sh
+
       # **命令行の道具が日本語を UTF-8 のまま出せるか**（未解決 #24、付録 BQ）。
       # Windows では `Format` で組んだ行だけが化けていました。どの段で化けるかを
       # バイト列で切り分けます。**最後に置きます**——報告が記録の末尾に来るので、

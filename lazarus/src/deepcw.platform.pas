@@ -188,14 +188,108 @@ function ExecutablePath: string;
 function CommandLineArg(Index: Integer): string;
 function CommandLineArgCount: Integer;
 
+type
+  { 地方時の時差を OS に合わせた結果（未解決 #20、付録 BW.4）。時差は
+    **UTC から東へ何分か**で表します（日本は +540）。
+    The outcome of aligning the local-time offset with the OS (open question
+    #20, appendix BW.4). Offsets are **minutes east of UTC** (Japan is +540). }
+  TLocalClockSync = record
+    { OS の時差が読めたか。/ Whether the OS offset could be read. }
+    Known: Boolean;
+    { RTL の時差を書き換えたか。/ Whether the RTL's offset was rewritten. }
+    Changed: Boolean;
+    { 合わせる前の RTL の時差。/ The RTL's offset before aligning. }
+    RtlMinutes: Integer;
+    { OS の時差。/ The OS offset. }
+    OsMinutes: Integer;
+  end;
+
+{ FPC の地方時を、OS が言う地方時に合わせます（未解決 #20、付録 BW.4）。
+
+  Unix の FPC 3.2.2 は、時差を**起動時に 1 度だけ**自前で読みます。読む先は
+  `TZ`（`:` で始まる形だけ）、`/etc/timezone`、`/etc/localtime` の順で、
+  **TZif の第 1 版の部分しか読みません。**そのため次の場合に、地方時が OS
+  （`date`・C ライブラリ）と食い違います（付録 BW.4 で実測）。
+
+  - 時間帯のファイルが「slim」形式（第 1 版の部分が空）→ 時差 0（UTC）
+  - `TZ=Asia/Tokyo`（`:` の無い、C ライブラリが受ける形）→ 無視される
+  - `/etc/timezone` が `/etc/localtime` と食い違う → `/etc/timezone` が勝つ
+  - 稼働中に夏時間が切り替わる → 起動時の時差のまま
+
+  ここでは C ライブラリの `localtime_r` に今の時差を尋ね、違っていれば RTL の
+  `Tzseconds` を書き換えます。`Now`・`GetLocalTimeOffset`・
+  `LocalTimeToUniversal` はどれもこの 1 つの値から計算するので、**揃って
+  正しくなり、互いに食い違いません**（記録の UTC は、合わせる前も後も正しい）。
+
+  **画面のスレッドから呼んでください。**記録（`LocalTimeToUniversal(Now)`）と
+  同じスレッドなら、その 2 つの呼び出しの間で値が変わることはありません。
+  Windows の RTL は呼ぶたびに OS へ尋ねるので、何もせず `Known = False` を
+  返します。**macOS と Windows では確かめていません。**
+
+  Aligns FPC's local time with the one the OS reports (open question #20,
+  appendix BW.4).
+
+  FPC 3.2.2 on Unix reads the offset itself, **once, at start-up**: from `TZ`
+  (only the form starting with `:`), then `/etc/timezone`, then
+  `/etc/localtime`, and **only the version-1 part of a TZif file**. So local
+  time disagrees with the OS (`date`, the C library) when the zone file is
+  "slim" (an empty version-1 part: offset 0, i.e. UTC), when `TZ=Asia/Tokyo` is
+  given without the colon the C library accepts (ignored), when
+  `/etc/timezone` disagrees with `/etc/localtime` (`/etc/timezone` wins), and
+  when daylight saving changes while running (the start-up offset stays) --
+  all measured in appendix BW.4.
+
+  This asks the C library's `localtime_r` for the current offset and, where it
+  differs, rewrites the RTL's `Tzseconds`. `Now`, `GetLocalTimeOffset` and
+  `LocalTimeToUniversal` all compute from that one value, so **they become
+  right together and never disagree with each other** (the log's UTC is right
+  before and after).
+
+  **Call it from the UI thread**: on the same thread as the logging
+  (`LocalTimeToUniversal(Now)`), the value cannot change between those two
+  calls. The Windows RTL asks the OS on every call, so there it does nothing
+  and returns `Known = False`. **Not verified on macOS or Windows.** }
+function SyncLocalClock: TLocalClockSync;
+
+{ 時差を「UTC+09:00」の形にします。/ An offset as "UTC+09:00". }
+function UtcOffsetText(Minutes: Integer): string;
+
 implementation
 
-{$IFDEF WINDOWS}
+{$IF DEFINED(WINDOWS)}
 uses
   Windows;
+{$ELSEIF DEFINED(UNIX)}
+uses
+  UnixType, UnixUtil;
+{$ENDIF}
 
+{$IFDEF WINDOWS}
 function CommandLineToArgvW(CmdLine: PWideChar; out NumArgs: LongInt): PPWideChar;
   stdcall; external 'shell32.dll' name 'CommandLineToArgvW';
+{$ENDIF}
+
+{$IFDEF UNIX}
+type
+  { C の `struct tm`。glibc・musl・macOS とも、`tm_isdst` の後に
+    `long tm_gmtoff` と `char *tm_zone` が続きます。念のため後ろに余白を
+    置きます（大きめの受け皿は害になりません）。
+    C's `struct tm`: in glibc, musl and macOS alike, `long tm_gmtoff` and
+    `char *tm_zone` follow `tm_isdst`. Spare room is kept at the end just in
+    case (a larger buffer does no harm). }
+  {$PACKRECORDS C}
+  TCTm = record
+    tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday,
+      tm_isdst: cint;
+    tm_gmtoff: clong;
+    tm_zone: PChar;
+    Spare: array[0..63] of Byte;
+  end;
+  {$PACKRECORDS DEFAULT}
+
+function c_time(Timer: Pointer): time_t; cdecl; external 'c' name 'time';
+function c_localtime_r(const Timer: ptime_t; Tm: Pointer): Pointer; cdecl;
+  external 'c' name 'localtime_r';
 {$ENDIF}
 
 var
@@ -402,6 +496,48 @@ begin
     LocalFree(HLOCAL(Argv));
   end;
   {$ENDIF}
+end;
+
+function SyncLocalClock: TLocalClockSync;
+{$IFDEF UNIX}
+var
+  T: time_t;
+  Tm: TCTm;
+{$ENDIF}
+begin
+  Result.Known := False;
+  Result.Changed := False;
+  Result.RtlMinutes := -GetLocalTimeOffset;
+  Result.OsMinutes := Result.RtlMinutes;
+  {$IFDEF UNIX}
+  FillChar(Tm, SizeOf(Tm), 0);
+  T := c_time(nil);
+  if c_localtime_r(@T, @Tm) = nil then
+    Exit;
+  { 時差が 1 日を超えることはありません。超えたら構造体の読み違いとみなし、
+    触りません（読み違いで時計を狂わせるより、元のままのほうが安全です）。
+    An offset never exceeds a day; one that does means the structure was
+    misread, and nothing is touched (leaving it as it was is safer than
+    skewing the clock on a misreading). }
+  if (Tm.tm_gmtoff <= -86400) or (Tm.tm_gmtoff >= 86400) then
+    Exit;
+  Result.Known := True;
+  Result.RtlMinutes := Tzseconds div 60;
+  Result.OsMinutes := Tm.tm_gmtoff div 60;
+  if Tzseconds <> Tm.tm_gmtoff then
+  begin
+    Tzseconds := Tm.tm_gmtoff;
+    Result.Changed := True;
+  end;
+  {$ENDIF}
+end;
+
+function UtcOffsetText(Minutes: Integer): string;
+const
+  Signs: array[Boolean] of Char = ('+', '-');
+begin
+  Result := Format('UTC%0:s%1:.2d:%2:.2d',
+    [Signs[Minutes < 0], Abs(Minutes) div 60, Abs(Minutes) mod 60]);
 end;
 
 function MemoryUseCaption(const Use: TMemoryUse): string;

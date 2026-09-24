@@ -4243,6 +4243,9 @@ procedure TestRigFrequency;
 var
   Item: TAdifRecord;
   Saved: Char;
+  Chars: TDecodedChars;
+  Span: TExchangeSpan;
+  Boundary: Integer;
 begin
   WriteLn;
   WriteLn('無線機の周波数と交信記録（要件 FR-T.7）');
@@ -4284,6 +4287,22 @@ begin
   Item := BuildContactAt('JA9XYZ', EncodeDate(2026, 9, 23), 'CW', '40M', '', 0, '', '');
   Check('RST が無ければ欄を書かない（599 で埋めない）',
     (AdifValue(Item, 'RST_SENT') = '') and (AdifValue(Item, 'RST_RCVD') = ''));
+  { 記録した交信より前の RST を、次の交信に付けない（付録 BW.1）。
+    An RST from before the last logged contact is not given to the next one
+    (appendix BW.1). }
+  Chars := CharsOf('JA1ABC DE JA9XYZ UR 579 579 K JA1ABC DE JH2AAA K', 0);
+  Span := RstAfter(Chars, 0);
+  Check('先頭から見れば 579', Span.Text = '579', Span.Text);
+  Boundary := Pos('JA1ABC DE JH2AAA', 'JA1ABC DE JA9XYZ UR 579 579 K JA1ABC DE JH2AAA K') - 1;
+  Span := RstAfter(Chars, Boundary);
+  Check('記録したあとの文に RST が無ければ空（前の局の 579 を付けない）',
+    Span.First < 0, Span.Text);
+  Chars := CharsOf('JA1ABC DE JA9XYZ UR 579 579 K JA1ABC DE JH2AAA UR 559 559 K', 0);
+  Span := RstAfter(Chars, Boundary);
+  Check('記録したあとに送られた RST は採る（559）', Span.Text = '559', Span.Text);
+  Chars := CharsOf('579 599 K', 0);
+  Span := RstAfter(Chars, 4);
+  Check('連なりを遡るのは境まで（境の前の 579 へ戻らない）', Span.Text = '599', Span.Text);
 end;
 
 { 無線機の詳しい接続設定の確かめ・変換・保存（要件 FR-T.5）。Hamlib は
@@ -4386,6 +4405,67 @@ end;
 { 送っている間の受信の抑制（要件 FR-T.4）。時刻は手で進めます（スレッドも
   時計も要らない）。/ Receive suppression while sending (FR-T.4); time is
   advanced by hand, with no thread and no clock. }
+{ 地方時を OS に合わせる（未解決 #20、付録 BW.4）。どの時間帯で走っても
+  成り立つことだけを確かめます。時間帯ごとの突き合わせは
+  `tools/local_clock_test.sh` が `--clock-probe` で行います。
+  Aligning local time with the OS (open question #20, appendix BW.4). Only
+  what holds in whatever time zone this runs is checked here; the per-zone
+  comparison is `tools/local_clock_test.sh`, through `--clock-probe`. }
+procedure TestLocalClock;
+var
+  UtcBefore, UtcAfter: TDateTime;
+  First, Second: TLocalClockSync;
+begin
+  WriteLn('地方時を OS に合わせる（付録 BW.4）');
+  Check('UTC+09:00', UtcOffsetText(540) = 'UTC+09:00', UtcOffsetText(540));
+  Check('UTC-04:00', UtcOffsetText(-240) = 'UTC-04:00', UtcOffsetText(-240));
+  Check('UTC+05:30（半端な時差）', UtcOffsetText(330) = 'UTC+05:30',
+    UtcOffsetText(330));
+  Check('UTC-02:30（負の半端な時差）', UtcOffsetText(-150) = 'UTC-02:30',
+    UtcOffsetText(-150));
+  Check('UTC+00:00', UtcOffsetText(0) = 'UTC+00:00', UtcOffsetText(0));
+
+  UtcBefore := LocalTimeToUniversal(Now);
+  First := SyncLocalClock;
+  UtcAfter := LocalTimeToUniversal(Now);
+  { **合わせても UTC は動かない。**記録の時刻はこれで決まります。
+    **Aligning never moves UTC**: the log's time depends on it. }
+  Check('合わせても UTC は動かない',
+    Abs(UtcAfter - UtcBefore) * SecsPerDay < 2,
+    Format('%.3f 秒', [(UtcAfter - UtcBefore) * SecsPerDay]));
+  if First.Known then
+    Check('合わせたあとの時差は OS のもの',
+      -GetLocalTimeOffset = First.OsMinutes,
+      Format('RTL %d / OS %d', [-GetLocalTimeOffset, First.OsMinutes]))
+  else
+    WriteLn('  --   OS の時差は RTL に任せる環境（Windows など）');
+  Second := SyncLocalClock;
+  Check('2 度目は何も変えない', not Second.Changed,
+    Format('%d → %d', [Second.RtlMinutes, Second.OsMinutes]));
+  Check('2 度目の RTL と OS は一致', Second.RtlMinutes = Second.OsMinutes,
+    Format('%d / %d', [Second.RtlMinutes, Second.OsMinutes]));
+end;
+
+{ `tools/local_clock_test.sh` が読む 1 行。合わせる前と後の地方時の時差（分、
+  東が正）と、UTC が動いたか（秒）。
+  The line `tools/local_clock_test.sh` reads: the local offset before and
+  after aligning (minutes, east positive), and how far UTC moved (seconds). }
+procedure ClockProbe;
+var
+  BeforeMinutes: Integer;
+  UtcBefore: TDateTime;
+  Sync: TLocalClockSync;
+begin
+  BeforeMinutes := -GetLocalTimeOffset;
+  UtcBefore := LocalTimeToUniversal(Now);
+  Sync := SyncLocalClock;
+  WriteLn(Format('CLOCK before=%0:d after=%1:d known=%2:s changed=%3:s utcmoved=%4:d',
+    [BeforeMinutes, -GetLocalTimeOffset, BoolToStr(Sync.Known, True),
+     BoolToStr(Sync.Changed, True),
+     Round(Abs(LocalTimeToUniversal(Now) - UtcBefore) * SecsPerDay)]));
+  Flush(Output);
+end;
+
 procedure TestTxGate;
 var
   Gate: TTxReceiveGate;
@@ -5262,6 +5342,11 @@ begin
     TextProbe;
     Halt(0);
   end;
+  if CommandLineArg(1) = '--clock-probe' then
+  begin
+    ClockProbe;
+    Halt(0);
+  end;
   if CommandLineArg(1) = '--record-until-killed' then
   begin
     RecordUntilKilled(CommandLineArg(2));
@@ -5349,6 +5434,7 @@ begin
     TestTxMessage;
     TestExtensionSeats;
     TestTxGate;
+    TestLocalClock;
     TestRigConfig;
     TestRigFrequency;
   finally
