@@ -100,6 +100,59 @@ const
   DETECT_FLOOR_QUANTILE = 0.25;
   DETECT_FLOOR_WINDOW_HZ = 200.0;
 
+  { **キークリックを局と見なさない**ための決めごと（付録 BZ）。
+
+    強い局の打鍵の切り替え（立ち上がり・立ち下がり）は、窓（80 ms）が切り替えを
+    またぐコマで、±175・±375 Hz などに側波を作ります。局が強い（近傍の雑音面から
+    37 dB 前後）と、この側波がしきい値を超えて**実在しない局**として見つかり、
+    「E5I SIE5…」のような点ばかりの文字を読みました（実画面で確かめた）。
+
+    側波は**切り替えのコマにしか無い**ので、強い局が落ち着いているコマ（前後
+    `DETECT_CLICK_STEADY_FRAMES` コマのあいだ、ずっと押しているか、ずっと離して
+    いる）だけで測り直すと消えます（実測で 7〜37 dB 下がる）。本物の別の局は
+    打鍵が独立しているので、そのコマでも鳴っています（実測で 0.0 dB）。
+
+    - `DETECT_CLICK_GAP_DB`: 測り直すのは、これ以上強い局があるときだけ。
+      同じ強さの局どうしには何もしない（側波は元の局より 10 dB 近く以上弱い。
+      強い局が 2 つあると 9.9 dB の側波があったので 6 dB とした）
+    - `DETECT_CLICK_STEADY_FRAMES`: 前後何コマ落ち着いていれば「落ち着いた」か。
+      3 コマ（±45 ms）で窓の半分（40 ms）を覆う
+    - `DETECT_CLICK_ON_RATIO`・`DETECT_CLICK_OFF_RATIO`: 押している・離している
+      と見なす大きさ（強い局の上位分位に対する比）
+    - `DETECT_CLICK_MIN_FRAMES`: 落ち着いたコマがこれより少なければ判じない
+      （知らないことを根拠に局を消さない）
+
+    **Key clicks are not stations** (appendix BZ). A strong station's keying
+    edges put sidebands at +/-175, +/-375 Hz and so on in every frame whose
+    window (80 ms) straddles an edge. With a strong station (about 37 dB over
+    the local floor) they cleared the threshold and were found as **stations
+    that did not exist**, reading dots-only text such as "E5I SIE5..." (seen on
+    screen). The sidebands exist **only in frames holding an edge**, so
+    re-measured over the frames where the strong station is steady (key held
+    down, or held up, for `DETECT_CLICK_STEADY_FRAMES` frames either side) they
+    vanish (7 to 37 dB lower, measured), while a real station, keyed
+    independently, is still there (0.0 dB). Re-measuring happens only below a
+    station at least `DETECT_CLICK_GAP_DB` stronger (the sidebands were 16 dB
+    or more below their source, 9.9 dB with two strong stations, hence 6 dB),
+    so stations of equal strength are left alone; three frames (+/-45 ms) cover half the window (40 ms); the on and
+    off ratios are against the strong station's upper quantile; and with fewer
+    than `DETECT_CLICK_MIN_FRAMES` steady frames nothing is judged (not knowing
+    is no reason to remove a station). }
+  DETECT_CLICK_GAP_DB = 6.0;
+  { 落ち着いたコマで測り直すときの分位。**本物の局は、落ち着いたコマの一部で
+    鳴っていれば足り、キークリックは一度も鳴らない**ので、上のほうを取ります。
+    0.90 では、短い文の弱い局（強い局が送り続けるあいだに送り終える）が消えた
+    （実測、付録 BZ.3）。
+    The quantile for re-measuring on the steady frames. **A real station need
+    only sound in some of them, and a key click never does**, so it sits high:
+    at 0.90 a weak station with a short message (finished while the strong ones
+    kept sending) was removed (measured, appendix BZ.3). }
+  DETECT_CLICK_QUANTILE = 0.98;
+  DETECT_CLICK_STEADY_FRAMES = 3;
+  DETECT_CLICK_ON_RATIO = 0.5;
+  DETECT_CLICK_OFF_RATIO = 0.05;
+  DETECT_CLICK_MIN_FRAMES = 20;
+
   { 残す幅の上限と下限。上限は 1 局のみを聴くときの帯域（TUNER_BANDWIDTH の
     自動）と同じ値で、局が 1 つだけのときに単局受信と同じ挙動になります。
     下限は付録 G.2 の測定下限で、これより狭めると速い符号の鍵操作側波帯
@@ -380,6 +433,81 @@ begin
     Result := 0;
 end;
 
+type
+  TSteadyMask = array of Boolean;
+
+{ 強い局（`RefBin`、上位分位 `RefStatistic`）が落ち着いているコマ（付録 BZ）。
+  戻り値はその数。/ The frames where the strong station (`RefBin`, upper
+  quantile `RefStatistic`) is steady (appendix BZ); returns how many. }
+function SteadyFrames(const Wide: TSpectrogram; RefBin: Integer;
+  RefStatistic: Double; out Mask: TSteadyMask): Integer;
+var
+  Frame, J: Integer;
+  Magnitude: Double;
+  AllOn, AllOff: Boolean;
+begin
+  Result := 0;
+  Mask := nil;
+  SetLength(Mask, Wide.Frames);
+  for Frame := 0 to Wide.Frames - 1 do
+    Mask[Frame] := False;
+  if RefStatistic <= 0 then
+    Exit;
+  for Frame := DETECT_CLICK_STEADY_FRAMES to
+    Wide.Frames - 1 - DETECT_CLICK_STEADY_FRAMES do
+  begin
+    AllOn := True;
+    AllOff := True;
+    for J := Frame - DETECT_CLICK_STEADY_FRAMES to
+      Frame + DETECT_CLICK_STEADY_FRAMES do
+    begin
+      Magnitude := MagnitudeOf(Wide.Data[J * Wide.Bins + RefBin]);
+      if Magnitude < DETECT_CLICK_ON_RATIO * RefStatistic then
+        AllOn := False;
+      if Magnitude > DETECT_CLICK_OFF_RATIO * RefStatistic then
+        AllOff := False;
+      if not (AllOn or AllOff) then
+        Break;
+    end;
+    if AllOn or AllOff then
+    begin
+      Mask[Frame] := True;
+      Inc(Result);
+    end;
+  end;
+end;
+
+{ 落ち着いたコマだけで測り直した、雑音面からの高さ（dB）。測れなければ
+  とても低い値。/ The height over the floor re-measured on the steady frames
+  alone (dB); a very low value when it cannot be measured. }
+function SteadyLevelDb(const Wide: TSpectrogram; Bin: Integer;
+  const Mask: TSteadyMask; Floor_: Double): Double;
+var
+  Values: TDoubleArray;
+  Frame, Count: Integer;
+  Magnitude: Double;
+begin
+  Result := -1000;
+  if Floor_ <= 0 then
+    Exit;
+  Values := nil;
+  SetLength(Values, Wide.Frames);
+  Count := 0;
+  for Frame := 0 to Wide.Frames - 1 do
+    if Mask[Frame] then
+    begin
+      Values[Count] := Wide.Data[Frame * Wide.Bins + Bin];
+      Inc(Count);
+    end;
+  if Count = 0 then
+    Exit;
+  SetLength(Values, Count);
+  Magnitude := MagnitudeOf(QuantileOf(Values, DETECT_CLICK_QUANTILE));
+  if Magnitude <= 0 then
+    Exit;
+  Result := 20 * Log10(Magnitude / Floor_);
+end;
+
 function DetectStations(const Wide: TSpectrogram; WideRate: Integer): TStations;
 var
   BinHz: Double;
@@ -388,6 +516,14 @@ var
   Column, Neighbourhood: TDoubleArray;
   Level, Floor_, Statistic: TDoubleArray;
   Peak: Boolean;
+  PeakMask: TSteadyMask;
+  PeakSteady, J, Kept, RefBin, OwnBin: Integer;
+  Masks: array of TSteadyMask;
+  Steady: array of Integer;
+  Keep: array of Boolean;
+  Together, AnyOn: TSteadyMask;
+  References, TogetherCount, Rank, Above: Integer;
+  Order: array of Integer;
 begin
   Result := nil;
   if (Wide.Frames <= 0) or (Wide.Bins <= 0) or (WideRate <= 0) then
@@ -510,14 +646,140 @@ begin
       than both its neighbours; this bin counts itself, so one less is the number
       folded in. }
     Folded := 0;
+    PeakSteady := -1;
     for I := Max(1, Bin - Radius) to Min(Wide.Bins - 2, Bin + Radius) do
       if (Level[I] >= DETECT_MIN_LEVEL_DB) and (Level[I] > Level[I - 1]) and
          (Level[I] >= Level[I + 1]) then
+      begin
+        { この局のキークリックは畳んだ峰に数えません（付録 BZ）。落ち着いた
+          コマは要るときだけ求めます。
+          This station's own key clicks are not counted as folded peaks
+          (appendix BZ); its steady frames are worked out only when needed. }
+        if (I <> Bin) and (Level[Bin] >= Level[I] + DETECT_CLICK_GAP_DB) then
+        begin
+          if PeakSteady < 0 then
+            PeakSteady := SteadyFrames(Wide, Bin, Statistic[Bin], PeakMask);
+          if (PeakSteady >= DETECT_CLICK_MIN_FRAMES) and
+             (SteadyLevelDb(Wide, I, PeakMask, Floor_[I]) < DETECT_MIN_LEVEL_DB) then
+            Continue;
+        end;
         Inc(Folded);
+      end;
     Result[Count].Crowded := Max(0, Folded - 1);
     Inc(Count);
   end;
   SetLength(Result, Count);
+
+  { [5] 強い局のキークリックを、局の一覧から除きます（付録 BZ）。6 dB 以上
+        強い局それぞれについて、その局が落ち着いているコマで測り直し、
+        しきい値を割ったものを除きます。**本物の局は、どの強い局に対しても
+        割りません**（打鍵が独立しているため）。幅は、除いたあとで決めます。
+        [5] Key clicks of strong stations are removed from the list
+        (appendix BZ): for each station 6 dB or more stronger, a peak is
+        re-measured over the frames where that station is steady and removed if
+        it falls below the threshold. **A real station never does**, against
+        any strong station, being keyed independently. Widths are settled after
+        the removal. }
+  SetLength(Masks, Count);
+  SetLength(Steady, Count);
+  SetLength(Keep, Count);
+  SetLength(Order, Count);
+  for I := 0 to Count - 1 do
+  begin
+    Steady[I] := -1;
+    Keep[I] := True;
+    Order[I] := I;
+  end;
+  { 強い順に決めます。**参照にするのは、残すと決めた局だけ**です。幻の峰を
+    参照にすると、その「落ち着いたコマ」が本物の局を消しました（実測、
+    付録 BZ.3）。
+    Decided strongest first; **only stations already kept serve as
+    references**. Using a phantom peak as one let its "steady frames" remove a
+    real station (measured, appendix BZ.3). }
+  for I := 1 to Count - 1 do
+  begin
+    J := Order[I];
+    Kept := I - 1;
+    while (Kept >= 0) and (Result[Order[Kept]].LevelDb < Result[J].LevelDb) do
+    begin
+      Order[Kept + 1] := Order[Kept];
+      Dec(Kept);
+    end;
+    Order[Kept + 1] := J;
+  end;
+  for Rank := 0 to Count - 1 do
+  begin
+    I := Order[Rank];
+    OwnBin := Round(Result[I].Hz / BinHz);
+    References := 0;
+    Together := nil;
+    for Above := 0 to Rank - 1 do
+    begin
+      J := Order[Above];
+      if (not Keep[J]) or
+         (Result[J].LevelDb < Result[I].LevelDb + DETECT_CLICK_GAP_DB) then
+        Continue;
+      RefBin := Round(Result[J].Hz / BinHz);
+      if Steady[J] < 0 then
+        Steady[J] := SteadyFrames(Wide, RefBin, Statistic[RefBin], Masks[J]);
+      if (Steady[J] >= DETECT_CLICK_MIN_FRAMES) and
+         (SteadyLevelDb(Wide, OwnBin, Masks[J], Floor_[OwnBin]) <
+          DETECT_MIN_LEVEL_DB) then
+      begin
+        Keep[I] := False;
+        Break;
+      end;
+      { 強い局どうしの落ち着いたコマの重なり。**強い局が 2 つあると、片方が
+        落ち着いていても、もう片方の切り替えで鳴る**峰がありました（実測、
+        付録 BZ.3）。すべてが同時に落ち着き、**少なくとも 1 局が押している**
+        コマで測ります（全員が黙っているコマでは、本物の局も黙っている）。
+        The overlap of the strong stations' steady frames. **With two strong
+        stations, a peak kept ringing on one's edges while the other was
+        steady** (measured, appendix BZ.3). It is measured where all are steady
+        at once **and at least one holds the key down** (where everyone is
+        silent, a real station is silent too). }
+      if References = 0 then
+      begin
+        SetLength(Together, Wide.Frames);
+        SetLength(AnyOn, Wide.Frames);
+        for Frame := 0 to Wide.Frames - 1 do
+        begin
+          Together[Frame] := Masks[J][Frame];
+          AnyOn[Frame] := False;
+        end;
+      end
+      else
+        for Frame := 0 to Wide.Frames - 1 do
+          Together[Frame] := Together[Frame] and Masks[J][Frame];
+      for Frame := 0 to Wide.Frames - 1 do
+        if MagnitudeOf(Wide.Data[Frame * Wide.Bins + RefBin]) >=
+           DETECT_CLICK_ON_RATIO * Statistic[RefBin] then
+          AnyOn[Frame] := True;
+      Inc(References);
+    end;
+    if Keep[I] and (References >= 2) then
+    begin
+      TogetherCount := 0;
+      for Frame := 0 to Wide.Frames - 1 do
+      begin
+        Together[Frame] := Together[Frame] and AnyOn[Frame];
+        if Together[Frame] then
+          Inc(TogetherCount);
+      end;
+      if (TogetherCount >= DETECT_CLICK_MIN_FRAMES) and
+         (SteadyLevelDb(Wide, OwnBin, Together, Floor_[OwnBin]) <
+          DETECT_MIN_LEVEL_DB) then
+        Keep[I] := False;
+    end;
+  end;
+  Kept := 0;
+  for I := 0 to Count - 1 do
+    if Keep[I] then
+    begin
+      Result[Kept] := Result[I];
+      Inc(Kept);
+    end;
+  SetLength(Result, Kept);
   AssignHalfWidths(Result);
 end;
 

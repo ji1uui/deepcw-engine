@@ -2410,6 +2410,39 @@ var
     Found := DetectStations(Wide, WideRate);
   end;
 
+  { 強さの違う局を、別々の本文で同時に鳴らします（付録 BZ）。本文を分けるのは、
+    打鍵の時刻が揃うと「独立した局」にならないためです。
+    Sounds stations of different strengths at once, each with its own text
+    (appendix BZ): with the same text their keying would line up and they
+    would not be independent stations. }
+  procedure MixWith(const Texts: array of string; const Tones, Gains: array of Double;
+    NoiseLevel: Double; Seed: Integer);
+  var
+    A, B: Integer;
+  begin
+    Mixed := nil;
+    for A := 0 to High(Tones) do
+    begin
+      Audio := Synthesise(NormalizeText(Texts[A]), CAPTURE_RATE, Tones[A], 0,
+        Seed + A);
+      if Length(Audio) > Length(Mixed) then
+      begin
+        B := Length(Mixed);
+        SetLength(Mixed, Length(Audio));
+        while B <= High(Mixed) do
+        begin
+          Mixed[B] := 0;
+          Inc(B);
+        end;
+      end;
+      for B := 0 to High(Audio) do
+        Mixed[B] := Mixed[B] + 0.5 * Gains[A] * Audio[B];
+    end;
+    RandSeed := Seed;
+    for A := 0 to High(Mixed) do
+      Mixed[A] := Mixed[A] + NoiseLevel * 0.25 * (Random + Random - 1);
+  end;
+
   { 見つけたものを、音程と高さで並べて出します。数が合わないときに、どこに何が
     出ているのかを見るためです。
     Prints what was found, pitch and level, so that a disagreement in the count
@@ -2691,6 +2724,86 @@ begin
   end;
   Verdict('見つけた音程と決めた幅だけで 4 局とも完全に読める', J = 4,
     Format('(%d / %d 局)', [J, Length(Found)]));
+
+  { [9] **強い局のキークリックを局にしない**（付録 BZ）。近傍の雑音面から
+        37 dB 前後の局は、打鍵の切り替えの側波が ±175・±375 Hz などに峰を作り、
+        実在しない局として見つかっていた（雑音 0.005 で 1 局が 5 局）。一方で、
+        強い局の横の本物の弱い局は消してはならない。雑音はこれまでの試験
+        （0.3）よりずっと弱く、局が強い場面です。
+
+        [9] **Key clicks of a strong station are not stations** (appendix BZ).
+        At about 37 dB over the local floor, the sidebands of the keying edges
+        made peaks at +/-175, +/-375 Hz and so on that were found as stations
+        which did not exist (one station became five at noise 0.005). A real
+        weak station beside a strong one must not be removed. The noise is far
+        below the other tests (0.3): the stations are strong. }
+  WriteLn('  強い局（雑音 0.005）:');
+  SetLength(Wanted, 1);
+  Wanted[0] := 1000;
+  MixWith([MESSAGES[0]], [1000], [1.0], 0.005, 7190);
+  Detect;
+  Score(Matched, Spurious, Worst);
+  ShowFound;
+  Verdict('強い 1 局のキークリックを局にしない', (Matched = 1) and (Spurious = 0),
+    Format('(当たり %d / 余分 %d)', [Matched, Spurious]));
+  Verdict('強い 1 局を密集と言わない',
+    (Length(Found) = 1) and (Found[0].Crowded = 0),
+    Format('(%d 局、畳んだ %d)', [Length(Found),
+      Ord(Length(Found) > 0) * Found[0].Crowded]));
+
+  SetLength(Wanted, 2);
+  Wanted[0] := 1000;
+  Wanted[1] := 1150;
+  MixWith([MESSAGES[0], MESSAGES[1]], [1000, 1150], [1.0, 0.1], 0.005, 7191);
+  Detect;
+  Score(Matched, Spurious, Worst);
+  ShowFound;
+  Verdict('強い局の 150 Hz 横の -20 dB の局を残す', (Matched = 2) and (Spurious = 0),
+    Format('(当たり %d / 余分 %d)', [Matched, Spurious]));
+  { さらに強い（雑音 0.0015）と、2 局のキークリックが重なった峰が、どちらか
+    1 局が落ち着いているコマでも鳴り続けた（1363 Hz）。両方が同時に落ち着いた
+    コマで測って除く（付録 BZ.3）。
+    Stronger still (noise 0.0015), a peak where both stations' clicks overlap
+    kept ringing while either one alone was steady (1363 Hz); it is removed by
+    measuring where both are steady at once (appendix BZ.3). }
+  MixWith([MESSAGES[0], MESSAGES[1]], [1000, 1150], [1.0, 0.1], 0.0015, 7191);
+  Detect;
+  Score(Matched, Spurious, Worst);
+  ShowFound;
+  Verdict('2 局のキークリックが重なった峰も局にしない',
+    (Matched = 2) and (Spurious = 0),
+    Format('(当たり %d / 余分 %d)', [Matched, Spurious]));
+
+  Wanted[1] := 1300;
+  MixWith([MESSAGES[0], MESSAGES[1]], [1000, 1300], [1.0, 0.0316], 0.005, 7192);
+  Detect;
+  Score(Matched, Spurious, Worst);
+  ShowFound;
+  Verdict('強い局の 300 Hz 横の -30 dB の局を残す', (Matched = 2) and (Spurious = 0),
+    Format('(当たり %d / 余分 %d)', [Matched, Spurious]));
+
+  Wanted[1] := 1150;
+  MixWith([MESSAGES[0], MESSAGES[1]], [1000, 1150], [1.0, 0.7], 0.005, 7193);
+  Detect;
+  Score(Matched, Spurious, Worst);
+  ShowFound;
+  Verdict('同じくらい強い 2 局のキークリックを局にしない',
+    (Matched = 2) and (Spurious = 0),
+    Format('(当たり %d / 余分 %d)', [Matched, Spurious]));
+
+  SetLength(Wanted, 4);
+  Wanted[0] := 700;
+  Wanted[1] := 1000;
+  Wanted[2] := 1500;
+  Wanted[3] := 1250;
+  MixWith([MESSAGES[0], MESSAGES[1], MESSAGES[2], 'QRL? DE K1ABC'],
+    [700, 1000, 1500, 1250], [1.0, 0.8, 0.9, 0.05], 0.005, 7194);
+  Detect;
+  Score(Matched, Spurious, Worst);
+  ShowFound;
+  Verdict('強い 3 局のあいだの弱い局（短い本文）を残す',
+    (Matched = 4) and (Spurious = 0),
+    Format('(当たり %d / 余分 %d)', [Matched, Spurious]));
 
   Summary(Failures);
 end;
