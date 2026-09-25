@@ -386,7 +386,10 @@ var
       **What does not fit the shape is counted and skipped**: a roster can carry
       a heading or a note, and keeping one as a call sign would match words that
       should never match. }
-    if not ParseCallsign(Token, Parsed) then
+    { 19.68A の特別な形も符号として持ちます（付録 BX）。一覧は利用者が選んだ
+      根拠です。/ 19.68A's special form is kept too (appendix BX): the roster
+      is grounds the operator chose. }
+    if not ParseOperatorCallsign(Token, Parsed) then
     begin
       Inc(FSkipped);
       Exit;

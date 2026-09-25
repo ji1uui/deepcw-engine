@@ -188,7 +188,10 @@ begin
     Count := 0;
     for I := 0 to Words.Count - 1 do
     begin
-      if not ParseCallsign(UpperCase(Words[I]), Call) then
+      { 利用者が書いた一覧なので、19.68A の特別な形も受け付けます（付録 BX）。
+        Written by the operator, so 19.68A's special form is accepted too
+        (appendix BX). }
+      if not ParseOperatorCallsign(UpperCase(Words[I]), Call) then
         Continue;
       { 覚えるのは本体だけです。待つ側が JA1ABC/P と書いても、待っているのは
         JA1ABC です。
@@ -267,7 +270,7 @@ function BodyOf(const Callsign: string): string;
 var
   Call: TCallsign;
 begin
-  if ParseCallsign(UpperCase(Callsign), Call) then
+  if ParseOperatorCallsign(UpperCase(Callsign), Call) then
     Result := Call.Base
   else
     Result := UpperCase(Callsign);

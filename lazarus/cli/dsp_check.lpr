@@ -4466,6 +4466,116 @@ begin
   Flush(Output);
 end;
 
+{ 19.68A の特別な呼出符号（未解決 #19、付録 BX）。
+  19.68A special call signs (open question #19, appendix BX). }
+procedure TestSpecialCallsign;
+var
+  Call: TCallsign;
+  Ex: TExchange;
+  Watched: TWatchedCalls;
+  Roster: TCallsignRoster;
+  Folder: string;
+  List: TStringList;
+
+  function Special(const Token: string): Boolean;
+  begin
+    Result := ParseSpecialCallsign(Token, Call);
+  end;
+
+  function Underlined(const E: TExchange): string;
+  var
+    I: Integer;
+  begin
+    Result := '';
+    for I := 0 to High(E.Callsigns) do
+      Result := Result + E.Callsigns[I].Text + ';';
+  end;
+
+begin
+  WriteLn;
+  WriteLn('19.68A の特別な呼出符号（付録 BX）');
+  { 形 / the form }
+  Check('GB100RSGB は特別な形', Special('GB100RSGB') and (Call.Prefix = 'GB') and
+    (Call.Suffix = 'RSGB') and Call.Special, Call.Prefix + ' ' + Call.Suffix);
+  Check('TM100TDF は特別な形', Special('TM100TDF'));
+  Check('OE2016XMAS（数字 4 桁）は特別な形', Special('OE2016XMAS'));
+  Check('PA75LIBERTY（後置符字 7 字）は特別な形', Special('PA75LIBERTY'));
+  Check('K1000ABC（1 字の前置符字）は特別な形', Special('K1000ABC') and
+    (Call.Prefix = 'K'), Call.Prefix);
+  Check('GB100RSGB/P は本体 GB100RSGB', Special('GB100RSGB/P') and
+    (Call.Base = 'GB100RSGB') and (Call.Appended = 'P'), Call.Base);
+  Check('通常の形（JA1ABC）は特別ではない', not Special('JA1ABC'));
+  Check('通常の形（VC3VIMY）は特別ではない', not Special('VC3VIMY'));
+  Check('通常の形は ParseCallsign が受ける', ParseCallsign('VC3VIMY', Call) and
+    not Call.Special);
+  Check('特別な形は ParseCallsign が拒む', not ParseCallsign('GB100RSGB', Call));
+  Check('日本の前置符字は対象にしない（8J90ABC）', not Special('8J90ABC'));
+  Check('日本の前置符字は対象にしない（JA1ABCDE）', not Special('JA1ABCDE'));
+  Check('後置符字に数字（W1AW599K）は拒む', not Special('W1AW599K'));
+  Check('後置符字が無い（GB100）は拒む', not Special('GB100'));
+  Check('数字 5 桁は拒む', not Special('G12345ABC'));
+  Check('後置符字 8 字は拒む', not Special('GB1ABCDEFGH'));
+  Check('RST の連なり（5NN599）は拒む', not Special('5NN599'));
+  Check('19.68 を超えないもの（Q1ABCD）は拒む', not Special('Q1ABCD'));
+  { 繋がった語も形には合う。だから受信文では DE の直後だけ認めます。
+    Run-together words fit the form too; hence only after DE in received text. }
+  Check('CQ599TEST（CQ 599 TEST の繋がり）も形には合う', Special('CQ599TEST'));
+  Check('E7100BIH（英字＋数字の前置符字）は特別な形', Special('E7100BIH') and
+    (Call.Prefix = 'E7'), Call.Prefix);
+  { 国別前置符字表は締めるだけ / the prefix table only tightens }
+  SetAllocatedPrefixes(['GB', 'JA']);
+  Check('表にある前置符字（GB）は通る', Special('GB100RSGB'));
+  Check('表に無い前置符字（TM）は拒む', not Special('TM100TDF'));
+  SetAllocatedPrefixes([]);
+  Check('表を外せば元に戻る', Special('TM100TDF'));
+
+  { 受信文 / received text }
+  Ex := ReadExchange(CharsOf('CQ DE GB100RSGB GB100RSGB K', 0));
+  Check('DE の直後の特別な形を選ぶ', Ex.Callsign = 'GB100RSGB', Ex.Callsign);
+  Check('認めたあとは DE の後ろ以外も数える（2 回）', Ex.Sightings = 2,
+    IntToStr(Ex.Sightings));
+  Check('両方に下線', Underlined(Ex) = 'GB100RSGB;GB100RSGB;', Underlined(Ex));
+  Ex := ReadExchange(CharsOf('GB100RSGB GB100RSGB K', 0));
+  Check('DE が無ければ特別な形は選ばない', Ex.Callsign = '', Ex.Callsign);
+  Check('DE が無ければ下線も引かない', Underlined(Ex) = '', Underlined(Ex));
+  Ex := ReadExchange(CharsOf('JA1ABC CQ599TEST DE JH1XYZ K', 0));
+  Check('DE の後ろでない CQ599TEST は候補にしない', (Ex.Callsign = 'JH1XYZ') and
+    (Pos('CQ599TEST', Underlined(Ex)) = 0), Ex.Callsign + ' / ' + Underlined(Ex));
+  Ex := ReadExchange(CharsOf('JA1ABC DE GB100RSGB UR 599 BK', 0));
+  Check('通常の符号と並んでも DE の後ろが勝つ', Ex.Callsign = 'GB100RSGB',
+    Ex.Callsign);
+
+  { 利用者の一覧 / the operator's lists }
+  Watched := ParseWatchList('GB100RSGB/P JA1ABC');
+  Check('待ち符号に特別な形を書ける', (Length(Watched) = 2) and
+    (Watched[0] = 'GB100RSGB'), IntToStr(Length(Watched)));
+  Check('待ち符号に当たる（附加符号つきで聞こえても）',
+    MatchedWatch('GB100RSGB/P', Watched) = 'GB100RSGB',
+    MatchedWatch('GB100RSGB/P', Watched));
+  Check('記録の鍵は本体', CallsignKey('gb100rsgb/p') = 'GB100RSGB',
+    CallsignKey('gb100rsgb/p'));
+  Folder := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw_special' +
+    PathDelim;
+  ForceDirectories(Folder);
+  List := TStringList.Create;
+  Roster := TCallsignRoster.Create;
+  try
+    List.Add('GB100RSGB');
+    List.Add('JA1ABC');
+    List.Add('TU599K5');
+    List.SaveToFile(Folder + 'special.txt');
+    Roster.LoadFromFile(Folder + 'special.txt');
+    Check('手元の一覧に特別な形を持てる', Roster.Contains('GB100RSGB/P'));
+    Check('形に合わない行は数えて飛ばす', (Roster.Count = 2) and
+      (Roster.Skipped = 1), Format('%0:d / %1:d', [Roster.Count, Roster.Skipped]));
+  finally
+    Roster.Free;
+    List.Free;
+    DeleteFile(Folder + 'special.txt');
+    RemoveDir(Folder);
+  end;
+end;
+
 procedure TestTxGate;
 var
   Gate: TTxReceiveGate;
@@ -5435,6 +5545,7 @@ begin
     TestExtensionSeats;
     TestTxGate;
     TestLocalClock;
+    TestSpecialCallsign;
     TestRigConfig;
     TestRigFrequency;
   finally

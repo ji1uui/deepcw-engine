@@ -37,6 +37,10 @@ type
     Suffix: string;    { 後置符字 / the letters after the digit }
     Appended: string;  { 「/1」「/P」など / "/1", "/P" and the like }
     Japanese: Boolean; { 日本に割り当てられた前置符字か / a Japanese prefix }
+    { 19.68A の特別な形として読んだか（`ParseSpecialCallsign`、付録 BX）。
+      Whether it was read in the special form of 19.68A
+      (`ParseSpecialCallsign`, appendix BX). }
+    Special: Boolean;
   end;
   TCallsigns = array of TCallsign;
 
@@ -56,8 +60,9 @@ type
   明示的に除外している。**この 1 文を読み落とすと、JA1ABC も K1ABC も G0ABC も
   弾いてしまう。地域番号は 0〜9 のすべてを受け付ける。
 
-  19.68A は、特別な機会に 4 字を超える呼出符号を認めている。本実装はこれを
-  受け付けない（付録 H.10）。
+  19.68A は、特別な機会に 4 字を超える呼出符号を認めている。**ここでは受け付け
+  ません**。形の決まりが無く、一律に通せば復号の誤りまで通すためです。特別な
+  形は `ParseSpecialCallsign` が別に見ます（付録 BX）。
 
   The call sign form of ITU Radio Regulations Article 19, Section III, checked
   against the source text (fxm-art19-sec3). The provisions are quoted above:
@@ -66,8 +71,57 @@ type
   amateur stations from the prohibition on the digits 0 and 1.** Missing that
   one sentence would reject JA1ABC, K1ABC and G0ABC alike, so every digit from
   0 to 9 is accepted. 19.68A permits longer call signs on special occasions;
-  this implementation does not accept them (appendix H.10). }
+  **they are not accepted here**: 19.68A gives no form, and passing them all
+  would pass decoding errors too. `ParseSpecialCallsign` checks the special
+  form separately (appendix BX). }
 function ParseCallsign(const Token: string; out Call: TCallsign): Boolean;
+
+{ 19.68A の特別な呼出符号（記念局など、`GB100RSGB`・`TM100TDF`）の形を見ます
+  （未解決 #19、付録 BX）。**`ParseCallsign` が拒むものだけ**を対象にし、
+  通常の形に合うものには偽を返します。
+
+  19.68A は「特別な機会には 4 字を超えるものを認めうる」とだけ言い、形を
+  定めていません。ここでは次のように絞ります。
+
+  - 前置符字は 19.68 の 1 字（B・F・G・I・K・M・N・R・W）か、19.50 の 2 字
+    （3 字の枝は使わない）
+  - 続けて数字 1〜4 桁、そのあと**英字だけ**の後置符字 1〜7 字
+  - **19.68 を超えるところがある**（数字が 2 桁以上か、後置符字が 5 字以上）
+  - **日本の前置符字は対象にしない**（後置符字は英字 1〜3 字。要件 FR-K.1a）
+  - 国別前置符字表（要件 FR-K.12）は、ほかと同じく締めるだけ
+
+  **受信文から拾うときは、これだけで信じないでください。**`TU599K`（`TU 599 K`
+  が繋がったもの）もこの形に合います。受信文では **DE の直後に出たときだけ**
+  認めます（`DeepCW.Exchange`）。利用者が書いた一覧（待ち符号・手元の一覧）は、
+  利用者の根拠があるのでそのまま受け付けます。
+
+  Checks the form of a 19.68A special call sign (commemorative stations and
+  the like: `GB100RSGB`, `TM100TDF`) (open question #19, appendix BX). **Only
+  what `ParseCallsign` rejects** is considered; a token of the ordinary form
+  returns false.
+
+  19.68A says only that more than four characters may be allowed on special
+  occasions and gives no form. It is narrowed here: a prefix of 19.68's one
+  letter (B, F, G, I, K, M, N, R, W) or 19.50's two characters (the
+  three-character branch is not used); then one to four digits and a suffix
+  of one to seven **letters only**; **something beyond 19.68** (two or more
+  digits, or a suffix of five or more); **no Japanese prefix** (a Japanese
+  suffix is one to three letters, FR-K.1a); and the country prefix table
+  (FR-K.12) only tightens, as elsewhere.
+
+  **Do not believe this alone for text off the air**: `TU599K` (`TU 599 K` run
+  together) fits it too. In received text it is accepted **only directly after
+  DE** (`DeepCW.Exchange`). Lists the operator wrote (watched calls, roster)
+  carry the operator's own grounds and are accepted as they are. }
+function ParseSpecialCallsign(const Token: string; out Call: TCallsign): Boolean;
+
+{ 通常の形か、19.68A の特別な形のどちらかに合うか。**利用者が書いた一覧を
+  読むときだけ**使います（待ち符号・手元の一覧・記録の鍵）。受信文には使わない
+  でください（`ParseSpecialCallsign` の注意）。
+  Whether it fits the ordinary form or the special form of 19.68A. **Only for
+  lists the operator wrote** (watched calls, roster, log keys); not for text
+  off the air (see `ParseSpecialCallsign`). }
+function ParseOperatorCallsign(const Token: string; out Call: TCallsign): Boolean;
 
 { **形だけ**を見ます。国別前置符字表（要件 FR-K.12）を通しません。
 
@@ -356,6 +410,7 @@ begin
   Call.Suffix := '';
   Call.Appended := '';
   Call.Japanese := False;
+  Call.Special := False;
 
   if (Length(Token) < 3) or (Length(Token) > 12) then
     Exit;
@@ -488,12 +543,141 @@ begin
   Result := ParseCallsignShape(Token, Call) and PrefixAllocated(Call.Prefix);
 end;
 
+function ParseSpecialCallsign(const Token: string; out Call: TCallsign): Boolean;
+const
+  MAX_DIGITS = 4;
+  MAX_SUFFIX = 7;
+var
+  Base, Appended, Prefix, Suffix: string;
+  Slash, I, PrefixLength, Digits: Integer;
+  OnlyLetters, Pair: Boolean;
+begin
+  Result := False;
+  Call.Special := False;
+  { 特別な形は、数字が 2 つ続くか（2 桁以上）、7 字以上（1 字＋数字 1 桁＋
+    後置符字 5 字）のどちらかです。どちらでもなければ、通常の形の検査より前に
+    安く弾きます。受信文の DE の後ろの語はほとんどこれで済みます（付録 BX.4）。
+    The special form has two digits in a row (two or more digits) or is seven
+    characters or longer (one letter, one digit, a five-letter suffix). Anything
+    else is turned away cheaply, before the ordinary check; most words after DE
+    in received text end here (appendix BX.4). }
+  Pair := False;
+  for I := 2 to Length(Token) do
+    if IsDigit(Token[I - 1]) and IsDigit(Token[I]) then
+    begin
+      Pair := True;
+      Break;
+    end;
+  if (not Pair) and (Length(Token) < 7) then
+  begin
+    Call.Text := '';
+    Call.Base := '';
+    Call.Prefix := '';
+    Call.Area := #0;
+    Call.Suffix := '';
+    Call.Appended := '';
+    Call.Japanese := False;
+    Exit;
+  end;
+  { 通常の形に合うものは特別ではありません。/ The ordinary form is not special. }
+  if ParseCallsignShape(Token, Call) then
+  begin
+    Call.Text := '';
+    Call.Base := '';
+    Call.Prefix := '';
+    Call.Area := #0;
+    Call.Suffix := '';
+    Call.Appended := '';
+    Call.Japanese := False;
+    Exit;
+  end;
+
+  Slash := Pos('/', Token);
+  if Slash > 0 then
+  begin
+    Base := Copy(Token, 1, Slash - 1);
+    Appended := Copy(Token, Slash + 1, Length(Token) - Slash);
+    if (Length(Appended) < 1) or (Length(Appended) > 3) then
+      Exit;
+    for I := 1 to Length(Appended) do
+      if not (IsLetter(Appended[I]) or IsDigit(Appended[I])) then
+        Exit;
+  end
+  else
+  begin
+    Base := Token;
+    Appended := '';
+  end;
+  if (Length(Base) < 5) or (Length(Base) > 2 + MAX_DIGITS + MAX_SUFFIX) then
+    Exit;
+
+  for PrefixLength := 1 to 2 do
+  begin
+    Prefix := Copy(Base, 1, PrefixLength);
+    if not ValidPrefix(Prefix) then
+      Continue;
+    if IsJapanesePrefix(Prefix) then
+      Continue;
+    { 1 字の前置符字の直後に数字が続くなら、数字はそこから始まります。2 字目の
+      数字を前置符字に取り込んで数え直すと、`G12345ABC`（数字 5 桁）が `G1` と
+      4 桁として通ってしまいます（試験で見つけた穴）。
+      When a one-letter prefix is followed by a digit, the digits start there.
+      Re-reading with the second character folded into the prefix let
+      `G12345ABC` (five digits) through as `G1` and four digits (a hole the
+      test found). }
+    if (PrefixLength = 2) and IsDigit(Base[2]) and
+      ValidPrefix(Copy(Base, 1, 1)) then
+      Continue;
+    Digits := 0;
+    while (PrefixLength + Digits + 1 <= Length(Base)) and
+      IsDigit(Base[PrefixLength + Digits + 1]) do
+      Inc(Digits);
+    if (Digits < 1) or (Digits > MAX_DIGITS) then
+      Continue;
+    Suffix := Copy(Base, PrefixLength + Digits + 1, Length(Base));
+    if (Length(Suffix) < 1) or (Length(Suffix) > MAX_SUFFIX) then
+      Continue;
+    OnlyLetters := True;
+    for I := 1 to Length(Suffix) do
+      if not IsLetter(Suffix[I]) then
+        OnlyLetters := False;
+    if not OnlyLetters then
+      Continue;
+    { 19.68 を超えるところが無ければ、特別な形ではありません（通常の形で
+      拒まれた別の理由があるはずです）。
+      Nothing beyond 19.68 means it is not the special form (the ordinary rule
+      must have rejected it for some other reason). }
+    if (Digits < 2) and (Length(Suffix) < 5) then
+      Continue;
+    if not PrefixAllocated(Prefix) then
+      Continue;
+    Call.Text := Token;
+    Call.Base := Base;
+    Call.Prefix := Prefix;
+    Call.Area := Base[PrefixLength + 1];
+    Call.Suffix := Suffix;
+    Call.Appended := Appended;
+    Call.Japanese := False;
+    Call.Special := True;
+    Exit(True);
+  end;
+end;
+
+function ParseOperatorCallsign(const Token: string; out Call: TCallsign): Boolean;
+begin
+  Result := ParseCallsign(Token, Call) or ParseSpecialCallsign(Token, Call);
+end;
+
 function CallsignKey(const Token: string): string;
 var
   Parsed: TCallsign;
 begin
   Result := UpperCase(Trim(Token));
-  if ParseCallsign(Result, Parsed) then
+  { 特別な形も本体に直します。`GB100RSGB/P` と `GB100RSGB` を同じ局として
+    引けるように（付録 BX）。
+    The special form is reduced to its body too, so that `GB100RSGB/P` and
+    `GB100RSGB` are looked up as one station (appendix BX). }
+  if ParseOperatorCallsign(Result, Parsed) then
     Result := Parsed.Base;
 end;
 

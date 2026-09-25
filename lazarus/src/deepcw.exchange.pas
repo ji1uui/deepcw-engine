@@ -108,7 +108,13 @@ function SplitWords(const Chars: TDecodedChars): TWords;
   A candidate is a word fitting the shape rule (requirement FR-K, first stage;
   ITU Radio Regulations Article 19). Where there are several, **the one after DE
   wins**: a contact is sent as "them DE us", so what follows DE is the station
-  transmitting. With no DE, the most frequent candidate is taken. }
+  transmitting. With no DE, the most frequent candidate is taken.
+
+  19.68A の特別な形（`GB100RSGB` など、付録 BX）は、**DE の直後に 1 度でも
+  出たときだけ**候補にします。そのあとは、同じ語がどこに出ても数えます。
+  A call sign of 19.68A's special form (`GB100RSGB` and the like, appendix BX)
+  becomes a candidate **only once it has appeared directly after DE**; from
+  then on the same word counts wherever it appears. }
 procedure ChooseCallsign(const Words: TWords; out Callsign: string;
   out Sightings: Integer; out Confidence: Single);
 
@@ -196,8 +202,58 @@ begin
   SetLength(Result, Count);
 end;
 
-procedure ChooseCallsign(const Words: TWords; out Callsign: string;
-  out Sightings: Integer; out Confidence: Single);
+{ DE の直後に出た、19.68A の特別な形の語（付録 BX）。ふつうは空です。
+  The words of 19.68A's special form that appeared directly after DE
+  (appendix BX); usually none. }
+function AdmittedSpecials(const Words: TWords): TStringArray;
+var
+  I, J, Count: Integer;
+  Parsed: TCallsign;
+  Known: Boolean;
+begin
+  Result := nil;
+  Count := 0;
+  for I := 1 to High(Words) do
+    if (Words[I - 1].Text = 'DE') and ParseSpecialCallsign(Words[I].Text, Parsed) then
+    begin
+      Known := False;
+      for J := 0 to Count - 1 do
+        if Result[J] = Words[I].Text then
+          Known := True;
+      if Known then
+        Continue;
+      SetLength(Result, Count + 1);
+      Result[Count] := Words[I].Text;
+      Inc(Count);
+    end;
+end;
+
+{ 呼出符号の候補か。通常の形か、DE の直後で認めた特別な形（付録 BX）。
+  `Parsed` は呼ぶ側のものを使い回します。文字列 6 つの記録を語ごとに作って
+  捨てると、読み取り全体が 3 割ほど遅くなりました（付録 BX.4）。
+  Whether a word is a call sign candidate: the ordinary form, or a special
+  form admitted after DE (appendix BX). `Parsed` is the caller's, reused: a
+  record of six strings built and dropped per word made the whole reading
+  about 30% slower (appendix BX.4). }
+function IsCandidate(const Text: string; const Admitted: TStringArray;
+  var Parsed: TCallsign): Boolean;
+var
+  J: Integer;
+begin
+  if ParseCallsign(Text, Parsed) then
+    Exit(True);
+  for J := 0 to High(Admitted) do
+    if Admitted[J] = Text then
+      Exit(True);
+  Result := False;
+end;
+
+{ `ChooseCallsign` の中身。認めた特別な形を受け取ります（`ReadExchange` が
+  1 度だけ求めて、選ぶのと下線とに使うため）。
+  The body of `ChooseCallsign`, given the admitted special forms (so that
+  `ReadExchange` works them out once for both the choice and the underlines). }
+procedure ChooseAmong(const Words: TWords; const Admitted: TStringArray;
+  out Callsign: string; out Sightings: Integer; out Confidence: Single);
 type
   { 候補ごとの集計。候補の種類は少数なので、これで足ります。
     The tally for one candidate; there are only ever a few kinds. }
@@ -209,8 +265,8 @@ type
 var
   Tally: array of TCandidate;
   I, J, Found, Total: Integer;
-  Parsed: TCallsign;
   AfterDe: string;
+  Parsed: TCallsign;
 begin
   Callsign := '';
   Sightings := 0;
@@ -225,7 +281,7 @@ begin
     transcript. }
   for I := 0 to High(Words) do
   begin
-    if not ParseCallsign(Words[I].Text, Parsed) then
+    if not IsCandidate(Words[I].Text, Admitted, Parsed) then
       Continue;
     Found := -1;
     for J := 0 to Total - 1 do
@@ -278,6 +334,12 @@ begin
     end;
 end;
 
+procedure ChooseCallsign(const Words: TWords; out Callsign: string;
+  out Sightings: Integer; out Confidence: Single);
+begin
+  ChooseAmong(Words, AdmittedSpecials(Words), Callsign, Sightings, Confidence);
+end;
+
 function RstDigits(const Token: string): string;
 var
   Work: string;
@@ -319,6 +381,7 @@ var
   Words: TWords;
   Named: TReferenceWords;
   I, Count: Integer;
+  Admitted: TStringArray;
   Parsed: TCallsign;
 begin
   Result.Callsigns := nil;
@@ -348,12 +411,17 @@ begin
   end;
   Result.References := ExtractReferences(Named);
 
-  ChooseCallsign(Words, Result.Callsign, Result.Sightings, Result.Confidence);
+  { 下線を引く語も、選ぶときと同じ候補です（付録 BX）。
+    The words underlined are the same candidates as for the choice
+    (appendix BX). }
+  Admitted := AdmittedSpecials(Words);
+  ChooseAmong(Words, Admitted, Result.Callsign, Result.Sightings,
+    Result.Confidence);
 
   SetLength(Result.Callsigns, Length(Words));
   Count := 0;
   for I := 0 to High(Words) do
-    if ParseCallsign(Words[I].Text, Parsed) then
+    if IsCandidate(Words[I].Text, Admitted, Parsed) then
     begin
       Result.Callsigns[Count].First := Words[I].First;
       Result.Callsigns[Count].Last := Words[I].Last;
