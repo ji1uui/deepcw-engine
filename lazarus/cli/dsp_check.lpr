@@ -4576,6 +4576,72 @@ begin
   end;
 end;
 
+{ 待っていた局を音でも知らせる（未解決 #21、付録 BY）。
+  Sounding a chime for a station waited for (open question #21,
+  appendix BY). }
+procedure TestWatchSound;
+var
+  Chime: TSingleArray;
+  I, Crossings, Tone, Gap: Integer;
+  Peak: Single;
+  GapSilent: Boolean;
+
+  function CrossingsIn(From, Count: Integer): Integer;
+  var
+    J: Integer;
+  begin
+    Result := 0;
+    for J := From + 1 to From + Count - 1 do
+      if (Chime[J - 1] < 0) <> (Chime[J] < 0) then
+        Inc(Result);
+  end;
+
+begin
+  WriteLn;
+  WriteLn('待っていた局を音でも知らせる（付録 BY）');
+  Chime := WatchChime(8000);
+  Tone := Round(0.12 * 8000);
+  Gap := Round(0.06 * 8000);
+  Check('合図の長さは 2 音と間 1 つ', Length(Chime) = 2 * Tone + Gap,
+    IntToStr(Length(Chime)));
+  Peak := 0;
+  for I := 0 to High(Chime) do
+    Peak := Max(Peak, Abs(Chime[I]));
+  Check('最大は 0.25 まで', (Peak > 0.2) and (Peak <= 0.25), FloatToStr(Peak));
+  Check('始まりと終わりは丸めてある（角が無い）',
+    (Abs(Chime[0]) < 0.01) and (Abs(Chime[High(Chime)]) < 0.01),
+    Format('%0:.4f / %1:.4f', [Chime[0], Chime[High(Chime)]]));
+  GapSilent := True;
+  for I := Tone to Tone + Gap - 1 do
+    if Chime[I] <> 0 then
+      GapSilent := False;
+  Check('あいだは無音', GapSilent);
+  { 0 を横切る回数から高さを確かめます（1 周期に 2 回）。
+    The pitch from zero crossings (two per cycle). }
+  Crossings := CrossingsIn(0, Tone);
+  Check('1 音目は 880 Hz', Abs(Crossings - 2 * 880 * 0.12) <= 3,
+    IntToStr(Crossings));
+  Crossings := CrossingsIn(Tone + Gap, Tone);
+  Check('2 音目は 1320 Hz', Abs(Crossings - 2 * 1320 * 0.12) <= 3,
+    IntToStr(Crossings));
+  Check('標本化の速さが 0 以下なら空', Length(WatchChime(0)) = 0);
+  Check('48 kHz でも同じ長さ（秒）', Length(WatchChime(48000)) =
+    2 * Round(0.12 * 48000) + Round(0.06 * 48000));
+
+  Check('切ってあれば鳴らさない',
+    not ShouldSoundWatch(False, False, False, 1000, 0));
+  Check('入れてあれば最初は鳴らす',
+    ShouldSoundWatch(True, False, False, 1000, 0));
+  Check('再生中は鳴らさない（利用者は席にいる・新しい流れを開かない）',
+    not ShouldSoundWatch(True, True, False, 1000, 0));
+  Check('送っている間は鳴らさない',
+    not ShouldSoundWatch(True, False, True, 1000, 0));
+  Check('前の合図から 30 秒たたなければ鳴らさない',
+    not ShouldSoundWatch(True, False, False, 5000 + WATCH_SOUND_GAP_MS - 1, 5000));
+  Check('30 秒たてば鳴らす',
+    ShouldSoundWatch(True, False, False, 5000 + WATCH_SOUND_GAP_MS, 5000));
+end;
+
 procedure TestTxGate;
 var
   Gate: TTxReceiveGate;
@@ -5546,6 +5612,7 @@ begin
     TestTxGate;
     TestLocalClock;
     TestSpecialCallsign;
+    TestWatchSound;
     TestRigConfig;
     TestRigFrequency;
   finally

@@ -130,6 +130,46 @@ function CallsignDistance(const A, B: string): Integer;
 function MatchedWatch(const Callsign: string;
   const Watched: TWatchedCalls): string;
 
+const
+  { 音で知らせたあと、次に鳴らすまでに空ける時間（ミリ秒、未解決 #21、
+    付録 BY）。局が消えて出直すたびに鳴ると、席を外した利用者を呼ぶ役目よりも
+    騒がしさが勝ちます。画面の知らせは、これとは関わりなく毎回出します。
+    How long to wait after a sound before the next one (ms; open question #21,
+    appendix BY). Ringing each time a station drops and returns would be more
+    noise than summons; the notice on screen appears every time regardless. }
+  WATCH_SOUND_GAP_MS = 30000;
+
+{ 待っていた局を知らせる合図の音（未解決 #21、付録 BY）。880 Hz と 1320 Hz を
+  0.12 秒ずつ、あいだに 0.06 秒。立ち上がりと終わりは 6 ms の余弦で丸めます
+  （角があると「プツッ」と鳴ります）。**CW の信号と取り違えないよう、2 つの
+  高さを続けます。**最大は 0.25。
+  The chime announcing a station waited for (open question #21, appendix BY):
+  880 Hz then 1320 Hz, 0.12 s each with 0.06 s between, with 6 ms raised-cosine
+  edges (square edges click). **Two pitches in a row, so it is not mistaken for
+  a CW signal.** Peak 0.25. }
+function WatchChime(SampleRate: Integer): TSingleArray;
+
+{ いま音で知らせてよいか（未解決 #21、付録 BY）。
+
+  - `Enabled`: 利用者が「音でも知らせる」を入れているか（既定は切）
+  - `Playing`: 何かを再生中か。**再生中なら利用者は席にいて聴いている**ので
+    鳴らしません。**新しい音声の流れを開かないため**でもあります（空いている
+    再生を借りて鳴らす）
+  - `Sending`: 無線機で送っている（送り終える見込みまでを含む）か。**PC の
+    音声出力を無線機につないでいる局がある**ので、送っている間は鳴らしません
+  - 前に鳴らしてから `WATCH_SOUND_GAP_MS` 経っていなければ鳴らしません
+    （`LastMs` が 0 なら、まだ鳴らしていない）
+
+  Whether to sound the alert now (open question #21, appendix BY): only when
+  the operator enabled it (off by default); not while anything is playing
+  (**the operator is present and listening**, and **no new audio stream is
+  opened**: an idle player is borrowed); not while the rig is sending,
+  expected end included (**some stations wire the PC's audio output to the
+  rig**); and not within `WATCH_SOUND_GAP_MS` of the last sound (`LastMs` zero
+  means none yet). }
+function ShouldSoundWatch(Enabled, Playing, Sending: Boolean;
+  NowMs, LastMs: QWord): Boolean;
+
 implementation
 
 { 区切りとして扱う文字。/ The characters treated as separators. }
@@ -314,6 +354,51 @@ end;
 function TWatchAlerts.Count: Integer;
 begin
   Result := FCount;
+end;
+
+function WatchChime(SampleRate: Integer): TSingleArray;
+const
+  TONE_SECONDS = 0.12;
+  GAP_SECONDS = 0.06;
+  EDGE_SECONDS = 0.006;
+  PEAK = 0.25;
+  PITCHES: array[0..1] of Double = (880, 1320);
+var
+  Tone, Gap, Edge, N, I, T, At: Integer;
+  Envelope: Double;
+begin
+  Result := nil;
+  if SampleRate <= 0 then
+    Exit;
+  Tone := Round(TONE_SECONDS * SampleRate);
+  Gap := Round(GAP_SECONDS * SampleRate);
+  Edge := Max(1, Round(EDGE_SECONDS * SampleRate));
+  N := Length(PITCHES) * Tone + (Length(PITCHES) - 1) * Gap;
+  SetLength(Result, N);
+  for I := 0 to N - 1 do
+    Result[I] := 0;
+  At := 0;
+  for T := 0 to High(PITCHES) do
+  begin
+    for I := 0 to Tone - 1 do
+    begin
+      Envelope := 1;
+      if I < Edge then
+        Envelope := 0.5 * (1 - Cos(Pi * I / Edge))
+      else if I >= Tone - Edge then
+        Envelope := 0.5 * (1 - Cos(Pi * (Tone - 1 - I) / Edge));
+      Result[At + I] := PEAK * Envelope *
+        Sin(2 * Pi * PITCHES[T] * I / SampleRate);
+    end;
+    Inc(At, Tone + Gap);
+  end;
+end;
+
+function ShouldSoundWatch(Enabled, Playing, Sending: Boolean;
+  NowMs, LastMs: QWord): Boolean;
+begin
+  Result := Enabled and (not Playing) and (not Sending) and
+    ((LastMs = 0) or (NowMs < LastMs) or (NowMs - LastMs >= WATCH_SOUND_GAP_MS));
 end;
 
 end.

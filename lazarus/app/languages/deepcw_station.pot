@@ -516,6 +516,10 @@ msgctxt "frmmain.rsctxtransmit"
 msgid "送信"
 msgstr ""
 
+#: frmmain.rsctxwatchsound
+msgid "待ち符号の合図"
+msgstr ""
+
 #: frmmain.rsctxwavread
 msgid "WAV の読み込み"
 msgstr ""
@@ -1741,6 +1745,10 @@ msgstr ""
 
 #: frmmain.rsrxwatchlabel
 msgid "待つ符号"
+msgstr ""
+
+#: frmmain.rsrxwatchsound
+msgid "音でも知らせる"
 msgstr ""
 
 #: frmmain.rssaved

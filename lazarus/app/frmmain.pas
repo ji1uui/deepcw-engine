@@ -483,6 +483,15 @@ type
     FWatchTools: TPanel;
     FRxWatch: TEdit;
     FRxWatchInfo: TLabel;
+    { 待っていた局を音でも知らせるか（未解決 #21、付録 BY）。既定は切。
+      Whether to sound a chime for a station waited for too (open question #21,
+      appendix BY); off by default. }
+    FRxWatchSound: TCheckBox;
+    { 最後に合図を鳴らした時刻（`GetTickCount64`、0 ならまだ）と、合図の音。
+      When the chime last sounded (`GetTickCount64`, zero for never) and the
+      chime itself. }
+    FWatchSoundAt: QWord;
+    FWatchChime: TSingleArray;
     { コンテストモードでだけ現れる行（要件 FR-I.5）。
       A row that appears only in the contest mode (requirement FR-I.5). }
     FFindTools: TPanel;
@@ -825,6 +834,8 @@ type
     procedure UpdateRate(Force: Boolean = False);
     function WatchedCall(const Callsign: string): string;
     procedure RxWatchChanged(Sender: TObject);
+    procedure RxWatchSoundChanged(Sender: TObject);
+    procedure SoundWatched;
     procedure AnnounceWatched;
     procedure UpdateWatchInfo;
     procedure RxCopyCallClick(Sender: TObject);
@@ -1009,6 +1020,11 @@ resourcestring
   RsRxReplayHint = '文字を押すと、その音を聴き直せます。';
   RsRxEmpty = '受信を開始すると、ここに読めた文字が出ます。';
   RsRxWatchLabel = '待つ符号';
+  { 待っていた局を音でも知らせる（未解決 #21、付録 BY）。
+    Sound a chime for a station waited for too (open question #21,
+    appendix BY). }
+  RsRxWatchSound = '音でも知らせる';
+  RsCtxWatchSound = '待ち符号の合図';
   RsRxBandLabel = '運用バンド';
   RsRxBandAny = '指定なし';
   RsRxHideWorked = '交信済みを隠す';
@@ -2670,9 +2686,20 @@ begin
   FRxWatch.Parent := FWatchTools;
   FRxWatch.SetBounds(80, 4, 260, 26);
   FRxWatch.TextHint := 'JA1ABC JH2XYZ';
+  { 席を外しているときに気づけるよう、音でも知らせられます。**既定は切**です。
+    入れていない人に、いきなり音が鳴ることはありません（付録 BY）。
+    A chime can announce it too, for when the operator is away from the desk.
+    **Off by default**: nobody who has not asked for it hears a sudden sound
+    (appendix BY). }
+  FRxWatchSound := TCheckBox.Create(FWatchTools);
+  FRxWatchSound.Parent := FWatchTools;
+  FRxWatchSound.SetBounds(352, 6, 160, 24);
+  RegisterCaption(FRxWatchSound, @RsRxWatchSound);
+  FRxWatchSound.Checked := False;
+  FRxWatchSound.OnChange := @RxWatchSoundChanged;
   FRxWatchInfo := TLabel.Create(FWatchTools);
   FRxWatchInfo.Parent := FWatchTools;
-  FRxWatchInfo.SetBounds(352, 9, 600, 20);
+  FRxWatchInfo.SetBounds(524, 9, 420, 20);
 
   { コンテスト中に見たいものを 1 行に置きます。**運用バンド・交信済みを隠す・
     時間あたりの交信数**の 3 つです。
@@ -4515,6 +4542,8 @@ begin
       The call signs waited for are remembered: closing the application is not a
       reason to stop waiting for someone. }
     FRxWatch.Text := Ini.ReadString('receive', 'watch', '');
+    { 無い・読めない値は切（既定）です。/ Missing or unreadable means off. }
+    FRxWatchSound.Checked := Ini.ReadBool('receive', 'watch_sound', False);
     FSetBandwidth.ItemIndex := ClampInt(Ini.ReadInteger('receive', 'bandwidth', 0),
       0, FSetBandwidth.Items.Count - 1);
     { 前回の同調先は覚えておきます。同じ設備なら音程は同じであることが多く、
@@ -4655,6 +4684,7 @@ begin
         Ini.WriteString('ui', 'language', FLangRemembered);
       Ini.WriteInteger('receive', 'mode', FRxMode.ItemIndex);
       Ini.WriteString('receive', 'watch', FRxWatch.Text);
+      Ini.WriteBool('receive', 'watch_sound', FRxWatchSound.Checked);
       { 無線機に合わせている間は、運用者の選択を残します（要件 FR-T.7）。
         While following the rig, the operator's own choice is saved (FR-T.7). }
       if FRigBandActive then
@@ -7788,7 +7818,65 @@ begin
         [FBandEntries[I].Callsign, FBandEntries[I].Hz]);
     end;
   if Found <> '' then
+  begin
     SetStatus('', '', Format(RsWatchedOnAir, [Found]));
+    SoundWatched;
+  end;
+end;
+
+{ 待っていた局を音でも知らせます（未解決 #21、付録 BY）。
+
+  **新しい音声の流れは開きません。**聴き直しの再生（`FReviewPlay`）が空いて
+  いれば、それを借りて鳴らします。何かを再生中なら利用者は席にいるので鳴らさず、
+  無線機で送っている間（送り終える見込みまで）も鳴らしません。鳴らせなければ
+  （出力の装置が無いなど）診断に残すだけで、受信は妨げません（Receive は
+  fail-soft）。
+
+  Sounds a chime for a station waited for (open question #21, appendix BY).
+
+  **No new audio stream is opened**: the replay player (`FReviewPlay`) is
+  borrowed while idle. While anything plays the operator is present, so no
+  chime; nor while the rig is sending (up to the expected end). If it cannot
+  sound (no output device, say) it is only noted in the diagnostics and
+  reception carries on (receive is fail-soft). }
+procedure TMainForm.SoundWatched;
+var
+  NowMs: QWord;
+  Status: TKeyerStatus;
+  Sending: Boolean;
+begin
+  NowMs := GetTickCount64;
+  { 送っているかは、鍵のスレッドの今の様子から求めます（受信の抑制と同じ
+    見込み。「送っている間は復号しない」を切っていても効きます）。
+    Whether the rig is sending comes from the keyer's state right now (the
+    same expectation as the receive gate, in force even with "do not decode
+    while sending" switched off). }
+  Sending := False;
+  if (FKeyer <> nil) and (FTxGate <> nil) then
+  begin
+    Status := FKeyer.Snapshot;
+    FTxGate.Update(Status.State = ksSending, Status.KeyedUntil, NowMs);
+    Sending := FTxGate.Muted(NowMs);
+  end;
+  if not ShouldSoundWatch(FRxWatchSound.Checked,
+    FPlayback.Running or FReviewPlay.Running, Sending, NowMs,
+    FWatchSoundAt) then
+    Exit;
+  FWatchSoundAt := NowMs;
+  if Length(FWatchChime) = 0 then
+    FWatchChime := WatchChime(FTxSampleRate);
+  FReviewPlay.Play(FWatchChime, FTxSampleRate);
+  if FReviewPlay.LastError <> '' then
+    LogDiagnostic(RsCtxWatchSound, FReviewPlay.LastError);
+end;
+
+procedure TMainForm.RxWatchSoundChanged(Sender: TObject);
+begin
+  { 入れ直したら、すぐ次の知らせで鳴るようにします。
+    Switching it on again lets the very next announcement sound. }
+  FWatchSoundAt := 0;
+  if Sender <> nil then
+    MarkSettingsDirty;
 end;
 
 { 一覧を作り直します。毎秒 1 回で足ります。局の並びが 0.2 秒ごとに変わる必要は
