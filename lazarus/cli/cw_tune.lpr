@@ -2781,6 +2781,36 @@ begin
   ShowFound;
   Verdict('強い局の 300 Hz 横の -30 dB の局を残す', (Matched = 2) and (Spurious = 0),
     Format('(当たり %d / 余分 %d)', [Matched, Spurious]));
+  { 隣の強い局のキークリック（1000 + 375 Hz）が 100 Hz 以内に落ちても、1 局しか
+    いない弱い局を「密集」と言わない（付録 BZ.6）。言うと符号が隠れる。
+    A strong neighbour's click (1000 + 375 Hz) landing within 100 Hz must not
+    make a lone weak station "crowded" (appendix BZ.6): that hides its call. }
+  { 強い局の 100 Hz 以内に本物の局がいると 1 局に畳まれる。畳まれた局の
+    キークリックも局にせず、畳んだことは残す（付録 BZ.6）。
+    A real station within 100 Hz of a strong one is folded into it; its key
+    clicks must not become stations either, and the folding must survive
+    (appendix BZ.6). }
+  SetLength(Wanted, 1);
+  Wanted[0] := 1000;
+  MixWith([MESSAGES[1], 'QRL? DE K1ABC'], [1000, 1060], [1.0, 0.1], 0.005, 7);
+  Detect;
+  Score(Matched, Spurious, Worst);
+  ShowFound;
+  Verdict('畳まれた本物の局のキークリックも局にせず、密集と示す',
+    (Matched = 1) and (Spurious = 0) and (Length(Found) = 1) and
+    (Found[0].Crowded >= 1),
+    Format('(当たり %d / 余分 %d、畳んだ %d)', [Matched, Spurious,
+      Ord(Length(Found) > 0) * Found[0].Crowded]));
+  SetLength(Wanted, 2);
+  Wanted[0] := 1000;
+  Wanted[1] := 1250;
+  MixWith([MESSAGES[1], 'QRL? DE K1ABC'], [1000, 1250], [1.0, 0.0316], 0.005, 7195);
+  Detect;
+  ShowFound;
+  Verdict('強い局の横の弱い局を密集と言わない',
+    (Length(Found) = 2) and (Found[1].Crowded = 0),
+    Format('(%d 局、畳んだ %d)', [Length(Found),
+      Ord(Length(Found) = 2) * Found[High(Found)].Crowded]));
 
   Wanted[1] := 1150;
   MixWith([MESSAGES[0], MESSAGES[1]], [1000, 1150], [1.0, 0.7], 0.005, 7193);

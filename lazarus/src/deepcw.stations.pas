@@ -516,16 +516,96 @@ var
   Column, Neighbourhood: TDoubleArray;
   Level, Floor_, Statistic: TDoubleArray;
   Peak: Boolean;
-  PeakMask: TSteadyMask;
-  PeakSteady, J, Kept, RefBin, OwnBin: Integer;
+  J, Kept, OwnBin, Rank, Above, RefCount, Candidate: Integer;
   Masks: array of TSteadyMask;
   Steady: array of Integer;
   Keep: array of Boolean;
-  Together, AnyOn: TSteadyMask;
-  References, TogetherCount, Rank, Above: Integer;
-  Order: array of Integer;
+  Order, Refs: array of Integer;
+  { 畳む候補の山（自分のビンを除く）。局が決まってから数えます。
+    The candidate peaks to fold (own bin excluded), counted once the stations
+    are settled. }
+  FoldBins: array of array of Integer;
+  { 見つけた局のビン（`Result` と同じ番号）。/ The bin of each station found
+    (numbered as `Result`). }
+  StationBin: array of Integer;
+  { 本物と判じた、畳んだ山（局ごと、ビン）。隣の局のキークリックを判じる参照に
+    加えます（付録 BZ.6）。/ The folded peaks judged real (per station, bins),
+    added as references when judging neighbours' clicks (appendix BZ.6). }
+  Companions: array of array of Integer;
+  WithCompanion: Boolean;
+
+  { その山（`OwnBin`）が、参照する山（`Refs` の先頭 `RefCount` 個、**ビンの
+    番号**）のキークリックか（付録 BZ）。参照それぞれが落ち着いているコマで、
+    また 2 局以上なら全員が同時に落ち着き 1 局以上が押しているコマで測り直し、
+    しきい値を割ればキークリックとします。**本物の局はどの測り直しでも割らない。**
+    Whether the peak at `OwnBin` is a key click of the reference peaks (the
+    first `RefCount` of `Refs`, **bin numbers**) (appendix BZ): it is
+    re-measured over each reference's steady frames and, with two or more,
+    over the frames where all are steady and one holds the key down; falling
+    below the threshold makes it a click. **A real station never does.** }
+  function ClickOf(OwnBin: Integer; const Refs: array of Integer;
+    RefCount: Integer): Boolean;
+  var
+    R, J, RefBin, TogetherCount, Frame: Integer;
+    Together, AnyOn: TSteadyMask;
+  begin
+    Result := False;
+    Together := nil;
+    AnyOn := nil;
+    for R := 0 to RefCount - 1 do
+    begin
+      RefBin := Refs[R];
+      J := RefBin;
+      if Steady[J] < 0 then
+        Steady[J] := SteadyFrames(Wide, RefBin, Statistic[RefBin], Masks[J]);
+      if (Steady[J] >= DETECT_CLICK_MIN_FRAMES) and
+         (SteadyLevelDb(Wide, OwnBin, Masks[J], Floor_[OwnBin]) <
+          DETECT_MIN_LEVEL_DB) then
+        Exit(True);
+      { 強い局どうしの落ち着いたコマの重なり。**強い局が 2 つあると、片方が
+        落ち着いていても、もう片方の切り替えで鳴る**峰がありました（実測、
+        付録 BZ.3）。すべてが同時に落ち着き、**少なくとも 1 局が押している**
+        コマで測ります（全員が黙っているコマでは、本物の局も黙っている）。
+        The overlap of the strong stations' steady frames. **With two strong
+        stations, a peak kept ringing on one's edges while the other was
+        steady** (measured, appendix BZ.3). It is measured where all are steady
+        at once **and at least one holds the key down** (where everyone is
+        silent, a real station is silent too). }
+      if R = 0 then
+      begin
+        SetLength(Together, Wide.Frames);
+        SetLength(AnyOn, Wide.Frames);
+        for Frame := 0 to Wide.Frames - 1 do
+        begin
+          Together[Frame] := Masks[J][Frame];
+          AnyOn[Frame] := False;
+        end;
+      end
+      else
+        for Frame := 0 to Wide.Frames - 1 do
+          Together[Frame] := Together[Frame] and Masks[J][Frame];
+      for Frame := 0 to Wide.Frames - 1 do
+        if MagnitudeOf(Wide.Data[Frame * Wide.Bins + RefBin]) >=
+           DETECT_CLICK_ON_RATIO * Statistic[RefBin] then
+          AnyOn[Frame] := True;
+    end;
+    if RefCount < 2 then
+      Exit;
+    TogetherCount := 0;
+    for Frame := 0 to Wide.Frames - 1 do
+    begin
+      Together[Frame] := Together[Frame] and AnyOn[Frame];
+      if Together[Frame] then
+        Inc(TogetherCount);
+    end;
+    Result := (TogetherCount >= DETECT_CLICK_MIN_FRAMES) and
+      (SteadyLevelDb(Wide, OwnBin, Together, Floor_[OwnBin]) <
+       DETECT_MIN_LEVEL_DB);
+  end;
+
 begin
   Result := nil;
+  FoldBins := nil;
   if (Wide.Frames <= 0) or (Wide.Bins <= 0) or (WideRate <= 0) then
     Exit;
 
@@ -645,27 +725,20 @@ begin
       Counts the peaks folded in. A peak is a bin above the threshold and higher
       than both its neighbours; this bin counts itself, so one less is the number
       folded in. }
-    Folded := 0;
-    PeakSteady := -1;
+    { 畳む候補を控えます。数えるのは、残す局が決まってから（[6]）。
+      The candidates to fold are noted; they are counted once the stations to
+      keep are settled ([6]). }
+    if Count >= Length(FoldBins) then
+      SetLength(FoldBins, Length(Result));
+    FoldBins[Count] := nil;
     for I := Max(1, Bin - Radius) to Min(Wide.Bins - 2, Bin + Radius) do
-      if (Level[I] >= DETECT_MIN_LEVEL_DB) and (Level[I] > Level[I - 1]) and
-         (Level[I] >= Level[I + 1]) then
+      if (I <> Bin) and (Level[I] >= DETECT_MIN_LEVEL_DB) and
+         (Level[I] > Level[I - 1]) and (Level[I] >= Level[I + 1]) then
       begin
-        { この局のキークリックは畳んだ峰に数えません（付録 BZ）。落ち着いた
-          コマは要るときだけ求めます。
-          This station's own key clicks are not counted as folded peaks
-          (appendix BZ); its steady frames are worked out only when needed. }
-        if (I <> Bin) and (Level[Bin] >= Level[I] + DETECT_CLICK_GAP_DB) then
-        begin
-          if PeakSteady < 0 then
-            PeakSteady := SteadyFrames(Wide, Bin, Statistic[Bin], PeakMask);
-          if (PeakSteady >= DETECT_CLICK_MIN_FRAMES) and
-             (SteadyLevelDb(Wide, I, PeakMask, Floor_[I]) < DETECT_MIN_LEVEL_DB) then
-            Continue;
-        end;
-        Inc(Folded);
+        SetLength(FoldBins[Count], Length(FoldBins[Count]) + 1);
+        FoldBins[Count][High(FoldBins[Count])] := I;
       end;
-    Result[Count].Crowded := Max(0, Folded - 1);
+    Result[Count].Crowded := 0;
     Inc(Count);
   end;
   SetLength(Result, Count);
@@ -680,13 +753,19 @@ begin
         it falls below the threshold. **A real station never does**, against
         any strong station, being keyed independently. Widths are settled after
         the removal. }
-  SetLength(Masks, Count);
-  SetLength(Steady, Count);
+  SetLength(StationBin, Count);
+  for I := 0 to Count - 1 do
+    StationBin[I] := Round(Result[I].Hz / BinHz);
+  { 落ち着いたコマは、ビンごとに要るときだけ求めて控えます。
+    Steady frames are worked out per bin, only when needed, and kept. }
+  SetLength(Masks, Wide.Bins);
+  SetLength(Steady, Wide.Bins);
+  for I := 0 to Wide.Bins - 1 do
+    Steady[I] := -1;
   SetLength(Keep, Count);
   SetLength(Order, Count);
   for I := 0 to Count - 1 do
   begin
-    Steady[I] := -1;
     Keep[I] := True;
     Order[I] := I;
   end;
@@ -707,70 +786,106 @@ begin
     end;
     Order[Kept + 1] := J;
   end;
+  SetLength(Refs, Wide.Bins);
   for Rank := 0 to Count - 1 do
   begin
     I := Order[Rank];
-    OwnBin := Round(Result[I].Hz / BinHz);
-    References := 0;
-    Together := nil;
+    OwnBin := StationBin[I];
+    RefCount := 0;
     for Above := 0 to Rank - 1 do
     begin
       J := Order[Above];
-      if (not Keep[J]) or
-         (Result[J].LevelDb < Result[I].LevelDb + DETECT_CLICK_GAP_DB) then
-        Continue;
-      RefBin := Round(Result[J].Hz / BinHz);
-      if Steady[J] < 0 then
-        Steady[J] := SteadyFrames(Wide, RefBin, Statistic[RefBin], Masks[J]);
-      if (Steady[J] >= DETECT_CLICK_MIN_FRAMES) and
-         (SteadyLevelDb(Wide, OwnBin, Masks[J], Floor_[OwnBin]) <
-          DETECT_MIN_LEVEL_DB) then
+      if Keep[J] and
+         (Result[J].LevelDb >= Result[I].LevelDb + DETECT_CLICK_GAP_DB) then
       begin
-        Keep[I] := False;
-        Break;
+        Refs[RefCount] := StationBin[J];
+        Inc(RefCount);
       end;
-      { 強い局どうしの落ち着いたコマの重なり。**強い局が 2 つあると、片方が
-        落ち着いていても、もう片方の切り替えで鳴る**峰がありました（実測、
-        付録 BZ.3）。すべてが同時に落ち着き、**少なくとも 1 局が押している**
-        コマで測ります（全員が黙っているコマでは、本物の局も黙っている）。
-        The overlap of the strong stations' steady frames. **With two strong
-        stations, a peak kept ringing on one's edges while the other was
-        steady** (measured, appendix BZ.3). It is measured where all are steady
-        at once **and at least one holds the key down** (where everyone is
-        silent, a real station is silent too). }
-      if References = 0 then
-      begin
-        SetLength(Together, Wide.Frames);
-        SetLength(AnyOn, Wide.Frames);
-        for Frame := 0 to Wide.Frames - 1 do
-        begin
-          Together[Frame] := Masks[J][Frame];
-          AnyOn[Frame] := False;
-        end;
-      end
-      else
-        for Frame := 0 to Wide.Frames - 1 do
-          Together[Frame] := Together[Frame] and Masks[J][Frame];
-      for Frame := 0 to Wide.Frames - 1 do
-        if MagnitudeOf(Wide.Data[Frame * Wide.Bins + RefBin]) >=
-           DETECT_CLICK_ON_RATIO * Statistic[RefBin] then
-          AnyOn[Frame] := True;
-      Inc(References);
     end;
-    if Keep[I] and (References >= 2) then
+    if ClickOf(OwnBin, Refs, RefCount) then
+      Keep[I] := False;
+  end;
+
+  { [6] 「密集」の数（要件 FR-J.6）。畳む候補の山のうち、**残す局のどれかの
+        キークリックであるものは数えません**（付録 BZ.6）。その局自身の
+        クリックだけでなく、**隣の強い局のクリックが 100 Hz 以内に落ちる**と、
+        1 局しかいない本物の弱い局が「密集 3」と出て、符号が隠れていました。
+        [6] The crowded count (requirement FR-J.6). Candidate peaks that are
+        **a key click of any station kept are not counted** (appendix BZ.6):
+        not only a station's own clicks but **a strong neighbour's clicks
+        landing within 100 Hz** made a real, lone weak station read "crowded 3",
+        hiding its call sign. }
+  SetLength(Companions, Count);
+  for I := 0 to Count - 1 do
+  begin
+    Companions[I] := nil;
+    if not Keep[I] then
+      Continue;
+    Folded := 1;
+    for Candidate := 0 to High(FoldBins[I]) do
     begin
-      TogetherCount := 0;
-      for Frame := 0 to Wide.Frames - 1 do
+      Bin := FoldBins[I][Candidate];
+      RefCount := 0;
+      for Rank := 0 to Count - 1 do
       begin
-        Together[Frame] := Together[Frame] and AnyOn[Frame];
-        if Together[Frame] then
-          Inc(TogetherCount);
+        J := Order[Rank];
+        if Keep[J] and (Result[J].LevelDb >= Level[Bin] + DETECT_CLICK_GAP_DB) then
+        begin
+          Refs[RefCount] := StationBin[J];
+          Inc(RefCount);
+        end;
       end;
-      if (TogetherCount >= DETECT_CLICK_MIN_FRAMES) and
-         (SteadyLevelDb(Wide, OwnBin, Together, Floor_[OwnBin]) <
-          DETECT_MIN_LEVEL_DB) then
-        Keep[I] := False;
+      if not ClickOf(Bin, Refs, RefCount) then
+      begin
+        Inc(Folded);
+        SetLength(Companions[I], Length(Companions[I]) + 1);
+        Companions[I][High(Companions[I])] := Bin;
+      end;
     end;
+    Result[I].Crowded := Folded - 1;
+  end;
+
+  { [7] 畳んだ本物の山も参照に加えて、もう一度判じます（付録 BZ.6）。強い局の
+        100 Hz 以内に本物の局がいると 1 局に畳まれ、**その局のキークリックの幻**
+        （825・1238 Hz など）が、参照に入らないために残っていました。
+        [7] Judged once more with the real folded peaks among the references
+        (appendix BZ.6). A real station within 100 Hz of a strong one is folded
+        into it, and **its key-click phantoms** (825, 1238 Hz...) survived because
+        it was never a reference. }
+  for Rank := 0 to Count - 1 do
+  begin
+    I := Order[Rank];
+    if not Keep[I] then
+      Continue;
+    RefCount := 0;
+    WithCompanion := False;
+    for Above := 0 to Rank - 1 do
+    begin
+      J := Order[Above];
+      if not Keep[J] then
+        Continue;
+      if Result[J].LevelDb < Result[I].LevelDb + DETECT_CLICK_GAP_DB then
+        Continue;
+      Refs[RefCount] := StationBin[J];
+      Inc(RefCount);
+      { 畳んだ本物の山は、強さの差を問わず参照に加えます。幻の峰は強い局と
+        畳んだ局の**両方の**クリックの和で、畳んだ局と同じくらいの高さに
+        なっていました（実測、付録 BZ.6）。本物の局はどの参照に対しても
+        測り直しで下がらないので、参照を増やしても消えません。
+        A real folded peak joins the references whatever its strength: the
+        phantom was the sum of **both** stations' clicks and stood as high as
+        the folded station itself (measured, appendix BZ.6). A real station
+        does not fall against any reference, so more references cannot remove
+        it. }
+      for Candidate := 0 to High(Companions[J]) do
+      begin
+        Refs[RefCount] := Companions[J][Candidate];
+        Inc(RefCount);
+        WithCompanion := True;
+      end;
+    end;
+    if WithCompanion and ClickOf(StationBin[I], Refs, RefCount) then
+      Keep[I] := False;
   end;
   Kept := 0;
   for I := 0 to Count - 1 do
