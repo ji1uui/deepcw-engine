@@ -868,15 +868,30 @@ var
   I, Index, Bins: Integer;
   Elapsed: Double;
   Begun: TDateTime;
+  Pitches: array of Double;
 begin
   Result := False;
   Bins := (Wide.Bins - 1) * 2;
+  { 隣の局は、読む局数の上限の外も含めて、見えているすべての局です（付録 CB）。
+    上限で読まない局も、キークリックは隣へ届きます。
+    The neighbours are every station present, those beyond the limit read
+    included (appendix CB): a station not read still sends its clicks next
+    door. }
+  SetLength(Pitches, Length(Present));
+  for I := 0 to High(Present) do
+    Pitches[I] := Present[I].Station.Hz;
   for I := 0 to Limit - 1 do
   begin
     Begun := Now;
     Slice := SliceSpectrogram(Wide,
       WideBinFor(Present[I].Station.Hz, WideRate, Bins), FDecoder.Metadata);
     MaskSpectrogram(Slice, Present[I].Station.HalfWidthHz, FDecoder.Metadata);
+    { 隣の強い局のキークリックだけのコマを、雑音の高さに戻します（付録 CB）。
+      変えるのは復号器へ渡す写しだけです。
+      Frames holding only a strong neighbour's key clicks go back to the noise
+      level (appendix CB); only the copy handed to the decoder changes. }
+    SuppressNeighbourClicks(Slice, Wide, WideRate, Pitches, I,
+      Present[I].Station.HalfWidthHz);
     Chars := FDecoder.DecodeSpectrogramTimed(Slice, Span);
     Elapsed := (Now - Begun) * SecsPerDay;
 

@@ -3268,6 +3268,46 @@ begin
     Multi.Free;
   end;
 
+  { [7] 隣の強い局のキークリックを、弱い局の文字として読まないこと（付録 CB）。
+        強い局（1000 Hz）の 250 Hz 横で弱い局（-30 dB）が送り終えると、その局の
+        帯に入ったクリックを点（E・I・S・H）として読み、「CQ DE K1ABC K1ABC KS S
+        HE SSEISIEHISE」となっていた。局が強い（雑音が弱い）場面です。
+        [7] A strong neighbour's key clicks must not be read as a weak station's
+        characters (appendix CB). When the weak station (-30 dB) 250 Hz from a
+        strong one (1000 Hz) finished, the clicks in its band were read as dots
+        (E, I, S, H): "CQ DE K1ABC K1ABC KS S HE SSEISIEHISE". The stations are
+        strong (the noise is weak). }
+  Multi := TMultiStationDecoder.Create(Decoder);
+  try
+    Mixed := Synthesise(NormalizeText('JA1ABC DE JH2XYZ UR 599 599 QTH NAGOYA'),
+      RATE, 1000, 0, 7300);
+    Piece := Synthesise(NormalizeText('CQ DE K1ABC K1ABC K'), RATE, 1250, 0, 7301);
+    for I := 0 to High(Mixed) do
+    begin
+      Mixed[I] := 0.5 * Mixed[I];
+      if I <= High(Piece) then
+        Mixed[I] := Mixed[I] + 0.5 * 0.0316 * Piece[I];
+    end;
+    RandSeed := 7302;
+    for I := 0 to High(Mixed) do
+      Mixed[I] := Mixed[I] + 0.005 * 0.25 * (Random + Random - 1);
+    FeedAll;
+    Multi.Finish;
+    Logs := Multi.Logs;
+    Text := '';
+    for I := 0 to High(Logs) do
+      if Abs(Logs[I].Hz - 1250) <= 20 then
+        Text := Trim(DecodedText(Logs[I].Chars));
+    WriteLn(Format('  強い局の 250 Hz 横の弱い局: "%s"', [Text]));
+    Verdict('隣の強い局のキークリックを弱い局の文字として読まない',
+      (Text <> '') and
+      (CharErrorRate(NormalizeText('CQ DE K1ABC K1ABC K'), Text) <= 0.1),
+      Format('(誤り率 %.2f)', [CharErrorRate(NormalizeText('CQ DE K1ABC K1ABC K'),
+        Text)]));
+  finally
+    Multi.Free;
+  end;
+
   Summary(Failures);
 end;
 

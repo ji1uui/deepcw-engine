@@ -153,6 +153,31 @@ const
   DETECT_CLICK_OFF_RATIO = 0.05;
   DETECT_CLICK_MIN_FRAMES = 20;
 
+  { 局ごとの絵から隣の強い局のキークリックを除く決めごと（付録 CB、
+    `SuppressNeighbourClicks`）。どれも実測で決めた。
+    The settings for removing a strong neighbour's clicks from one station's
+    picture (appendix CB, `SuppressNeighbourClicks`), all set by measurement. }
+  NEIGHBOUR_STRONGER_RATIO = 2.0;
+  NEIGHBOUR_PRESENT_LEVEL = 0.25;
+  NEIGHBOUR_PEAK_RATIO = 2.0;
+  NEIGHBOUR_GUARD_FRAMES = 6;
+  NEIGHBOUR_VISIBLE_RATIO = 6.0;
+  { `NEIGHBOUR_VISIBLE_RATIO` は、ビンの 25% 分位に対する倍率。25% 分位を基準に
+    するのは、**キークリックが半分以上のコマに出るビンでは中央値がクリックの
+    高さに持ち上がる**ため（中央値を基準にすると、直せていた場面を取りこぼした）。
+    6 倍は、雑音だけなら中央値（25% 分位の約 1.55 倍）の約 4 倍に当たり、雑音が
+    超える見込みは 1 ビンあたり 10 万分の 1.5 程度。4 倍では 1% を超え、残す幅の
+    21 ビンのどれかが超えるコマが 2 割あり、**雑音だけのコマまで置き換えて**読みを
+    崩した（実測、付録 CB.3）。置き換える値も 25% 分位。
+    `NEIGHBOUR_VISIBLE_RATIO` is against each bin's 25% quantile. The 25% quantile
+    because **in a bin where clicks fill more than half the frames the median is
+    raised to click level** (against the median, cases that had been fixed were
+    missed). Six times is about four times the noise median (some 1.55 times
+    the 25% quantile), exceeded by noise in about 1.5 bins in a hundred thousand;
+    at four times it was over 1%, a fifth of frames had some bin of the 21 kept
+    above it, and **frames of noise alone were replaced**, spoiling the reading
+    (measured, appendix CB.3). The value replaced in is the 25% quantile too. }
+
   { 残す幅の上限と下限。上限は 1 局のみを聴くときの帯域（TUNER_BANDWIDTH の
     自動）と同じ値で、局が 1 つだけのときに単局受信と同じ挙動になります。
     下限は付録 G.2 の測定下限で、これより狭めると速い符号の鍵操作側波帯
@@ -223,6 +248,56 @@ type
   because the distance to a neighbour is only defined in that order. Sort a copy
   where descending level is wanted (requirement FR-I.7). }
 function DetectStations(const Wide: TSpectrogram; WideRate: Integer): TStations;
+
+{ 局ごとに切り出した絵から、**隣の強い局のキークリックだけのコマ**を、その局の
+  ふだんの雑音の高さに置き換えます（付録 CB）。置き換えたコマの数を返します。
+
+  弱い局が送り終えたあと（や長い休みのあいだ）、その局の帯に入った強い局の
+  キークリックを、モデルは点（E・I・S・H）として読みました（実測、「CQ DE K1ABC
+  K1ABC KS S HE SSEISIEHISE」）。**弱い局が送っている間は、クリックがあっても
+  正しく読めた**ので、次のすべてに当たるコマだけを置き換えます。
+
+  - **その局の音が近くに無い**: 中心のビンがその局の上位分位の 1/4 以上で、かつ
+    両脇（±4〜8 ビン）の平均の `NEIGHBOUR_PEAK_RATIO` 倍以上なら「音がある」
+    （トーンは中心に尖り、クリックは平ら）。音があるコマの前後
+    `NEIGHBOUR_GUARD_FRAMES` コマは触らない
+  - **より強い隣の局が切り替えの最中**: 上位分位が `NEIGHBOUR_STRONGER_RATIO` 倍
+    以上の局が、前後 3 コマのあいだ押しっぱなしでも離しっぱなしでもない
+  - **何かが見えている**: 残す幅（`HalfWidthHz`）のどこかのビンが、そのビンの
+    ふだんの雑音（25% 分位）の `NEIGHBOUR_VISIBLE_RATIO` 倍以上。雑音に埋もれた
+    クリックは害が無いので触らない
+
+  **変えるのは復号器へ渡す写し**（`Slice`）だけで、`Wide`（ウォーターフォール・
+  聴き直しの元）は変えません（Raw Observation を残す）。隣に強い局がいなければ
+  何もしません。
+
+  `Stations` は、いま見えているすべての局の音程（Hz）、`Own` はそのうちこの絵の
+  局の番号です。
+
+  Replaces, in the picture sliced for one station, **the frames holding nothing
+  but a strong neighbour's key clicks** with that station's usual noise level
+  (appendix CB); returns how many frames were replaced.
+
+  After a weak station stopped (or in its long pauses), the model read the key
+  clicks of a strong station that reached its band as dots (E, I, S, H) --
+  "CQ DE K1ABC K1ABC KS S HE SSEISIEHISE", measured. **While the weak station
+  was sending it read correctly despite the clicks**, so only frames meeting
+  all of the following are replaced: **no tone of its own nearby** (the centre
+  bin at least a quarter of the station's upper quantile and at least
+  `NEIGHBOUR_PEAK_RATIO` times the mean of the bins 4-8 away -- a tone is
+  peaked, a click is flat -- with `NEIGHBOUR_GUARD_FRAMES` frames either side
+  of such a frame left alone); **a stronger neighbour in mid-edge** (a station
+  at least `NEIGHBOUR_STRONGER_RATIO` times stronger in upper quantile, neither
+  held down nor held up over the three frames either side); and **something
+  visible** (some bin within `HalfWidthHz` at least `NEIGHBOUR_VISIBLE_RATIO`
+  times its usual noise, the 25% quantile -- clicks buried in noise do no
+  harm). **Only the copy for the decoder** (`Slice`) changes; `Wide`, the
+  source of the waterfall and replay, does not (the raw observation stays).
+  With no strong neighbour nothing is done. `Stations` holds the pitch (Hz) of
+  every station now present and `Own` the index of this picture's station. }
+function SuppressNeighbourClicks(var Slice: TSpectrogram;
+  const Wide: TSpectrogram; WideRate: Integer; const Stations: array of Double;
+  Own: Integer; HalfWidthHz: Double): Integer;
 
 { 局ごとに、いちばん近い隣までの距離から残す幅を決めます（要件 FR-I.3）。
 
@@ -1125,6 +1200,151 @@ end;
 function TStationTracker.Count: Integer;
 begin
   Result := Length(FStations);
+end;
+
+{ 元の並びを崩さずに分位を求めます（`QuantileOf` は並べ替える）。
+  A quantile without disturbing the original order (`QuantileOf` reorders). }
+function QuantileOfCopy(const Values: TDoubleArray; Position: Double): Double;
+var
+  Work: TDoubleArray;
+begin
+  Work := Copy(Values);
+  Result := QuantileOf(Work, Position);
+end;
+
+function SuppressNeighbourClicks(var Slice: TSpectrogram;
+  const Wide: TSpectrogram; WideRate: Integer; const Stations: array of Double;
+  Own: Integer; HalfWidthHz: Double): Integer;
+var
+  BinHz, OwnUpper, RefUpper, Side, Magnitude: Double;
+  OwnBin, RefBin, Frames, Frame, J, K, Bin, Centre, HalfBins: Integer;
+  Column, Floors, LogFloors: TDoubleArray;
+  Present, Edge, Near, Visible: array of Boolean;
+  AnyEdge, AllOn, AllOff: Boolean;
+begin
+  Result := 0;
+  if (Own < 0) or (Own > High(Stations)) or (Wide.Frames <= 0) or
+     (Wide.Bins < 2) or (WideRate <= 0) or (Slice.Bins <= 0) then
+    Exit;
+  BinHz := WideRate / ((Wide.Bins - 1) * 2);
+  if BinHz <= 0 then
+    Exit;
+  Frames := Min(Slice.Frames, Wide.Frames);
+  OwnBin := Round(Stations[Own] / BinHz);
+  if (OwnBin < 8) or (OwnBin > Wide.Bins - 9) then
+    Exit;
+
+  Column := nil;
+  SetLength(Column, Wide.Frames);
+  for Frame := 0 to Wide.Frames - 1 do
+    Column[Frame] := MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin]);
+  OwnUpper := QuantileOfCopy(Column, DETECT_TIME_QUANTILE);
+  if OwnUpper <= 0 then
+    Exit;
+
+  { より強い隣の局の、切り替えの最中のコマ。/ Frames where a stronger
+    neighbour is in mid-edge. }
+  SetLength(Edge, Wide.Frames);
+  for Frame := 0 to Wide.Frames - 1 do
+    Edge[Frame] := False;
+  AnyEdge := False;
+  for J := 0 to High(Stations) do
+  begin
+    if J = Own then
+      Continue;
+    RefBin := Round(Stations[J] / BinHz);
+    if (RefBin < 0) or (RefBin >= Wide.Bins) then
+      Continue;
+    for Frame := 0 to Wide.Frames - 1 do
+      Column[Frame] := MagnitudeOf(Wide.Data[Frame * Wide.Bins + RefBin]);
+    RefUpper := QuantileOfCopy(Column, DETECT_TIME_QUANTILE);
+    if RefUpper < NEIGHBOUR_STRONGER_RATIO * OwnUpper then
+      Continue;
+    for Frame := 0 to Wide.Frames - 1 do
+    begin
+      AllOn := True;
+      AllOff := True;
+      for K := Max(0, Frame - DETECT_CLICK_STEADY_FRAMES) to
+        Min(Wide.Frames - 1, Frame + DETECT_CLICK_STEADY_FRAMES) do
+      begin
+        if Column[K] < DETECT_CLICK_ON_RATIO * RefUpper then
+          AllOn := False;
+        if Column[K] > DETECT_CLICK_OFF_RATIO * RefUpper then
+          AllOff := False;
+      end;
+      if not (AllOn or AllOff) then
+      begin
+        Edge[Frame] := True;
+        AnyEdge := True;
+      end;
+    end;
+  end;
+  if not AnyEdge then
+    Exit;
+
+  { その局の音があるコマと、その前後。/ Frames with the station's own tone,
+    and those near them. }
+  SetLength(Present, Wide.Frames);
+  for Frame := 0 to Wide.Frames - 1 do
+  begin
+    Magnitude := MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin]);
+    Side := 0;
+    for K := 4 to 8 do
+      Side := Side +
+        MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin - K]) +
+        MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin + K]);
+    Side := Side / 10;
+    Present[Frame] := (Magnitude >= NEIGHBOUR_PRESENT_LEVEL * OwnUpper) and
+      (Magnitude >= NEIGHBOUR_PEAK_RATIO * Side);
+  end;
+  SetLength(Near, Wide.Frames);
+  for Frame := 0 to Wide.Frames - 1 do
+  begin
+    Near[Frame] := False;
+    for K := Max(0, Frame - NEIGHBOUR_GUARD_FRAMES) to
+      Min(Wide.Frames - 1, Frame + NEIGHBOUR_GUARD_FRAMES) do
+      if Present[K] then
+      begin
+        Near[Frame] := True;
+        Break;
+      end;
+  end;
+
+  { 残す幅の中で何かが見えているコマ。ビンごとの 25% 分位を基準にし、置き換える
+    値にも使います。/ Frames with something visible inside the width kept,
+    against each bin's 25% quantile, which is also the value replaced in. }
+  SetLength(Floors, Slice.Bins);
+  SetLength(LogFloors, Slice.Bins);
+  SetLength(Column, Slice.Frames);
+  for Bin := 0 to Slice.Bins - 1 do
+  begin
+    for Frame := 0 to Slice.Frames - 1 do
+      Column[Frame] := Slice.Data[Frame * Slice.Bins + Bin];
+    LogFloors[Bin] := QuantileOfCopy(Column, DETECT_FLOOR_QUANTILE);
+    Floors[Bin] := MagnitudeOf(LogFloors[Bin]);
+  end;
+  Centre := Slice.Bins div 2;
+  HalfBins := Max(1, Round(HalfWidthHz / BinHz));
+  SetLength(Visible, Frames);
+  for Frame := 0 to Frames - 1 do
+  begin
+    Visible[Frame] := False;
+    for Bin := Max(0, Centre - HalfBins) to Min(Slice.Bins - 1, Centre + HalfBins) do
+      if MagnitudeOf(Slice.Data[Frame * Slice.Bins + Bin]) >=
+         NEIGHBOUR_VISIBLE_RATIO * Max(Floors[Bin], 1e-12) then
+      begin
+        Visible[Frame] := True;
+        Break;
+      end;
+  end;
+
+  for Frame := 0 to Frames - 1 do
+    if Edge[Frame] and Visible[Frame] and not Near[Frame] then
+    begin
+      for Bin := 0 to Slice.Bins - 1 do
+        Slice.Data[Frame * Slice.Bins + Bin] := LogFloors[Bin];
+      Inc(Result);
+    end;
 end;
 
 end.
