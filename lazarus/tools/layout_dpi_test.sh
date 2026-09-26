@@ -2,14 +2,28 @@
 # 画素密度の違う画面で、窓の組み方が破綻しないことを確かめます（要件 NFR-5.1）。
 #
 # **目で見て気づけるのは、たまたま開いたタブの、たまたま見えている場所だけ**
-# です。ここでは画面を 2 つ作り、アプリケーション自身に全タブを数えさせます。
-# 96 dpi（等倍）と 192 dpi（200%）を、日本語と英語の 2 言語で。150% は付録 AW.5。
+# です。ここでは画面を作り、アプリケーション自身に全タブを数えさせます。
+# 96 dpi（等倍）・100 dpi・120 dpi（125%）・192 dpi（200%）を、日本語と英語の
+# 2 言語で。150% は付録 AW.5。
+#
+# **等倍と 2 倍だけでは足りません**（付録 CF）。整数倍では、位置も高さも文字も
+# 同じ割合で伸びるので、ぴったり付けた部品もぴったりのままです。割り切れない
+# 倍率では、位置と高さが別々に丸められ、文字の高さと幅は書体の都合で割合より
+# 多く伸びます。100 dpi（Xvfb の既定）と 120 dpi で、2 倍では出ない破綻が
+# 15 件出ました。
 #
 # Checks that the window's layout does not break on screens of different pixel
 # density (requirement NFR-5.1). **The eye only catches this on the tab that
-# happens to be open**, so two screens are made and the application counts the
-# breakages on every tab itself: 96 dpi and 192 dpi. 144 dpi is measured
-# separately in appendix AW.5.
+# happens to be open**, so screens are made and the application counts the
+# breakages on every tab itself: 96, 100, 120 (125%) and 192 dpi (200%), in
+# Japanese and English. 144 dpi is measured separately in appendix AW.5.
+#
+# **Unit and double scale are not enough** (appendix CF). At a whole multiple,
+# positions, heights and text all grow by the same factor, so controls butted
+# together stay butted. At a fractional one, position and height are rounded
+# separately, and text grows by more than the factor, as the font dictates. At
+# 100 dpi (Xvfb's default) and 120 dpi, 15 breakages appeared that double scale
+# never shows.
 set -e
 cd "$(dirname "$0")/.."
 
@@ -66,6 +80,10 @@ run_at() {
 
 echo "  96 dpi（日本語）:"
 run_at 96 1600x1200x24 121 ja
+echo "  100 dpi（日本語）:"
+run_at 100 1600x1200x24 125 ja
+echo "  120 dpi（日本語）:"
+run_at 120 1600x1200x24 126 ja
 echo "  192 dpi（日本語）:"
 run_at 192 2600x2000x24 122 ja
 
@@ -79,6 +97,10 @@ run_at 192 2600x2000x24 122 ja
 if [ -f app/languages/deepcw_station.en.po ]; then
   echo "  96 dpi（English）:"
   run_at 96 1600x1200x24 123 en
+  echo "  100 dpi（English）:"
+  run_at 100 1600x1200x24 127 en
+  echo "  120 dpi（English）:"
+  run_at 120 1600x1200x24 128 en
   echo "  192 dpi（English）:"
   run_at 192 2600x2000x24 124 en
 else
