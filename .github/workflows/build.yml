@@ -241,7 +241,7 @@ jobs:
         run: |
           set -e
           for p in cli/cw_devices cli/cw_loopback cli/cw_stream cli/cw_tune \
-                   cli/decode_morse cli/dsp_check cli/rig_check; do
+                   cli/decode_morse cli/dsp_check cli/rig_check cli/perf_report; do
             echo "== $p =="
             lazbuild -B "$p.lpi"
           done
@@ -264,6 +264,29 @@ jobs:
       - name: 数値・記録・読み取りの検証
         working-directory: lazarus
         run: ./cli/dsp_check${{ runner.os == 'Windows' && '.exe' || '' }}
+
+      # 性能の報告（計画 6.1 の P2）が、この OS で表を出せること。**基準機で
+      # 走らせてもらうのはこの道具**なので、Windows で動かないと分かるのが
+      # 利用者の手元では遅すぎます。CI には ONNX Runtime が無く、画面のアプリも
+      # まだ組んでいないので、数の行は「測れない」になります。確かめるのは、
+      # 道具を呼んで表を組めること、機械の名前と論理コアの数が OS から読める
+      # こと（`CpuDescription`・`LogicalProcessorCount`）です。
+      #
+      # The performance report (plan 6.1, P2) produces its table on this system.
+      # **This is the tool the baseline machine is asked to run**, so learning
+      # that it fails on Windows at the operator's desk would be too late. The CI
+      # has no ONNX Runtime and the GUI is not built yet, so the figures read
+      # "cannot measure"; what is checked is that the tools are called and the
+      # table assembled, and that the machine's name and logical processor count
+      # come from the system.
+      - name: 性能の報告が表を出す（数はエンジン無しで「測れない」）
+        working-directory: lazarus
+        run: |
+          set -e
+          ./cli/perf_report${{ runner.os == 'Windows' && '.exe' || '' }} | tee perf.md
+          grep -q '^| 要件 | 目標 | 測った値 | 判定 | 測り方 |' perf.md
+          grep -q 'NFR-1.7' perf.md
+          grep -Eq '論理コア [1-9]' perf.md
 
       # **移植先で最初に走らせるもの。**PortAudio の構造体の並びは OS と
       # 処理系で変わりえます。ここが崩れていれば、装置一覧の中身は何一つ

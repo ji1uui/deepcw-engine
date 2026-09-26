@@ -78,7 +78,8 @@ gui_env() {
 # ---- 組み立て ----
 echo "== 組み立て / build =="
 for p in app/deepcw_station app/gui_probe cli/cw_devices cli/cw_loopback \
-         cli/cw_stream cli/cw_tune cli/decode_morse cli/dsp_check cli/rig_check; do
+         cli/cw_stream cli/cw_tune cli/decode_morse cli/dsp_check cli/rig_check \
+         cli/perf_report; do
   step "$p" lazbuild -B "$p.lpi"
 done
 echo
@@ -246,6 +247,17 @@ else
       --text "TNX FER QSO 73 ES GL WX IS FB HR RIG IS 100W ANT IS GP"
   step "遅延: 符号の多い本文（暫定 1.5 / 天井 7.0 秒）" \
     ./cli/cw_stream --quiet --check --max-confirmed 7.0 \
+      --text "CQ CQ DE JH2XYZ JH2XYZ K JA1ABC DE JH2XYZ UR 599 599 QTH NAGOYA"
+  # 同じ遅延を、**同調した交信モードの経路**で（教訓 10.107、計画 6.1 の P2）。
+  # 上の 2 つは同調しないので、同調・自動の幅・隣の局の検出を 1 度も通らない。
+  # 30 dB 強い局を 250 Hz 横に置き（付録 CC）、**その局の文を読んだら落ちる。**
+  # The same latency **through the tuned contact-mode path** (lesson 10.107,
+  # plan 6.1 P2): the two above do not tune, so they never pass through the
+  # tuning, the automatic width or the neighbour detection. A station 30 dB
+  # stronger sits 250 Hz away (appendix CC), and **reading its text fails.**
+  step "遅延: 同調した交信モード（自動の幅・強い隣）" \
+    ./cli/cw_stream --quiet --check --max-confirmed 7.0 \
+      --tune 700 --bandwidth auto --neighbour 950 \
       --text "CQ CQ DE JH2XYZ JH2XYZ K JA1ABC DE JH2XYZ UR 599 599 QTH NAGOYA"
   # ファイルの復号で画面が止まらないこと（要件 NFR-4.2、計画 6.1 の P1、付録 CE）。
   # **関数を単独で測っても、画面が止まるかは分からない。**アプリの画面で測る。

@@ -4492,6 +4492,34 @@ end;
   Aligning local time with the OS (open question #20, appendix BW.4). Only
   what holds in whatever time zone this runs is checked here; the per-zone
   comparison is `tools/local_clock_test.sh`, through `--clock-probe`. }
+{ 常駐メモリが OS から読めること（要件 NFR-1.8、計画 6.1 の P2）。Linux と
+  Windows では OS の数を読むので、**「測れない」に落ちてはいけません。**
+  落ちると長時間の走行の検査がヒープの数を見ることになり、NFR-1.8 の常駐
+  メモリを測っていないのに通ります。Windows の分は CI の Windows だけが
+  確かめます。
+  The resident set is read from the system (NFR-1.8, plan 6.1 P2). On Linux
+  and Windows **it must not fall back to "cannot measure"**: the long-run check
+  would then watch the heap and pass without measuring NFR-1.8's resident
+  memory. Only the CI's Windows job checks the Windows part. }
+procedure TestResidentMemory;
+var
+  Use: TMemoryUse;
+begin
+  WriteLn('常駐メモリを OS から読む（NFR-1.8）');
+  Use := MemoryUse;
+  {$IF DEFINED(LINUX) or DEFINED(WINDOWS)}
+  Check('常駐メモリとして読める', Use.Kind = mkResident,
+    Format('(種類 %d)', [Ord(Use.Kind)]));
+  { この道具だけで 1 MB を下回ることはありません。/ This tool alone never
+    stays under 1 MB. }
+  Check('1 MB 以上、4 GB 未満', (Use.Kilobytes > 1024) and
+    (Use.Kilobytes < 4 * 1024 * 1024), Format('(%d kB)', [Use.Kilobytes]));
+  {$ELSE}
+  Check('測れないなら常駐とは言わない', Use.Kind <> mkResident,
+    Format('(種類 %d)', [Ord(Use.Kind)]));
+  {$ENDIF}
+end;
+
 procedure TestLocalClock;
 var
   UtcBefore, UtcAfter: TDateTime;
@@ -5693,6 +5721,7 @@ begin
     TestExtensionSeats;
     TestTxGate;
     TestLocalClock;
+    TestResidentMemory;
     TestSpecialCallsign;
     TestWatchSound;
     TestRigConfig;

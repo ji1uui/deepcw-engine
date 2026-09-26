@@ -4519,9 +4519,26 @@ end;
 
 { ---- settings ---- }
 
+{ 設定の置き場所。記録・録音・交信記録もこの隣に置きます。
+
+  `DEEPCW_CONFIG_DIR` があれば、そこを使います（普段は無い）。性能の報告
+  （`perf_report`）が本物のアプリを走らせるときに、**利用者の設定と記録に
+  触れない**ためです。Linux なら `HOME` を差し替えれば済みますが、Windows の
+  置き場所は環境変数では変えられません。
+  Where the settings live; the journal, recordings and contact log go beside
+  them. `DEEPCW_CONFIG_DIR`, when set (it normally is not), is used instead, so
+  that the performance report (`perf_report`) can run the real application
+  **without touching the operator's settings and records**. On Linux swapping
+  `HOME` would do, but on Windows the location cannot be moved by the
+  environment. }
 function TMainForm.ConfigFileName: string;
+var
+  Dir: string;
 begin
   Result := GetAppConfigFile(False);
+  Dir := GetEnvironmentVariable('DEEPCW_CONFIG_DIR');
+  if Dir <> '' then
+    Result := IncludeTrailingPathDelimiter(Dir) + ExtractFileName(Result);
 end;
 
 function TMainForm.IsDiagnosticRecord(const Line: string): Boolean;

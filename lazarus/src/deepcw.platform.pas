@@ -254,14 +254,41 @@ function SyncLocalClock: TLocalClockSync;
 { 時差を「UTC+09:00」の形にします。/ An offset as "UTC+09:00". }
 function UtcOffsetText(Minutes: Integer): string;
 
+{ 処理装置の名前。性能の報告の見出しに書きます（計画 6.1 の P2）。**数だけ
+  貼られても、どの機械の数か分からなければ比べられません**（付録 AH）。
+  分からなければ空です。Linux は `/proc/cpuinfo`、Windows はレジストリ、
+  macOS は `sysctl` の `machdep.cpu.brand_string` から読みます。
+  The processor's name, for the heading of the performance report (plan 6.1
+  P2). **Numbers pasted without the machine they came from cannot be
+  compared** (appendix AH). Empty when unknown. Linux reads `/proc/cpuinfo`,
+  Windows the registry, macOS `sysctl`'s `machdep.cpu.brand_string`. }
+function CpuDescription: string;
+
+{ 論理コアの数。分からなければ 0 です。**FPC 3.2.2 の
+  `TThread.ProcessorCount` は Linux で 4 コアの機械でも 1 を返した**（版 2.84 で
+  実測）ので、OS に直接尋ねます。
+  The number of logical processors, or 0 when unknown. **FPC 3.2.2's
+  `TThread.ProcessorCount` returned 1 on a four-core Linux machine** (measured
+  in version 2.84), so the system is asked directly. }
+function LogicalProcessorCount: Integer;
+
 implementation
 
 {$IF DEFINED(WINDOWS)}
 uses
-  Windows;
+  Windows, Registry;
 {$ELSEIF DEFINED(UNIX)}
 uses
   UnixType, UnixUtil;
+{$ENDIF}
+
+{$IF DEFINED(LINUX)}
+function c_sysconf(Name: cint): clong; cdecl; external 'c' name 'sysconf';
+{$ENDIF}
+
+{$IFDEF DARWIN}
+function c_sysctlbyname(Name: PChar; OldP: Pointer; OldLenP: psize_t;
+  NewP: Pointer; NewLen: size_t): cint; cdecl; external 'c' name 'sysctlbyname';
 {$ENDIF}
 
 {$IFDEF WINDOWS}
@@ -304,20 +331,51 @@ resourcestring
 
 { 常駐メモリ（kB）。読めない環境では 0 を返します。
 
-  Linux は `/proc/self/status` の `VmRSS:` に持っています。Windows は
-  `GetProcessMemoryInfo`（psapi）、macOS は `task_info` で取れますが、**この
-  容器では確かめられないため書いていません。**確かめられないものを書いて
-  「対応した」と言うより、測れないと言うほうが正直です。
+  Linux は `/proc/self/status` の `VmRSS:`、Windows は `GetProcessMemoryInfo`
+  （psapi）の作業セットです。Windows の分は、CI の Windows で `dsp_check` が
+  0 でないことを確かめます（版 2.84、基準機で NFR-1.8 を測るため）。macOS は
+  `task_info` で取れますが、**まだ書いていません**（測れないと言うほうが正直
+  です）。
 
   The resident set in kilobytes, or zero where it cannot be read.
 
-  Linux keeps it in `VmRSS:` of `/proc/self/status`. Windows has
-  `GetProcessMemoryInfo` (psapi) and macOS has `task_info`, but **neither can be
-  checked in this container, so neither is written here.** Saying it cannot be
-  measured is more honest than writing what cannot be tried and calling the
-  platform supported. }
+  Linux: `VmRSS:` of `/proc/self/status`. Windows: the working set from
+  `GetProcessMemoryInfo` (psapi), checked non-zero by `dsp_check` on the CI's
+  Windows (version 2.84, so NFR-1.8 can be measured on the baseline machine).
+  macOS has `task_info` but **it is not written yet** -- saying it cannot be
+  measured is more honest. }
+{$IFDEF WINDOWS}
+type
+  TProcessMemoryCounters = record
+    cb: DWORD;
+    PageFaultCount: DWORD;
+    PeakWorkingSetSize: PtrUInt;
+    WorkingSetSize: PtrUInt;
+    QuotaPeakPagedPoolUsage: PtrUInt;
+    QuotaPagedPoolUsage: PtrUInt;
+    QuotaPeakNonPagedPoolUsage: PtrUInt;
+    QuotaNonPagedPoolUsage: PtrUInt;
+    PagefileUsage: PtrUInt;
+    PeakPagefileUsage: PtrUInt;
+  end;
+
+function GetProcessMemoryInfo(Process: THandle;
+  var Counters: TProcessMemoryCounters; Size: DWORD): BOOL; stdcall;
+  external 'psapi.dll' name 'GetProcessMemoryInfo';
+{$ENDIF}
+
 function ResidentKb: Int64;
-{$IFDEF LINUX}
+{$IF DEFINED(WINDOWS)}
+var
+  Counters: TProcessMemoryCounters;
+begin
+  Result := 0;
+  FillChar(Counters, SizeOf(Counters), 0);
+  Counters.cb := SizeOf(Counters);
+  if GetProcessMemoryInfo(GetCurrentProcess, Counters, SizeOf(Counters)) then
+    Result := Int64(Counters.WorkingSetSize) div 1024;
+end;
+{$ELSEIF DEFINED(LINUX)}
 var
   Lines: TStringList;
   I: Integer;
@@ -531,6 +589,98 @@ begin
   end;
   {$ENDIF}
 end;
+
+function CpuDescription: string;
+{$IF DEFINED(WINDOWS)}
+var
+  Reg: TRegistry;
+begin
+  Result := '';
+  Reg := TRegistry.Create(KEY_READ);
+  try
+    Reg.RootKey := HKEY_LOCAL_MACHINE;
+    if Reg.OpenKeyReadOnly('HARDWARE\DESCRIPTION\System\CentralProcessor\0') then
+      Result := Trim(Reg.ReadString('ProcessorNameString'));
+  except
+    Result := '';
+  end;
+  Reg.Free;
+end;
+{$ELSEIF DEFINED(DARWIN)}
+var
+  Buffer: array[0..255] of Char;
+  Size: size_t;
+begin
+  Result := '';
+  Size := SizeOf(Buffer) - 1;
+  FillChar(Buffer, SizeOf(Buffer), 0);
+  if c_sysctlbyname('machdep.cpu.brand_string', @Buffer[0], @Size, nil, 0) = 0 then
+    Result := Trim(StrPas(@Buffer[0]));
+end;
+{$ELSEIF DEFINED(LINUX)}
+var
+  Lines: TStringList;
+  I: Integer;
+begin
+  Result := '';
+  Lines := TStringList.Create;
+  try
+    try
+      Lines.LoadFromFile('/proc/cpuinfo');
+    except
+      Exit;
+    end;
+    for I := 0 to Lines.Count - 1 do
+      if Copy(Lines[I], 1, 10) = 'model name' then
+      begin
+        Result := Trim(Copy(Lines[I], Pos(':', Lines[I]) + 1, MaxInt));
+        Exit;
+      end;
+  finally
+    Lines.Free;
+  end;
+end;
+{$ELSE}
+begin
+  Result := '';
+end;
+{$ENDIF}
+
+function LogicalProcessorCount: Integer;
+{$IF DEFINED(WINDOWS)}
+var
+  Info: TSystemInfo;
+begin
+  FillChar(Info, SizeOf(Info), 0);
+  GetSystemInfo(Info);
+  Result := Info.dwNumberOfProcessors;
+end;
+{$ELSEIF DEFINED(DARWIN)}
+var
+  Count: cint;
+  Size: size_t;
+begin
+  Count := 0;
+  Size := SizeOf(Count);
+  if c_sysctlbyname('hw.logicalcpu', @Count, @Size, nil, 0) = 0 then
+    Result := Count
+  else
+    Result := 0;
+end;
+{$ELSEIF DEFINED(LINUX)}
+const
+  { `_SC_NPROCESSORS_ONLN` は glibc・musl とも 84。/ 84 in glibc and musl. }
+  SC_NPROCESSORS_ONLN = 84;
+begin
+  Result := c_sysconf(SC_NPROCESSORS_ONLN);
+  if Result < 0 then
+    Result := 0;
+end;
+{$ELSE}
+begin
+  Result := 0;
+end;
+{$ENDIF}
 
 function UtcOffsetText(Minutes: Integer): string;
 const
