@@ -1871,8 +1871,17 @@ begin
     （付録 BV.4。以前の 560 では受信テキストが見えなくなっていた）。
     Tall enough for both the received text (80) and the waterfall's least
     height (120) (appendix BV.4; at the former 560 the received text
-    disappeared). }
-  Constraints.MinHeight := 660;
+    disappeared).
+    **660 は 96 dpi でちょうど（余り 1 画素）でした。**文字の行は画素密度に比例
+    せずに伸びるので、120 dpi では受信テキストが 2 画素足りませんでした。要る
+    高さは、96 dpi に換算して 651〜662（96〜192 dpi、日本語・英語で実測。付録 CG）。
+    その上に 8 画素ほど残して 670 にします。
+    **660 was exact at 96 dpi (1 pixel to spare).** Rows of text grow out of
+    proportion to the density, and at 120 dpi the received text came up 2
+    pixels short. The height needed is 651 to 662 in 96-dpi pixels (measured
+    at 96 to 192 dpi in Japanese and English; appendix CG); 670 leaves about 8
+    above that. }
+  Constraints.MinHeight := 670;
   Position := poScreenCenter;
 
   FDiagnostics := TStringList.Create;
@@ -2274,6 +2283,25 @@ begin
   Control.BorderSpacing.Around := Margin;
 end;
 
+{ 枠の高さを、中に置いた部品から決めます。**固定の高さは、画素密度が変わると
+  足りなくなります。**枠の見出しと文字の高さは書体で決まり、画素密度に比例して
+  伸びないためです（100 dpi で、最後の行が 2 画素はみ出していた。付録 CG）。
+  部品は置いた場所に留め（`csAutoSizeKeepChild*`。無いと LCL が左上へ寄せます）、
+  最後の部品の下に `Margin` だけ空けます。
+  Sizes a box's height from the controls put inside it. **A fixed height runs
+  short when the pixel density changes**: the box's caption and the text take
+  their height from the font, which does not grow in proportion to the density
+  (at 100 dpi the last row stuck out by 2 pixels; appendix CG). The controls
+  stay where they were put (`csAutoSizeKeepChild*`; without it the LCL moves
+  them to the top left), and `Margin` is left below the last one. }
+procedure FitToChildren(Group: TWinControl; Margin: Integer = 6);
+begin
+  Group.ControlStyle := Group.ControlStyle +
+    [csAutoSizeKeepChildLeft, csAutoSizeKeepChildTop];
+  Group.ChildSizing.TopBottomSpacing := Margin;
+  Group.AutoSize := True;
+end;
+
 function TMainForm.BuildTransmitTab: TTabSheet;
 var
   Sheet: TTabSheet;
@@ -2351,10 +2379,17 @@ begin
   AddLabel(Options, @RsTxToneHz, 254, 6);
   FTxToneHz := AddSpin(Options, 254, 26, 300, 1500, 700, @TxOptionsChanged);
 
+  { つまみも、隣の数値欄と同じく札の 20 画素下に置きます。**18 では、120 dpi で
+    札と重なりました。**札の高さは書体で決まり、画素密度に比例しません（96 dpi で
+    17 画素、120 dpi で 24 画素。付録 CG）。
+    The sliders sit 20 pixels below their labels, like the number boxes beside
+    them. **At 18 they overlapped the label at 120 dpi**: a label's height comes
+    from the font and does not grow in proportion to the density (17 pixels at
+    96 dpi, 24 at 120; appendix CG). }
   AddLabel(Options, @RsTxVolume, 360, 6);
   FTxVolume := TTrackBar.Create(Options);
   FTxVolume.Parent := Options;
-  FTxVolume.SetBounds(360, 24, 160, 36);
+  FTxVolume.SetBounds(360, 26, 160, 36);
   FTxVolume.Min := 0;
   FTxVolume.Max := 100;
   FTxVolume.Position := 60;
@@ -2363,7 +2398,7 @@ begin
   AddLabel(Options, @RsTxNoise, 540, 6);
   FTxNoise := TTrackBar.Create(Options);
   FTxNoise.Parent := Options;
-  FTxNoise.SetBounds(540, 24, 160, 36);
+  FTxNoise.SetBounds(540, 26, 160, 36);
   FTxNoise.Min := 0;
   FTxNoise.Max := 40;
   FTxNoise.Position := 0;
@@ -2467,16 +2502,26 @@ begin
   FRxStop := AddButton(LiveControls, @RsRxStop, 126, 22, 110, @RxStopClick);
   FRxClear := AddButton(LiveControls, @RsRxClear, 244, 22, 130, @RxClearClick);
 
-  AddLabel(LiveControls, @RsRxDevice, 8, 56);
+  { 2 行目は、1 行目のボタン（22 から高さ 30）の 2 画素下から。**ぴったり 52 に
+    付けると、120 dpi で 1 画素重なりました。**位置と高さは別々に丸められ、
+    27.5 と 37.5 がどちらも切り上がるためです（付録 CG）。
+    The second row starts 2 pixels below the first row's buttons (22, 30 tall).
+    **Butted against them at 52, it overlapped by a pixel at 120 dpi**: position
+    and height are rounded separately, and 27.5 and 37.5 both round up
+    (appendix CG). }
+  AddLabel(LiveControls, @RsRxDevice, 8, 58);
   FRxDevice := TComboBox.Create(LiveControls);
   FRxDevice.Parent := LiveControls;
-  FRxDevice.SetBounds(78, 52, 380, 28);
+  FRxDevice.SetBounds(78, 54, 380, 28);
   FRxDevice.Style := csDropDownList;
   FRxDevice.OnChange := @RxConfirmSpeedChanged;
-  FRxDeviceRefresh := AddButton(LiveControls, @RsRxRescan, 466, 52, 80,
+  FRxDeviceRefresh := AddButton(LiveControls, @RsRxRescan, 466, 54, 80,
     @RxDeviceRefreshClick);
 
-  AddLabel(LiveControls, @RsRxSettleLabel, 390, 4);
+  { 札は選択欄の 20 画素上。18 では 120 dpi で欄と重なりました（付録 CG）。
+    The label is 20 pixels above its box; at 18 it overlapped the box at
+    120 dpi (appendix CG). }
+  AddLabel(LiveControls, @RsRxSettleLabel, 390, 2);
   FRxConfirmSpeed := TComboBox.Create(LiveControls);
   FRxConfirmSpeed.Parent := LiveControls;
   FRxConfirmSpeed.SetBounds(390, 22, 150, 28);
@@ -2492,10 +2537,10 @@ begin
     How reception is used. The requirement is that the mode **is always visible**
     (FR-I.6), so the choice itself sits in the control row with a word of
     explanation beside it. }
-  AddLabel(LiveControls, @RsRxModeLabel, 556, 56);
+  AddLabel(LiveControls, @RsRxModeLabel, 556, 58);
   FRxMode := TComboBox.Create(LiveControls);
   FRxMode.Parent := LiveControls;
-  FRxMode.SetBounds(646, 52, 150, 28);
+  FRxMode.SetBounds(646, 54, 150, 28);
   FRxMode.Style := csDropDownList;
   { 表記は短くします。長い説明を選択肢に入れると、狭い窓で切れて**どちらを
     選んでいるのかが読めなくなります。**モードが常に見えていることが要件です
@@ -3000,10 +3045,13 @@ begin
   AddLabel(Options, @RsPrWpm, 330, 8);
   FPrWpm := AddSpin(Options, 330, 30, 5, 40, 20, @PrOptionsChanged);
 
+  { 札の 20 画素下。18 では 120 dpi で札と重なりました（付録 CG）。
+    20 pixels below the label; at 18 it overlapped the label at 120 dpi
+    (appendix CG). }
   AddLabel(Options, @RsPrNoise, 440, 8);
   FPrNoise := TTrackBar.Create(Options);
   FPrNoise.Parent := Options;
-  FPrNoise.SetBounds(440, 26, 160, 36);
+  FPrNoise.SetBounds(440, 28, 160, 36);
   FPrNoise.Min := 0;
   FPrNoise.Max := 40;
   FPrNoise.Position := 10;
@@ -3402,6 +3450,7 @@ function TMainForm.BuildFistTab: TTabSheet;
 var
   Sheet: TTabSheet;
   Options: TGroupBox;
+  BasisNote: TLabel;
   Buttons: TPanel;
   Kind: TExerciseKind;
   Standard_: TFistStandard;
@@ -3456,8 +3505,18 @@ begin
   FFtBasis.ItemIndex := 0;
   FFtBasis.OnChange := @FtOptionsChanged;
   { 採点の基準のすぐ下に置きます。右隣に置くと行に収まりませんでした。
-    Directly under the basis; to its right it did not fit on the row. }
-  AddLabel(Options, @RsFtBasisNote, 496, 60);
+    **右端は枠に留め、収まらなければ折り返します。**英語の文は 120 dpi で枠の外へ
+    出ました。文字の幅は画素密度に比例して伸びないためです（付録 CG）。
+    Directly under the basis; to its right it did not fit on the row. **Its
+    right edge is held to the box, and it wraps when it does not fit**: the
+    English ran out of the box at 120 dpi, since text does not widen in
+    proportion to the density (appendix CG). }
+  BasisNote := AddLabel(Options, @RsFtBasisNote, 496, 60);
+  BasisNote.WordWrap := True;
+  BasisNote.AnchorSide[akRight].Control := Options;
+  BasisNote.AnchorSide[akRight].Side := asrRight;
+  BasisNote.Anchors := [akLeft, akTop, akRight];
+  BasisNote.BorderSpacing.Right := 8;
 
   { 課題文なしでも測れますが、間隔の種別をしきい値で分けるため**参考値**に
     なります（要件 FR-H.3）。画面でそう分かるようにします。
@@ -4165,10 +4224,15 @@ begin
   AddLabel(Operating, @RsSetCaptureNote,
     232, 36);
 
+  { 選択欄は 130 から。**120 では、英語の札（Replay window）が 120 dpi で欄に
+    重なりました。**文字の幅は画素密度に比例して伸びません（付録 CG）。
+    The box starts at 130. **At 120 the English label (Replay window) ran into
+    it at 120 dpi**: text does not widen in proportion to the density
+    (appendix CG). }
   AddLabel(Operating, @RsSetRetention, 14, 62);
   FSetRetention := TComboBox.Create(Operating);
   FSetRetention.Parent := Operating;
-  FSetRetention.SetBounds(120, 58, 110, 28);
+  FSetRetention.SetBounds(130, 58, 110, 28);
   FSetRetention.Style := csDropDownList;
   RegisterItem(FSetRetention, 0, @RsSetRetention5);
   RegisterItem(FSetRetention, 1, @RsSetRetention10);
@@ -4176,7 +4240,7 @@ begin
   RegisterItem(FSetRetention, 3, @RsSetRetention30);
   FSetRetention.ItemIndex := 1;
   FSetRetention.OnChange := @RxRetentionChanged;
-  AddLabel(Operating, @RsSetRetentionNote, 248, 62);
+  AddLabel(Operating, @RsSetRetentionNote, 258, 62);
 
   FSetJournal := TCheckBox.Create(Operating);
   FSetJournal.Parent := Operating;
@@ -4292,7 +4356,7 @@ begin
   RigGroup := TGroupBox.Create(Scroller);
   RigGroup.Parent := Scroller;
   RegisterCaption(RigGroup, @RsSetRigGroup);
-  RigGroup.Height := 262;
+  FitToChildren(RigGroup);
   Stretch(RigGroup, alTop);
   AddLabel(RigGroup, @RsSetRigModel, 14, 10);
   FSetRigModel := AddSpin(RigGroup, 100, 6, 0, 99999, 0, @SettingChanged);
