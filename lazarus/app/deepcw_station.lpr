@@ -21,6 +21,8 @@ uses
 var
   Problems: TStringList;
   Line: Integer;
+  Longest: Int64;
+  Text: string;
 begin
   Application.Title := 'DeepCW Morse Station';
   RequireDerivedFormResource := False;
@@ -92,6 +94,30 @@ begin
       WriteLn(Format('組み方の破綻 %d 件', [Problems.Count]));
       Flush(Output);
       Halt(Ord(Problems.Count > 0));
+    finally
+      Problems.Free;
+    end;
+  end;
+  { ファイルの復号で画面が止まらないかを測って終える道です（要件 NFR-4.2、
+    計画 6.1 の P1）。止まりが `DEEPCW_FILE_CHECK_LIMIT_MS`（既定 100）を超えるか、
+    何も読めなければ異常です。
+    A path that measures whether a file decode stalls the screen, then exits
+    (NFR-4.2, plan 6.1 P1): a stall past `DEEPCW_FILE_CHECK_LIMIT_MS` (default
+    100) or nothing read is a fault. }
+  if GetEnvironmentVariable('DEEPCW_FILE_CHECK') <> '' then
+  begin
+    MainForm.Show;
+    Application.ProcessMessages;
+    Problems := MainForm.ReportFileDecode(
+      GetEnvironmentVariable('DEEPCW_FILE_CHECK'),
+      StrToFloatDef(GetEnvironmentVariable('DEEPCW_FILE_CHECK_TUNE'), 0),
+      Longest, Text);
+    try
+      for Line := 0 to Problems.Count - 1 do
+        WriteLn('  ', Problems[Line]);
+      Flush(Output);
+      Halt(Ord((Text = '') or (Longest >
+        StrToInt64Def(GetEnvironmentVariable('DEEPCW_FILE_CHECK_LIMIT_MS'), 100))));
     finally
       Problems.Free;
     end;

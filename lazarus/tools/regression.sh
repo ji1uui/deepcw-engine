@@ -247,6 +247,16 @@ else
   step "遅延: 符号の多い本文（暫定 1.5 / 天井 7.0 秒）" \
     ./cli/cw_stream --quiet --check --max-confirmed 7.0 \
       --text "CQ CQ DE JH2XYZ JH2XYZ K JA1ABC DE JH2XYZ UR 599 599 QTH NAGOYA"
+  # ファイルの復号で画面が止まらないこと（要件 NFR-4.2、計画 6.1 の P1、付録 CE）。
+  # **関数を単独で測っても、画面が止まるかは分からない。**アプリの画面で測る。
+  # Decoding a file does not freeze the screen (NFR-4.2, plan 6.1 P1, appendix
+  # CE). **Timing functions alone cannot tell**; it is measured in the window.
+  if command -v xvfb-run >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    step "ファイルの復号で画面が止まらない（5 分の録音）" \
+      ./tools/file_decode_stall_test.sh
+  else
+    skip "ファイルの復号で画面が止まらない（5 分の録音）" "xvfb-run か python3 がありません"
+  fi
 fi
 echo
 

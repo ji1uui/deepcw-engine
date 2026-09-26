@@ -98,6 +98,21 @@ type
     Runs one decode off the UI thread and hands the result back through
     Synchronize. The decoder object stays owned by the form; only one thread
     is ever alive at a time, which is what makes that safe. }
+  { 復号へ渡す前の整形（同調・帯域・標本化）の設定です（要件 FR-D.3）。画面の
+    スレッドで決めて、値のまま作業スレッドへ渡します。`AutoWidth` なら、幅は
+    渡した音から決めます（付録 CC）。
+    The settings of the preparation before decoding -- tuning, band limit,
+    rate (requirement FR-D.3). Decided on the UI thread and handed to a worker
+    by value. With `AutoWidth` the width is worked out from the audio itself
+    (appendix CC). }
+  TDecoderShaping = record
+    Meta: TDeepCWMetadata;
+    TuneHz: Double;
+    HalfWidthHz: Double;
+    AutoWidth: Boolean;
+    AntiAlias: Boolean;
+  end;
+
   TDecodeThread = class(TThread)
   private
     FDecoder: TDeepCWDecoder;
@@ -107,6 +122,17 @@ type
     FSampleRate: Integer;
     FChars: TDecodedChars;
     FError: string;
+    { ファイルの復号（`CreateFile`）。読み込み・保管庫への投入・整形も、この
+      スレッドで行います（計画 6.1 の P1）。
+      A file decode (`CreateFile`): loading, storing and preparing happen on
+      this thread too (plan 6.1, P1). }
+    FFileName: string;
+    FHistory: TAudioHistory;
+    FShaping: TDecoderShaping;
+    FAppliedHalf: Double;
+    FLoadError: string;
+    FOnLoaded: TNotifyEvent;
+    FOnShaped: TNotifyEvent;
     FRecheck: Boolean;
     { 送信訓練の採点のための解析かどうか。**受信テキストへ流さないのは
       読み直しと同じ理由です。**
@@ -115,6 +141,10 @@ type
     FFist: Boolean;
     FOnDone: TNotifyEvent;
     procedure ReportDone;
+    procedure ReadFile;
+    procedure FeedMulti;
+    procedure ReportLoaded;
+    procedure ReportShaped;
   protected
     procedure Execute; override;
   public
@@ -126,14 +156,6 @@ type
     { 帯域内の多局を 1 回ぶん解析します（要件 FR-I）。
       Analyses one window of the many stations in the band (requirement FR-I). }
     constructor CreateMulti(AMulti: TMultiStationDecoder; AOnDone: TNotifyEvent);
-    { 録音全体を、待機モードの経路で読み切ります。取り込みと同じように少しずつ
-      流し込むのは、一度に入れると溜め込みの上限で大半が捨てられるためです。
-      Reads a whole recording through the waiting mode's path. It is fed in
-      pieces, as capture would, because all at once most of it would fall off the
-      buffer's limit. }
-    constructor CreateMultiFile(AMulti: TMultiStationDecoder;
-      const ASamples: TSingleArray; ASampleRate: Integer;
-      AOnDone: TNotifyEvent);
     { 1 語ぶんの音を、その区間だけで読み直します（要件 FR-C.3）。
 
       解析そのものは `Create` と同じです。**別の入口にしてあるのは、返ってきた
@@ -156,6 +178,25 @@ type
     constructor CreateFist(ADecoder: TDeepCWDecoder;
       const ASamples: TSingleArray; ASampleRate: Integer;
       AOnDone: TNotifyEvent);
+    { WAV ファイルを読み、復号します（`AMulti` があれば待機モードの経路で）。
+      読めた時点で `AOnLoaded` を画面のスレッドで同期して呼びます。そこで
+      画面側の片付け・波形・ノイズ低減（`Samples` を差し替える）・`Shaping` を
+      済ませます。**読めなければ何も片付けず**、`LoadError` を持って終わります。
+      整形が済むと `AOnShaped` を画面のスレッドへ預けます。
+      Reads a WAV file and decodes it (through the waiting mode's path when
+      `AMulti` is given). Once read, `AOnLoaded` runs synchronously on the UI
+      thread, which does the screen's clearing, the waterfall, the noise
+      reduction (replacing `Samples`) and sets `Shaping`. **If it cannot be
+      read, nothing is cleared** and the thread ends with `LoadError`. When the
+      preparation is done, `AOnShaped` is queued to the UI thread. }
+    constructor CreateFile(ADecoder: TDeepCWDecoder;
+      AMulti: TMultiStationDecoder; AHistory: TAudioHistory;
+      const AFileName: string; AOnLoaded, AOnShaped, AOnDone: TNotifyEvent);
+    property Samples: TSingleArray read FSamples write FSamples;
+    property SampleRate: Integer read FSampleRate;
+    property Shaping: TDecoderShaping read FShaping write FShaping;
+    property AppliedHalfWidthHz: Double read FAppliedHalf;
+    property LoadError: string read FLoadError;
     property Chars: TDecodedChars read FChars;
     property Recheck: Boolean read FRecheck;
     property Fist: Boolean read FFist;
@@ -747,6 +788,9 @@ type
     procedure StartDecode(const Samples: TSingleArray; SampleRate: Integer);
     procedure ShowStreamText;
     procedure DecodeFinished(Sender: TObject);
+    procedure FileLoaded(Sender: TObject);
+    procedure FileShaped(Sender: TObject);
+    function DecoderShaping: TDecoderShaping;
     function PrepareForDecoder(const Samples: TSingleArray; SampleRate: Integer): TSingleArray;
 
     procedure TxTextChanged(Sender: TObject);
@@ -921,7 +965,8 @@ type
     procedure UpdateTransmitProgress;
     procedure UpdateLiveReceive;
     procedure SetStatus(const Engine, Audio, Message_: string);
-    procedure ReportError(const Context: string; E: Exception);
+    procedure ReportError(const Context: string; E: Exception); overload;
+    procedure ReportError(const Context, Raw: string); overload;
     procedure SyncClock;
     procedure LogDiagnostic(const Context, Raw: string);
   public
@@ -950,6 +995,14 @@ type
       shows only when someone opens the screen and tries. The regression tries
       it every time. The caller frees the list. }
     function ReportLanguage: TStringList;
+    { ファイルを「デコード」と同じ道で読み、画面のスレッドが続けて塞がった
+      いちばん長い時間を測ります（要件 NFR-4.2、計画 6.1 の P1）。`TuneHz` が
+      正なら先に同調します。`LongestMs` が止まりの長さ、戻り値は報告の行です。
+      Reads a file the way "decode" does and measures the longest stretch the UI
+      thread stayed blocked (NFR-4.2, plan 6.1 P1). A positive `TuneHz` tunes
+      first. `LongestMs` is the stall; the result is the report lines. }
+    function ReportFileDecode(const FileName: string; TuneHz: Double;
+      out LongestMs: Int64; out Decoded: string): TStringList;
   end;
 
 var
@@ -1648,18 +1701,50 @@ begin
   inherited Create(False);
 end;
 
-constructor TDecodeThread.CreateMultiFile(AMulti: TMultiStationDecoder;
-  const ASamples: TSingleArray; ASampleRate: Integer; AOnDone: TNotifyEvent);
+constructor TDecodeThread.CreateFile(ADecoder: TDeepCWDecoder;
+  AMulti: TMultiStationDecoder; AHistory: TAudioHistory;
+  const AFileName: string; AOnLoaded, AOnShaped, AOnDone: TNotifyEvent);
 begin
+  FDecoder := ADecoder;
   FMulti := AMulti;
-  FSamples := ASamples;
-  FSampleRate := ASampleRate;
+  FHistory := AHistory;
+  FFileName := AFileName;
+  FOnLoaded := AOnLoaded;
+  FOnShaped := AOnShaped;
   FOnDone := AOnDone;
   FreeOnTerminate := False;
   inherited Create(False);
 end;
 
-procedure TDecodeThread.Execute;
+{ 復号へ渡す前の整形です。**ファイル・読み直し・「モデルが聴いている音」の
+  すべてがここを通ります**（整形の場所は 1 か所。教訓 10.11）。どのスレッド
+  からでも呼べます（フォームに触れません）。
+  The preparation before decoding. **Files, re-readings and "what the model
+  hears" all come through here** (one place for it; lesson 10.11). Callable
+  from any thread: it does not touch the form. }
+function ShapeForDecoder(const Shaping: TDecoderShaping;
+  const Samples: TSingleArray; SampleRate: Integer;
+  out HalfWidthHz: Double): TSingleArray;
+const
+  { 自動の帯域を決めるために見る長さの上限（秒）。付録 CC。
+    The most audio looked at to work out the automatic width (seconds);
+    appendix CC. }
+  AUTO_LOOK_SECONDS = 60;
+begin
+  HalfWidthHz := Shaping.HalfWidthHz;
+  if Shaping.AutoWidth then
+    HalfWidthHz := AutoHalfWidth(Copy(Samples, 0, AUTO_LOOK_SECONDS * SampleRate),
+      SampleRate, Shaping.TuneHz, Shaping.Meta);
+  Result := DeepCW.Tuner.PrepareForModelWidth(Samples, SampleRate,
+    Shaping.Meta.SampleRate, Shaping.TuneHz, HalfWidthHz, Shaping.AntiAlias);
+end;
+
+{ 録音全体を、待機モードの経路で読み切ります。取り込みと同じように少しずつ
+  流し込むのは、一度に入れると溜め込みの上限で大半が捨てられるためです。
+  Reads a whole recording through the waiting mode's path. It is fed in
+  pieces, as capture would, because all at once most of it would fall off the
+  buffer's limit. }
+procedure TDecodeThread.FeedMulti;
 const
   { 流し込む刻み。取り込みの脈動と同じ程度にします。
     The size of each piece, about what a pulse of capture delivers. }
@@ -1667,21 +1752,79 @@ const
 var
   Position, Taken: Integer;
 begin
+  Position := 0;
+  while (Position < Length(FSamples)) and not Terminated do
+  begin
+    Taken := Min(Round(FILE_CHUNK_SECONDS * FSampleRate),
+      Length(FSamples) - Position);
+    FMulti.Append(Copy(FSamples, Position, Taken), FSampleRate);
+    Inc(Position, Taken);
+    while FMulti.Ready and not Terminated do
+      FMulti.Step;
+  end;
+  FMulti.Finish;
+end;
+
+procedure TDecodeThread.ReadFile;
+var
+  Raw: TSingleArray;
+begin
+  { 読めないファイルは、ここで終えます。**画面はまだ何も片付けていない**ので、
+    前の受信テキストはそのまま残ります。
+    An unreadable file ends here. **The screen has not cleared anything yet**,
+    so the previous transcript stays as it was. }
   try
-    if (FMulti <> nil) and (Length(FSamples) > 0) then
+    LoadWavMono(FFileName, Raw, FSampleRate);
+  except
+    on E: Exception do
     begin
-      Position := 0;
-      while (Position < Length(FSamples)) and not Terminated do
-      begin
-        Taken := Min(Round(FILE_CHUNK_SECONDS * FSampleRate),
-          Length(FSamples) - Position);
-        FMulti.Append(Copy(FSamples, Position, Taken), FSampleRate);
-        Inc(Position, Taken);
-        while FMulti.Ready and not Terminated do
-          FMulti.Step;
-      end;
-      FMulti.Finish;
-    end
+      FLoadError := E.Message;
+      Exit;
+    end;
+  end;
+  FSamples := Raw;
+  Synchronize(@ReportLoaded);
+  { 画面が閉じられようとしていれば、重い仕事は始めません。
+    If the window is closing, the heavy work is not started. }
+  if Terminated then
+    Exit;
+  { 保管庫には生の音を入れます（聴き直しは生の音。要件 FR-N の取り決め 1）。
+    片付けは `ReportLoaded` の中で済んでいるので、順序は崩れません。
+    The store gets the raw audio (replay is raw; rule 1 of FR-N). Its clearing
+    happened inside `ReportLoaded`, so the order holds. }
+  FHistory.Append(Raw, FSampleRate, 0);
+  Raw := nil;
+  if FMulti <> nil then
+  begin
+    Queue(@ReportShaped);
+    FeedMulti;
+    Exit;
+  end;
+  FSamples := ShapeForDecoder(FShaping, FSamples, FSampleRate, FAppliedHalf);
+  FSampleRate := FShaping.Meta.SampleRate;
+  Queue(@ReportShaped);
+  if Terminated then
+    Exit;
+  FChars := FDecoder.DecodeLongSamplesTimed(FSamples, FSampleRate);
+end;
+
+procedure TDecodeThread.ReportLoaded;
+begin
+  if Assigned(FOnLoaded) then
+    FOnLoaded(Self);
+end;
+
+procedure TDecodeThread.ReportShaped;
+begin
+  if Assigned(FOnShaped) then
+    FOnShaped(Self);
+end;
+
+procedure TDecodeThread.Execute;
+begin
+  try
+    if FFileName <> '' then
+      ReadFile
     else if FMulti <> nil then
       FMulti.Step
     else if FStream <> nil then
@@ -5324,48 +5467,46 @@ begin
   Result := FDecodeThread <> nil;
 end;
 
-{ ファイルからの復号も、流し込み受信とまったく同じ整形を通します。同調して
-  いれば録音済みの音声にも効きます。戻り値はモデルの周波数になっているため、
-  呼び出し側はモデルの周波数を渡します。
+{ ファイル・読み直し・モニタの整形の設定を、いまの画面から決めます。どれも
+  流し込み受信とまったく同じ整形を通るので、同調していれば録音済みの音声にも
+  効きます。整形の結果はモデルの周波数になっています。
+  The preparation settings for files, re-readings and the monitor, taken from
+  the screen as it is now. All of them go through exactly the same preparation
+  as streaming reception, so a tuning applies to recordings too. The result of
+  the preparation is at the model's rate. }
+function TMainForm.DecoderShaping: TDecoderShaping;
+begin
+  Result.Meta := FDecoder.Metadata;
+  Result.TuneHz := FRxWaterfall.TuneHz;
+  Result.AntiAlias := FRxAntiAlias.Checked;
+  Result.HalfWidthHz := BandwidthHalfWidth(SelectedBandwidth);
+  Result.AutoWidth := False;
+  { 自動なら、流し込み受信と同じく近くの局に合わせます（付録 CC）。読み直しと
+    モニタは、**受信やファイルの復号が実際に掛けた幅**を使います。短い切れ端で
+    決め直すと、読んだときとは別の音を聴くことになります。どちらも無ければ、
+    渡された音から決めます。
+    Automatic follows the stations nearby, as streaming reception does
+    (appendix CC). The re-reading and the monitor use **the width reception or
+    the file decode actually applied**: worked out again from a short clip,
+    they would hear a different sound from what was read. Failing both, it is
+    worked out from the audio handed in. }
+  if (SelectedBandwidth = tbAuto) and (Result.TuneHz > 0) then
+  begin
+    if (FStream <> nil) and (FCapture <> nil) then
+      Result.HalfWidthHz := FStream.AppliedHalfWidthHz
+    else if (FFileAutoHalf > 0) and (FFileAutoTune = Result.TuneHz) then
+      Result.HalfWidthHz := FFileAutoHalf
+    else
+      Result.AutoWidth := True;
+  end;
+end;
 
-  File decoding goes through exactly the same preparation as streaming
-  reception, so a tuning applies to recordings too. The result is already at
-  the model's rate, which is what the caller then passes on. }
 function TMainForm.PrepareForDecoder(const Samples: TSingleArray;
   SampleRate: Integer): TSingleArray;
-const
-  { 自動の帯域を決めるために見る長さの上限（秒）。画面のスレッドで走るので、
-    長いファイルでも止まらないように（付録 CC）。
-    The most audio looked at to work out the automatic width (seconds): this
-    runs on the UI thread, which a long file must not stall (appendix CC). }
-  AUTO_LOOK_SECONDS = 60;
 var
   Half: Double;
 begin
-  Half := BandwidthHalfWidth(SelectedBandwidth);
-  { 自動なら、流し込み受信と同じく近くの局に合わせます（付録 CC）。受信中の
-    読み直しとモニタは、**受信が実際に掛けている幅**を使います。短い切れ端で
-    決め直すと、受信とは別の音を聴くことになります。
-    Automatic follows the stations nearby, as streaming reception does
-    (appendix CC). While receiving, the re-reading and the monitor use **the
-    width reception is actually applying**: worked out again from a short clip,
-    they would hear a different sound from reception. }
-  if (SelectedBandwidth = tbAuto) and (FRxWaterfall.TuneHz > 0) then
-  begin
-    if (FStream <> nil) and (FCapture <> nil) then
-      Half := FStream.AppliedHalfWidthHz
-    else
-    begin
-      Half := AutoHalfWidth(Copy(Samples, 0, AUTO_LOOK_SECONDS * SampleRate),
-        SampleRate, FRxWaterfall.TuneHz, FDecoder.Metadata);
-      FFileAutoHalf := Half;
-      FFileAutoTune := FRxWaterfall.TuneHz;
-      UpdateTuneInfo;
-    end;
-  end;
-  Result := DeepCW.Tuner.PrepareForModelWidth(Samples, SampleRate,
-    FDecoder.Metadata.SampleRate, FRxWaterfall.TuneHz, Half,
-    FRxAntiAlias.Checked);
+  Result := ShapeForDecoder(DecoderShaping, Samples, SampleRate, Half);
 end;
 
 procedure TMainForm.StartDecode(const Samples: TSingleArray; SampleRate: Integer);
@@ -5403,6 +5544,16 @@ begin
   end;
 
   FRxBusy.Caption := '';
+
+  { 読めなかったファイル。画面はまだ何も片付けていません（`FileLoaded`）。
+    A file that could not be read; the screen has cleared nothing yet
+    (`FileLoaded`). }
+  if Thread.LoadError <> '' then
+  begin
+    ReportError(RsCtxWavRead, Thread.LoadError);
+    FCompletedThread := Thread;
+    Exit;
+  end;
 
   { 読み直しの結果は、ここで折り返します（要件 FR-C.3）。**受信テキストへは
     流しません。**確かめるために読んだものが、確かめた相手を書き換えては
@@ -6330,27 +6481,57 @@ begin
 end;
 
 procedure TMainForm.RxDecodeFileClick(Sender: TObject);
-var
-  Samples: TSingleArray;
-  SampleRate: Integer;
 begin
   if DecoderBusy then
     Exit;
-  try
-    LoadWavMono(FRxFile.Text, Samples, SampleRate);
-  except
-    on E: Exception do
-    begin
-      ReportError(RsCtxWavRead, E);
-      Exit;
-    end;
-  end;
-
+  { 読み込みから先は復号のスレッドで行います（要件 NFR-4.2、計画 6.1 の P1）。
+    30 分の録音では、読み込みと整形だけで画面が 12 秒止まっていました（付録 CE）。
+    ここでは受信を止めることと、エンジンを用意することだけをします。**受信は
+    読み込みの前に止めます。**解析の最中に止めると、最後の暫定の文字が確定
+    されずに記録から落ちるためです（`RxStopClick`）。
+    From loading onward the work happens on the decode thread (NFR-4.2, plan
+    6.1 P1): a 30-minute recording used to freeze the screen for 12 seconds on
+    loading and preparing alone (appendix CE). Here reception is stopped and
+    the engine made ready, nothing more. **Reception stops before the load**:
+    stopped in the middle of an analysis, the last provisional characters would
+    miss confirmation and drop out of the record (`RxStopClick`). }
   RxStopClick(nil);
   { 整形にモデルの標本化周波数が要るため、先にエンジンを用意します。
     The preparation needs the model's sample rate, so the engine comes first. }
   if not EnsureDecoder then
     Exit;
+  { 待機モードでは、録音も帯域として読みます。混み合ったバンドを録った音から
+    一覧を作れますし、**音声装置の無い機械でもこの経路を確かめられます。**
+    In the waiting mode a recording is read as a band: a list can be built from a
+    recording of a crowded band, and **the path can be checked on a machine with
+    no sound hardware.** }
+  if BandMode and (FMulti = nil) then
+    FMulti := TMultiStationDecoder.Create(FDecoder);
+  FRxBusy.Caption := RsDecodingBusy;
+  if BandMode then
+    FDecodeThread := TDecodeThread.CreateFile(FDecoder, FMulti, FHistory,
+      FRxFile.Text, @FileLoaded, @FileShaped, @DecodeFinished)
+  else
+    FDecodeThread := TDecodeThread.CreateFile(FDecoder, nil, FHistory,
+      FRxFile.Text, @FileLoaded, @FileShaped, @DecodeFinished);
+end;
+
+{ ファイルが読めたとき（復号のスレッドが待っている間に、画面のスレッドで）。
+  **読めてから片付けます。**読めないファイルで、前の受信テキストを消さない
+  ためです。
+  The file has been read (on the UI thread, while the decode thread waits).
+  **Clearing waits until the file has been read**, so an unreadable file does
+  not wipe the previous transcript. }
+procedure TMainForm.FileLoaded(Sender: TObject);
+var
+  Thread: TDecodeThread;
+begin
+  Thread := TDecodeThread(Sender);
+  if FClosing then
+  begin
+    Thread.Terminate;
+    Exit;
+  end;
   FLiveChars := nil;
   FRstFromChar := 0;
   ReadTranscript;
@@ -6379,12 +6560,13 @@ begin
     FJournal.Flush;
   FJournalled := 0;
   FClockOrigin := 0;
+  { ファイルの音そのものを保管します（入れるのは復号のスレッド）。これで、
+    ファイルから読んだ文字も押せば聴き直せます。保持時間より長いファイルは、
+    後ろのぶんだけが残ります。
+    The file's own audio is stored (the decode thread puts it in), so
+    characters read from a file can be replayed too. A file longer than the
+    retention keeps only its tail. }
   FHistory.Clear;
-  { ファイルの音そのものを保管します。これで、ファイルから読んだ文字も押せば
-    聴き直せます。保持時間より長いファイルは、後ろのぶんだけが残ります。
-    The file's own audio is stored, so characters read from a file can be
-    replayed too. A file longer than the retention keeps only its tail. }
-  FHistory.Append(Samples, SampleRate, 0);
   { 同じ音を波形にも流します。**保管庫と同じ時刻の基準を渡すこと**が肝心で、
     別々に数えさせると、重ねた文字が別の行を指します（要件 FR-D.6）。
 
@@ -6401,25 +6583,48 @@ begin
     audio hardware.** The display holds the last ten seconds; characters older
     than that are not laid over it. }
   FRxWaterfall.Clear;
-  FRxWaterfall.PushSamples(Samples, SampleRate, 0);
+  FRxWaterfall.PushSamples(Thread.Samples, Thread.SampleRate, 0);
+  { ノイズ低減は画面のスレッドで掛けます（FR-N の取り決め 4。低減器は設定で
+    差し替わるため、復号のスレッドには渡しません）。
+    Noise reduction is applied on the UI thread (rule 4 of FR-N: the reducer
+    is replaced when the setting changes, so it is not handed to the decode
+    thread). }
+  Thread.Samples := ForDecoderAudio(Thread.Samples, Thread.SampleRate);
+  { 前のファイルで決めた幅は、このファイルには当てはまりません。
+    The width worked out for the previous file does not apply to this one. }
+  FFileAutoHalf := 0;
+  Thread.Shaping := DecoderShaping;
+  UpdateTuneInfo;
   UpdateReplayInfo;
-  { 待機モードでは、録音も帯域として読みます。混み合ったバンドを録った音から
-    一覧を作れますし、**音声装置の無い機械でもこの経路を確かめられます。**
-    In the waiting mode a recording is read as a band: a list can be built from a
-    recording of a crowded band, and **the path can be checked on a machine with
-    no sound hardware.** }
-  if BandMode then
-  begin
-    if FMulti = nil then
-      FMulti := TMultiStationDecoder.Create(FDecoder);
-    FRxBusy.Caption := RsDecodingBusy;
-    FDecodeThread := TDecodeThread.CreateMultiFile(FMulti,
-      ForDecoderAudio(Samples, SampleRate), SampleRate, @DecodeFinished);
-    UpdateTranscriptMessage;
+  { 解析が始まってから言い直します。**始める前に呼ぶと、まだ走っていないので
+    「まだ始めていない」ほうの言葉になります。**長いファイルほど、その空白は
+    長く続きます（要件 FR-B.1）。
+    Said after the analysis has begun: **called before, nothing is running yet
+    and the words would be the not-started ones.** The longer the file, the
+    longer that blank lasts (requirement FR-B.1). }
+  UpdateTranscriptMessage;
+end;
+
+{ ファイルの整形が済んだとき。自動の幅なら、決まった幅を表示に出します
+  （付録 CC）。**決めたときの同調を一緒に覚えます。**そのあと同調を変えれば、
+  その幅はもう当てはまりません。
+  The file's preparation is done. For an automatic width the width decided is
+  shown (appendix CC), **remembered together with the tuning it was decided
+  for**: once retuned, it no longer applies. }
+procedure TMainForm.FileShaped(Sender: TObject);
+var
+  Thread: TDecodeThread;
+begin
+  if FClosing then
     Exit;
+  Thread := TDecodeThread(Sender);
+  if Thread.Shaping.AutoWidth then
+  begin
+    FFileAutoHalf := Thread.AppliedHalfWidthHz;
+    FFileAutoTune := Thread.Shaping.TuneHz;
   end;
-  StartDecode(PrepareForDecoder(ForDecoderAudio(Samples, SampleRate), SampleRate),
-    FDecoder.Metadata.SampleRate);
+  UpdateTuneInfo;
+  UpdateReplayInfo;
 end;
 
 { 「受信開始」を押したとき。**利用者が望んだ**ことを立ててから始めます
@@ -6487,6 +6692,11 @@ begin
     { 輪バッファを作り直したので、読み出し位置も先頭へ戻します。
       The ring was recreated, so the read position goes back to its start. }
     FRingPosition := 0;
+    { ファイルで決めた幅は、これから受信する音には当てはまりません。残すと、
+      受信を止めたあとの読み直しが前のファイルの幅で読みます。
+      The width worked out for a file does not apply to what is received now;
+      kept, a re-reading after reception stops would use the old file's width. }
+    FFileAutoHalf := 0;
 
     FCapture := TAudioCapture.Create(FRing, FCaptureRate, SelectedDeviceIndex);
     FCapture.Start;
@@ -9004,6 +9214,49 @@ begin
   SetStatus('', '', Format(RsBandwidthSet, [BandwidthCaption(Chosen)]));
 end;
 
+function TMainForm.ReportFileDecode(const FileName: string; TuneHz: Double;
+  out LongestMs: Int64; out Decoded: string): TStringList;
+var
+  Started, Mark: QWord;
+  Clicked, Spent: Int64;
+begin
+  Result := TStringList.Create;
+  FRxFile.Text := FileName;
+  if TuneHz > 0 then
+  begin
+    FRxWaterfall.TuneHz := TuneHz;
+    UpdateTuneInfo;
+  end;
+  Started := GetTickCount64;
+  RxDecodeFileClick(nil);
+  Clicked := GetTickCount64 - Started;
+  LongestMs := Clicked;
+  { 待つ間は時間に入れません。数えるのは、届いた知らせを画面が処理する間だけ
+    です。/ The waiting is not counted, only the time the UI spends handling
+    what arrived. }
+  while DecoderBusy do
+  begin
+    Sleep(5);
+    Mark := GetTickCount64;
+    CheckSynchronize(0);
+    Application.ProcessMessages;
+    Spent := GetTickCount64 - Mark;
+    if Spent > LongestMs then
+      LongestMs := Spent;
+  end;
+  CheckSynchronize(0);
+  Application.ProcessMessages;
+  Decoded := Trim(DecodedText(FLiveChars));
+  { 待機モードは受信文ではなく一覧を出します。/ The waiting mode lists
+    stations instead of a transcript. }
+  if BandMode and (FRxBandMap.Count > 0) then
+    Decoded := Format('%d stations in the band map', [FRxBandMap.Count]);
+  Result.Add(Format('decode button: %d ms, longest UI stall: %d ms, total: %d ms',
+    [Clicked, LongestMs, GetTickCount64 - Started]));
+  Result.Add('width: ' + FRxTuneInfo.Caption);
+  Result.Add('text: ' + Decoded);
+end;
+
 { すべてのタブを順に前へ出して、組み方の破綻を数えます（要件 NFR-5.1）。
   Counts the layout breakages on every tab in turn (requirement NFR-5.1). }
 function TMainForm.ReportLayout: TStringList;
@@ -9589,12 +9842,17 @@ begin
 end;
 
 procedure TMainForm.ReportError(const Context: string; E: Exception);
+begin
+  ReportError(Context, E.Message);
+end;
+
+procedure TMainForm.ReportError(const Context, Raw: string);
 var
   Friendly: string;
 begin
-  Friendly := UserMessageFor(E.Message);
-  LogDiagnostic(Context, E.Message);
-  SetStatus('', '', Format(RsErrStatusLine, [Context, StatusLine(E.Message)]));
+  Friendly := UserMessageFor(Raw);
+  LogDiagnostic(Context, Raw);
+  SetStatus('', '', Format(RsErrStatusLine, [Context, StatusLine(Raw)]));
   MessageDlg(Format(RsErrFailedTitle, [Context]), Friendly, mtError, [mbOK], 0);
 end;
 
