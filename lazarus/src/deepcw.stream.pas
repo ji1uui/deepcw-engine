@@ -173,6 +173,14 @@ type
       the path is exactly what it was before (requirement FR-D.1). }
     FTuneHz: Double;
     FBandwidth: TTunerBandwidth;
+    { 自動の帯域の控え（付録 CC）。決めたときの音の時計（負ならまだ）と同調先、
+      その幅（片側 Hz）。
+      The automatic width kept (appendix CC): the audio clock when it was worked
+      out (negative for never), the pitch it was for, and the width (one side,
+      Hz). }
+    FAutoAt: Double;
+    FAutoTune: Double;
+    FAutoHalf: Double;
     FConfirmed: TDecodedChars;
     FProvisional: TDecodedChars;
     FConfirmedSeconds: Double;
@@ -316,6 +324,13 @@ type
     { 同調しているときに掛ける帯域幅。既定は自動です。
       Bandwidth applied while tuned; automatic by default. }
     property Bandwidth: TTunerBandwidth read FBandwidth write SetBandwidth;
+    { いま実際に掛けている幅（片側 Hz、同調していなければ 0）。自動なら、
+      近くの局に合わせて決めた幅です（付録 CC）。画面が「自動」の幅を黙って
+      ±250 Hz と出さないためにあります。
+      The width actually applied now (one side, Hz; 0 when not tuned). For the
+      automatic setting it is the width worked out from the stations nearby
+      (appendix CC), so the screen does not quietly claim +/-250 Hz. }
+    function AppliedHalfWidthHz: Double;
 
     { これを下回る振幅の区間は解析しません。0 にすると常に解析します。
       Stretches quieter than this are not analysed; 0 analyses everything. }
@@ -379,6 +394,9 @@ begin
   FAntiAlias := True;
   FTuneHz := 0;
   FBandwidth := tbAuto;
+  FAutoAt := -1;
+  FAutoTune := 0;
+  FAutoHalf := BandwidthHalfWidth(tbAuto);
   FTailGuard := STREAM_TAIL_GUARD_SECONDS;
   FMinConfirmed := STREAM_MIN_CONFIRMED_SECONDS;
   FSquelch := STREAM_SQUELCH_LEVEL;
@@ -403,6 +421,7 @@ begin
     FProvisional := nil;
     FConfirmedSeconds := 0;
     FDroppedSeconds := 0;
+    FAutoAt := -1;
     Inc(FEpoch);
   finally
     LeaveCriticalSection(FLock);
@@ -484,10 +503,10 @@ end;
 
 function TStreamingDecoder.PrepareForModel(const Source: TSingleArray): TSingleArray;
 var
-  Tune: Double;
+  Tune, Half, Clock, AutoAt, AutoTune: Double;
   Width: TTunerBandwidth;
   Limit: Boolean;
-  Rate: Integer;
+  Rate, Span: Integer;
 begin
   { 同調の設定は画面側の操作で変わります。解析の途中で変わっても 1 回の解析が
     ちぐはぐにならないよう、始めに写し取ります。
@@ -500,25 +519,94 @@ begin
     Width := FBandwidth;
     Limit := FAntiAlias;
     Rate := FSourceRate;
+    Clock := FConfirmedSeconds + FPendingCount / Max(1, FSourceRate);
+    AutoAt := FAutoAt;
+    AutoTune := FAutoTune;
+    Half := FAutoHalf;
   finally
     LeaveCriticalSection(FLock);
   end;
+  { 自動の帯域は、同調先の近くの局に合わせます（付録 CC）。決め直すのは、
+    同調先が変わったとき・まだ決めていないとき・新しい音が
+    `TUNER_AUTO_REFRESH_SECONDS` たまったときだけで、見るのは直近
+    `TUNER_AUTO_SPAN_SECONDS` です。排他の外で求めます（重い処理のため）。
+    The automatic width follows the stations near the tuned pitch
+    (appendix CC). It is worked out again only when the pitch changed, when
+    there is none yet, or when `TUNER_AUTO_REFRESH_SECONDS` of new audio have
+    arrived, over the last `TUNER_AUTO_SPAN_SECONDS`; outside the lock, being
+    heavy. }
+  if (Tune > 0) and (Width = tbAuto) then
+  begin
+    if (AutoAt < 0) or (AutoTune <> Tune) or (Clock < AutoAt) or
+       (Clock - AutoAt >= TUNER_AUTO_REFRESH_SECONDS) then
+    begin
+      Span := Min(Length(Source), Round(TUNER_AUTO_SPAN_SECONDS * Max(1, Rate)));
+      Half := AutoHalfWidth(Copy(Source, Length(Source) - Span, Span), Rate,
+        Tune, FDecoder.Metadata);
+      EnterCriticalSection(FLock);
+      try
+        { 求めているあいだに同調先が変われば、この幅は前の同調先のものです。
+          控えずに捨てます（画面が新しい同調先の幅として出さないように）。
+          Should the pitch have changed meanwhile, this width is the old
+          pitch's and is not kept (so the screen does not show it as the new
+          pitch's). }
+        if FTuneHz = Tune then
+        begin
+          FAutoAt := Clock;
+          FAutoTune := Tune;
+          FAutoHalf := Half;
+        end;
+      finally
+        LeaveCriticalSection(FLock);
+      end;
+    end;
+  end
+  else
+    Half := BandwidthHalfWidth(Width);
   { 整形そのものは DeepCW.Tuner が持ちます。ファイルからの復号と同じ 1 か所を
     通すためです。
     The preparation itself lives in DeepCW.Tuner, so that file decoding goes
     through exactly the same place. }
-  Result := DeepCW.Tuner.PrepareForModel(Source, Rate,
-    FDecoder.Metadata.SampleRate, Tune, Width, Limit);
+  Result := DeepCW.Tuner.PrepareForModelWidth(Source, Rate,
+    FDecoder.Metadata.SampleRate, Tune, Half, Limit);
 end;
 
-procedure TStreamingDecoder.SetTuneHz(Value: Double);
+function TStreamingDecoder.AppliedHalfWidthHz: Double;
 begin
   EnterCriticalSection(FLock);
   try
+    if FTuneHz <= 0 then
+      Result := 0
+    else if FBandwidth <> tbAuto then
+      Result := BandwidthHalfWidth(FBandwidth)
+    else
+      Result := FAutoHalf;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+procedure TStreamingDecoder.SetTuneHz(Value: Double);
+var
+  Before: Double;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Before := FTuneHz;
     if Value > 0 then
       FTuneHz := QuantizeTone(Value)
     else
       FTuneHz := 0;
+    { 同調先が変われば、自動の幅の控えは前の同調先のものです。捨てて既定へ
+      戻し、次の解析で決め直します（付録 CC）。
+      A new pitch makes the kept automatic width the old pitch's: it is dropped
+      back to the default and worked out again at the next analysis
+      (appendix CC). }
+    if FTuneHz <> Before then
+    begin
+      FAutoAt := -1;
+      FAutoHalf := BandwidthHalfWidth(tbAuto);
+    end;
   finally
     LeaveCriticalSection(FLock);
   end;

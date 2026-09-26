@@ -2101,6 +2101,10 @@ msgctxt "frmmain.rstuneauto"
 msgid "自動"
 msgstr "Auto"
 
+#: frmmain.rstuneautoneighbour
+msgid "自動・隣の局に合わせて"
+msgstr "Auto, fit to neighbour"
+
 #: frmmain.rstunecleared
 msgid "同調を解除しました。受信機の音程のまま読みます。"
 msgstr "Tuning cleared. Reading at the receiver's own pitch."

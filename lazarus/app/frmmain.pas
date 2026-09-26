@@ -491,6 +491,13 @@ type
       When the chime last sounded (`GetTickCount64`, zero for never) and the
       chime itself. }
     FWatchSoundAt: QWord;
+    { 自動の帯域で、ファイルに最後に掛けた幅とそのときの同調、画面に出して
+      いる幅（付録 CC）。
+      The automatic width last applied to a file, the tuning it was worked out
+      for, and the width on screen (appendix CC). }
+    FFileAutoHalf: Double;
+    FFileAutoTune: Double;
+    FShownHalf: Double;
     FWatchChime: TSingleArray;
     { コンテストモードでだけ現れる行（要件 FR-I.5）。
       A row that appears only in the contest mode (requirement FR-I.5). }
@@ -1319,6 +1326,9 @@ resourcestring
   RsWatchingSome = '%0:d 局を待っています（%1:d 件は呼出符号の形になっていません）';
   RsWatchingAll = '%d 局を待っています';
   RsTuneAuto = '自動';
+  { 自動の帯域を、近くの局に合わせて絞ったとき（付録 CC）。
+    The automatic width narrowed to fit the stations nearby (appendix CC). }
+  RsTuneAutoNeighbour = '自動・隣の局に合わせて';
   RsTuneManual = '手動';
   RsTunedBand = '同調: %0:.0f Hz ／ 帯域 ±%1:.0f Hz（%2:s）';
   RsTunedNoLimit = '同調: %.0f Hz ／ 帯域制限なし';
@@ -5323,9 +5333,38 @@ end;
   the model's rate, which is what the caller then passes on. }
 function TMainForm.PrepareForDecoder(const Samples: TSingleArray;
   SampleRate: Integer): TSingleArray;
+const
+  { 自動の帯域を決めるために見る長さの上限（秒）。画面のスレッドで走るので、
+    長いファイルでも止まらないように（付録 CC）。
+    The most audio looked at to work out the automatic width (seconds): this
+    runs on the UI thread, which a long file must not stall (appendix CC). }
+  AUTO_LOOK_SECONDS = 60;
+var
+  Half: Double;
 begin
-  Result := DeepCW.Tuner.PrepareForModel(Samples, SampleRate,
-    FDecoder.Metadata.SampleRate, FRxWaterfall.TuneHz, SelectedBandwidth,
+  Half := BandwidthHalfWidth(SelectedBandwidth);
+  { 自動なら、流し込み受信と同じく近くの局に合わせます（付録 CC）。受信中の
+    読み直しとモニタは、**受信が実際に掛けている幅**を使います。短い切れ端で
+    決め直すと、受信とは別の音を聴くことになります。
+    Automatic follows the stations nearby, as streaming reception does
+    (appendix CC). While receiving, the re-reading and the monitor use **the
+    width reception is actually applying**: worked out again from a short clip,
+    they would hear a different sound from reception. }
+  if (SelectedBandwidth = tbAuto) and (FRxWaterfall.TuneHz > 0) then
+  begin
+    if (FStream <> nil) and (FCapture <> nil) then
+      Half := FStream.AppliedHalfWidthHz
+    else
+    begin
+      Half := AutoHalfWidth(Copy(Samples, 0, AUTO_LOOK_SECONDS * SampleRate),
+        SampleRate, FRxWaterfall.TuneHz, FDecoder.Metadata);
+      FFileAutoHalf := Half;
+      FFileAutoTune := FRxWaterfall.TuneHz;
+      UpdateTuneInfo;
+    end;
+  end;
+  Result := DeepCW.Tuner.PrepareForModelWidth(Samples, SampleRate,
+    FDecoder.Metadata.SampleRate, FRxWaterfall.TuneHz, Half,
     FRxAntiAlias.Checked);
 end;
 
@@ -8660,12 +8699,31 @@ begin
   if FRxWaterfall.TuneHz > 0 then
   begin
     Half := BandwidthHalfWidth(SelectedBandwidth);
+    { 自動なら、実際に掛けている幅を出します（付録 CC）。受信中は流し込みの
+      復号器が、ファイルなら最後に決めた幅が持っています（同じ同調のときだけ。
+      同調を変えれば、もう当てはまりません）。
+      For automatic, the width actually applied is shown (appendix CC): the
+      streaming decoder holds it while receiving, the last worked out for a
+      file otherwise (only for the same tuning; retuned, it no longer
+      applies). }
+    if SelectedBandwidth = tbAuto then
+    begin
+      if (FStream <> nil) and (FCapture <> nil) then
+        Half := FStream.AppliedHalfWidthHz
+      else if (FFileAutoHalf > 0) and
+              (FFileAutoTune = FRxWaterfall.TuneHz) then
+        Half := FFileAutoHalf;
+    end;
+    FShownHalf := Half;
     { 自動か手動かを添えます。自動は ±250 Hz で標準と同じ幅のため、数だけでは
       どちらで動いているのか区別が付きません（要件 FR-D.3・FR-D.8）。
       Says whether the width is automatic or chosen. Automatic is +/-250 Hz,
       the same as "normal", so the number alone does not tell them apart
       (requirements FR-D.3 and FR-D.8). }
-    if SelectedBandwidth = tbAuto then
+    if (SelectedBandwidth = tbAuto) and
+       (Half < BandwidthHalfWidth(tbAuto)) then
+      Mode := RsTuneAutoNeighbour
+    else if SelectedBandwidth = tbAuto then
       Mode := RsTuneAuto
     else
       Mode := RsTuneManual;
@@ -9321,6 +9379,13 @@ begin
     restart (appendix BW.4). }
   if GetTickCount64 - FClockSyncedAt >= 60000 then
     SyncClock;
+  { 自動の帯域が近くの局に合わせて変わったら、表示を追わせます（付録 CC）。
+    When the automatic width changes with the stations nearby, the display
+    follows (appendix CC). }
+  if (FStream <> nil) and (FCapture <> nil) and (FRxWaterfall <> nil) and
+     (FRxWaterfall.TuneHz > 0) and (SelectedBandwidth = tbAuto) and
+     (FStream.AppliedHalfWidthHz <> FShownHalf) then
+    UpdateTuneInfo;
   if FRigAutoConnectPending then
   begin
     FRigAutoConnectPending := False;

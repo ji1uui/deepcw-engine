@@ -625,6 +625,53 @@ begin
     Verdict('無音のあとの符号が同調して読める', Tuned = Reference,
       Format('("%s")', [Tuned]));
   end;
+
+  { 自動の帯域は、同調先の近くの局に合わせる（付録 CC）。±250 Hz 固定では、
+    30 dB 強い局が 250 Hz 横にいると、**同調した局ではなくその局の文を読んだ**
+    （「JA1ABC DE JH2XYZ UR 599 599 K」）。
+    The automatic width follows the stations near the tuned pitch
+    (appendix CC). At a fixed +/-250 Hz, with a station 30 dB stronger 250 Hz
+    away, **its text was read instead of the tuned station's**. }
+  Audio := Synthesise(NormalizeText('JA1ABC DE JH2XYZ UR 599 599 K'), Rate,
+    1000, 0, 7400);
+  Chunk := Synthesise(NormalizeText('CQ DE K1ABC K1ABC K'), Rate, 1250, 0, 7401);
+  RandSeed := 7402;
+  for I := 0 to High(Audio) do
+  begin
+    Audio[I] := 0.5 * Audio[I] + 0.05 * 0.25 * (Random + Random - 1);
+    if I <= High(Chunk) then
+      Audio[I] := Audio[I] + 0.5 * 0.0316 * Chunk[I];
+  end;
+  Tuned := RunOnce(1250);
+  WriteLn(Format('  強い局の 250 Hz 横の局に同調: "%s"', [Tuned]));
+  Verdict('強い隣の局ではなく、同調した局を読む',
+    (Pos('K1ABC', Tuned) > 0) and (Pos('JH2XYZ', Tuned) = 0),
+    Format('("%s")', [Tuned]));
+  Stream := TStreamingDecoder.Create(Decoder);
+  try
+    Stream.TuneHz := 1250;
+    Verdict('同調した直後の自動の幅は既定（±250 Hz）',
+      SameValue(Stream.AppliedHalfWidthHz, 250, 0.5),
+      Format('(±%.0f Hz)', [Stream.AppliedHalfWidthHz]));
+    Position := 0;
+    while Position < Length(Audio) do
+    begin
+      Count := Min(Round(CHUNK_SECONDS * Rate), Length(Audio) - Position);
+      Stream.Append(Copy(Audio, Position, Count), Rate);
+      Inc(Position, Count);
+      if Stream.Ready then
+        Stream.Step;
+    end;
+    Verdict('自動の幅は隣までの距離の半分（±125 Hz）',
+      SameValue(Stream.AppliedHalfWidthHz, 125, 0.5),
+      Format('(±%.0f Hz)', [Stream.AppliedHalfWidthHz]));
+    Stream.Bandwidth := tbWide;
+    Verdict('手で選んだ幅はそのまま（広い ±400 Hz）',
+      SameValue(Stream.AppliedHalfWidthHz, 400, 0.5),
+      Format('(±%.0f Hz)', [Stream.AppliedHalfWidthHz]));
+  finally
+    Stream.Free;
+  end;
   Summary(Failures);
 end;
 

@@ -2077,6 +2077,10 @@ msgctxt "frmmain.rstuneauto"
 msgid "自動"
 msgstr ""
 
+#: frmmain.rstuneautoneighbour
+msgid "自動・隣の局に合わせて"
+msgstr ""
+
 #: frmmain.rstunecleared
 msgid "同調を解除しました。受信機の音程のまま読みます。"
 msgstr ""

@@ -1658,6 +1658,87 @@ begin
       [DetectToneHz(Prepared, Meta.SampleRate), Double(WANTED_HZ)]));
 end;
 
+{ 自動の帯域が隣の局に合わせて狭まること（要件 FR-D.3、付録 CC）。
+
+  強い隣の局が帯域に入ると、機械は同調した局ではなく隣を読みます。自動の
+  幅は、隣までの距離の半分より広くしません。**隣が無いときは既定のまま**で、
+  絵が作れない短い音でも既定へ戻ります（受信は fail-soft）。
+
+  The automatic width narrows to fit a neighbour (FR-D.3, appendix CC).
+
+  With a strong neighbour inside the passband the machine reads the neighbour
+  instead of the tuned station, so the automatic width is kept within half the
+  distance to it. **With no neighbour it stays at the default**, and audio too
+  short for a picture falls back to the default too (receive is fail-soft). }
+procedure TestAutoHalfWidth;
+const
+  RATE = 8000;
+  TUNED_HZ = 1000;
+var
+  Default_, Half: Double;
+
+  function Keyed(Hz, Level: Double): TSingleArray;
+  var
+    Timing: TCWTiming;
+    Options: TCWToneOptions;
+    I: Integer;
+  begin
+    Timing := DefaultTiming;
+    Timing.CharWpm := 20;
+    Timing.TextWpm := 20;
+    Options := DefaultToneOptions;
+    Options.SampleRate := RATE;
+    Options.ToneHz := Hz;
+    Result := TextToPCM('CQ CQ DE JA1ABC JA1ABC K', Timing, Options);
+    for I := 0 to High(Result) do
+      Result[I] := Result[I] * Level;
+  end;
+
+  { 同調した局に隣を足し、弱い雑音を乗せます。
+    Adds a neighbour to the tuned station and lays weak noise on top. }
+  function Mixed(NeighbourHz, NeighbourLevel: Double): TSingleArray;
+  var
+    Other: TSingleArray;
+    I: Integer;
+  begin
+    Result := Keyed(TUNED_HZ, 0.5);
+    if NeighbourHz > 0 then
+    begin
+      Other := Keyed(NeighbourHz, NeighbourLevel);
+      for I := 0 to Min(High(Result), High(Other)) do
+        Result[I] := Result[I] + Other[I];
+    end;
+    RandSeed := 7410;
+    for I := 0 to High(Result) do
+      Result[I] := Result[I] + 0.02 * (Random - 0.5);
+  end;
+
+begin
+  WriteLn;
+  WriteLn('自動の帯域は隣の局に合わせる（要件 FR-D.3、付録 CC）');
+  Default_ := BandwidthHalfWidth(tbAuto);
+
+  Half := AutoHalfWidth(Mixed(0, 0), RATE, TUNED_HZ, Meta);
+  Check('隣が無ければ既定（±250 Hz）', SameValue(Half, Default_, 1),
+    Format('(±%.0f Hz)', [Half]));
+  Half := AutoHalfWidth(Mixed(TUNED_HZ + 300, 0.5), RATE, TUNED_HZ, Meta);
+  Check('300 Hz 横の局なら ±150 Hz 前後', Abs(Half - 150) <= 15,
+    Format('(±%.0f Hz)', [Half]));
+  Half := AutoHalfWidth(Mixed(TUNED_HZ + 250, 5.0), RATE, TUNED_HZ, Meta);
+  Check('250 Hz 横の強い局なら ±125 Hz 前後', Abs(Half - 125) <= 15,
+    Format('(±%.0f Hz)', [Half]));
+  Half := AutoHalfWidth(Mixed(TUNED_HZ + 600, 0.5), RATE, TUNED_HZ, Meta);
+  Check('600 Hz 離れた局では狭めない', SameValue(Half, Default_, 1),
+    Format('(±%.0f Hz)', [Half]));
+  Half := AutoHalfWidth(Copy(Mixed(TUNED_HZ + 250, 5.0), 0, RATE div 50),
+    RATE, TUNED_HZ, Meta);
+  Check('短すぎる音では既定のまま', SameValue(Half, Default_, 1),
+    Format('(±%.0f Hz)', [Half]));
+  Half := AutoHalfWidth(Mixed(TUNED_HZ + 250, 5.0), RATE, 0, Meta);
+  Check('同調していなければ既定のまま', SameValue(Half, Default_, 1),
+    Format('(±%.0f Hz)', [Half]));
+end;
+
 
 { 推移の材料（要件 FR-H.10・FR-H.11）。
 
@@ -5595,6 +5676,7 @@ begin
     TestFistLog;
     TestDiagnostics;
     TestMonitorAudio;
+    TestAutoHalfWidth;
     TestPacing;
     TestHistogram;
     TestReferences;

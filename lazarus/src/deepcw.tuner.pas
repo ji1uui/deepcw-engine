@@ -29,7 +29,8 @@ unit DeepCW.Tuner;
 interface
 
 uses
-  SysUtils, Math, DeepCW.Types, DeepCW.Dsp, DeepCW.Wave;
+  SysUtils, Math, DeepCW.Types, DeepCW.Dsp, DeepCW.Wave, DeepCW.Metadata,
+  DeepCW.Stations;
 
 const
   { 変換の行き先。モデルの通過帯域 400〜1200 Hz の中央です。
@@ -204,6 +205,50 @@ function TrackTone(const Magnitudes: TDoubleArray; BinHz, CurrentHz: Double;
   of them is changed. }
 function PrepareForModel(const Samples: TSingleArray; SourceRate, ModelRate: Integer;
   TuneHz: Double; Bandwidth: TTunerBandwidth; AntiAlias: Boolean): TSingleArray;
+
+const
+  { 流し込み受信で自動の帯域（`AutoHalfWidth`）を決め直す間隔と、そのとき見る
+    音の長さ（どちらも秒、音の時計、付録 CC）。局の検出は 20 秒で約 80 ms
+    かかるので、毎回ではなく新しい音が 5 秒たまるたびに、直近 10 秒で見ます。
+    How often streaming reception works out the automatic width
+    (`AutoHalfWidth`) again, and how much audio it looks at (seconds of audio
+    clock, appendix CC). Detection costs about 80 ms per 20 seconds, so it runs
+    not every time but whenever 5 new seconds have arrived, over the last 10. }
+  TUNER_AUTO_REFRESH_SECONDS = 5.0;
+  TUNER_AUTO_SPAN_SECONDS = 10.0;
+
+{ `PrepareForModel` の、残す幅を Hz で受け取る形（0 以下なら帯域制限なし）。
+  自動の幅（`AutoHalfWidth`）を渡すときに使います（付録 CC）。
+  `PrepareForModel` taking the width kept in Hz (none at 0 or below), used to
+  pass the automatic width (`AutoHalfWidth`) (appendix CC). }
+function PrepareForModelWidth(const Samples: TSingleArray;
+  SourceRate, ModelRate: Integer; TuneHz, HalfWidthHz: Double;
+  AntiAlias: Boolean): TSingleArray;
+
+{ 交信モードの**自動の帯域**（片側、Hz。未解決の問いではなく付録 CC）。
+
+  同じ音の中で局を検出し（`DetectStations`、多局受信と同じ）、同調先から
+  `DETECT_MIN_SEPARATION_HZ` 以上離れたいちばん近い局までの距離の半分を残す
+  幅にします（多局受信の FR-I.3 と同じ考え）。上限は `BandwidthHalfWidth(tbAuto)`
+  （±250 Hz）、下限は `DETECT_MIN_HALF_WIDTH_HZ`。隣に局がいなければ上限の
+  まま、検出できなければ（音が短いなど）上限のまま。
+
+  ±250 Hz 固定では、**30 dB 強い局が 250 Hz 横にいると、同調した局ではなく
+  その局の文を読んだ**（実測。「狭い」±125 Hz なら同調した局を読めた）。
+  400 Hz 横でも、送り終えたあとにその局のキークリックを点として読んだ。
+
+  The **automatic bandwidth** of contact mode (one side, Hz; appendix CC).
+  Stations are detected in the same audio (`DetectStations`, as multi-station
+  reception does) and the width kept is half the distance to the nearest
+  station at least `DETECT_MIN_SEPARATION_HZ` from the tuned pitch (the idea of
+  FR-I.3). At most `BandwidthHalfWidth(tbAuto)` (+/-250 Hz), at least
+  `DETECT_MIN_HALF_WIDTH_HZ`; with no neighbour, or nothing detectable (too
+  short, say), the maximum. At a fixed +/-250 Hz, **a station 30 dB stronger
+  250 Hz away was read instead of the tuned one** (measured; "narrow",
+  +/-125 Hz, read the tuned one), and 400 Hz away its key clicks were read as
+  dots after the tuned station stopped. }
+function AutoHalfWidth(const Samples: TSingleArray; SampleRate: Integer;
+  TuneHz: Double; Meta: TDeepCWMetadata): Double;
 
 implementation
 
@@ -450,6 +495,55 @@ end;
 
 function PrepareForModel(const Samples: TSingleArray; SourceRate, ModelRate: Integer;
   TuneHz: Double; Bandwidth: TTunerBandwidth; AntiAlias: Boolean): TSingleArray;
+begin
+  Result := PrepareForModelWidth(Samples, SourceRate, ModelRate, TuneHz,
+    BandwidthHalfWidth(Bandwidth), AntiAlias);
+end;
+
+function AutoHalfWidth(const Samples: TSingleArray; SampleRate: Integer;
+  TuneHz: Double; Meta: TDeepCWMetadata): Double;
+var
+  WideRate, I: Integer;
+  Wide: TSpectrogram;
+  Found: TStations;
+  Distance, Nearest: Double;
+begin
+  Result := BandwidthHalfWidth(tbAuto);
+  if (TuneHz <= 0) or (SampleRate <= 0) or (Meta = nil) or
+     (Length(Samples) = 0) then
+    Exit;
+  WideRate := Meta.SampleRate * 2;
+  { 短すぎる音などで絵が作れなければ、いまの自動（±250 Hz）のまま。受信は
+    止めません（Receive は fail-soft）。
+    If no picture can be made (audio too short, say), the automatic width stays
+    at +/-250 Hz; reception is not stopped (receive is fail-soft). }
+  try
+    Wide := ComputeWideSpectrogram(
+      ResampleBandLimited(Samples, SampleRate, WideRate), WideRate, Meta);
+    Found := DetectStations(Wide, WideRate);
+  except
+    on EDeepCW do
+      Exit;
+  end;
+  Nearest := MaxDouble;
+  for I := 0 to High(Found) do
+  begin
+    Distance := Abs(Found[I].Hz - TuneHz);
+    { 分離の下限より近いものは、同調した局そのもの（か、分けられない局）。
+      Closer than the separation limit is the tuned station itself (or one that
+      cannot be told apart from it). }
+    if Distance < DETECT_MIN_SEPARATION_HZ then
+      Continue;
+    if Distance < Nearest then
+      Nearest := Distance;
+  end;
+  if Nearest / 2 < Result then
+    Result := Max(DETECT_MIN_HALF_WIDTH_HZ, Nearest / 2);
+end;
+
+function PrepareForModelWidth(const Samples: TSingleArray;
+  SourceRate, ModelRate: Integer; TuneHz, HalfWidthHz: Double;
+  AntiAlias: Boolean): TSingleArray;
 var
   Half: Double;
 begin
@@ -478,7 +572,7 @@ begin
     once the operator has said which signal they want (requirement FR-D.3). }
   if TuneHz > 0 then
   begin
-    Half := BandwidthHalfWidth(Bandwidth);
+    Half := HalfWidthHz;
     if Half > 0 then
       Result := BandPassFilter(Result, ModelRate,
         TUNER_TARGET_TONE_HZ - Half, TUNER_TARGET_TONE_HZ + Half);
