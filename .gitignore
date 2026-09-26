@@ -51,6 +51,7 @@ lazarus/cli/cw_tune
 lazarus/cli/cw_devices
 lazarus/cli/dsp_check
 lazarus/cli/rig_check
+lazarus/cli/perf_report
 lazarus/app/gui_probe
 lazarus/dist/
 

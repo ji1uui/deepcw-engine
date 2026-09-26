@@ -15,6 +15,7 @@ lazarus/
          cw_tune         - measure the tuning path: pitch, translation, bandwidth
          cw_devices      - list input devices and check the PortAudio ABI
          dsp_check       - verify the DSP and tuning numerics without the model
+         perf_report     - one table of the performance requirements (NFR-1)
     tools/  make_bundle.sh - assemble a distribution that needs no installs
 ```
 
@@ -76,6 +77,7 @@ lazbuild cli/cw_stream.lpi
 lazbuild cli/cw_tune.lpi
 lazbuild cli/cw_devices.lpi
 lazbuild app/gui_probe.lpi
+lazbuild cli/perf_report.lpi
 ```
 
 Then run the station:
@@ -158,6 +160,23 @@ band-pass — against known inputs, without the model:
 
 The decode tests pass as long as characters come out, even when a
 pre-processing number is subtly wrong; this checks the numbers themselves.
+
+Measure the performance requirements on this machine and get one Markdown
+table back — latency (also through the tuned contact-mode path), CPU, word
+re-reading, the self-adjusting analysis interval, drawing, start-up, and how
+long opening a file blocks the window. It runs the same tools the regression
+does and reads what they print; the real application is started with its
+settings and records moved to a scratch folder, so yours are not touched:
+
+```bash
+./cli/perf_report            # about 2 minutes
+./cli/perf_report --full     # adds the 12-minute run (memory) and a 30-minute file
+xvfb-run -a ./cli/perf_report   # Linux without a display
+```
+
+Build all the tools first (the list above). Paste the table together with the
+machine line at its head: figures without the machine they came from cannot be
+compared.
 
 Check that buffering stops growing when analysis cannot keep up — a slow
 machine, a device faster than real time, or an empty frequency where not one

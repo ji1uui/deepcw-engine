@@ -13,7 +13,7 @@ program cw_stream;
 
 uses
   SysUtils, Math, DeepCW.Types, DeepCW.Onnx, DeepCW.Wave, DeepCW.Decoder,
-  DeepCW.Morse, DeepCW.Stream, DeepCW.Platform;
+  DeepCW.Morse, DeepCW.Stream, DeepCW.Tuner, DeepCW.Platform;
 
 const
   { 要件 NFR-1.1・NFR-1.2 の目標。**数字をここに名前で置くのは、判定と表示が
@@ -24,6 +24,14 @@ const
     changing one would leave the other stale. }
   TARGET_PENDING_SECONDS = 1.5;
   TARGET_CONFIRM_SECONDS = 5.0;
+  { `--neighbour` で足す強い隣の局の本文と、その印（付録 CC と同じ場面）。
+    **読んだ文にこの印があれば、同調した局ではなく隣の局を読んでいます**
+    （教訓 10.106）。
+    The strong neighbour's text added by `--neighbour`, and its marker (the
+    scene of appendix CC). **The marker in what was read means the neighbour
+    was read, not the tuned station** (lesson 10.106). }
+  NEIGHBOUR_TEXT = 'TNX FER QSO 73 ES GL WX IS FB HR RIG IS 100W ANT IS GP';
+  NEIGHBOUR_MARK = '100W';
 
 var
   ModelPath: string = '';
@@ -42,6 +50,18 @@ var
   SourceText: string = '';
   MaxPending: Double = TARGET_PENDING_SECONDS;
   MaxConfirm: Double = TARGET_CONFIRM_SECONDS;
+  { 同調（0 は同調しない）・帯域・隣の局の音程（0 は無し）。同調した交信
+    モードの経路を測るためのものです（計画 6.1 の P2、教訓 10.107）。
+    Tuning (0 = none), bandwidth and the neighbour's pitch (0 = none): for
+    measuring the tuned contact-mode path (plan 6.1 P2, lesson 10.107). }
+  TuneHz: Double = 0;
+  Bandwidth: TTunerBandwidth = tbAuto;
+  NeighbourHz: Double = 0;
+  Neighbour: TSingleArray;
+  Widths: string;
+  Steps: Integer;
+  StepSeconds: Double;
+  Begun: TDateTime;
   Timing: TCWTiming;
   ToneOptions: TCWToneOptions;
   Decoder: TDeepCWDecoder;
@@ -113,6 +133,20 @@ begin
       '--text': SourceText := Value;
       '--max-provisional': MaxPending := StrToFloatDef(Value, TARGET_PENDING_SECONDS);
       '--max-confirmed': MaxConfirm := StrToFloatDef(Value, TARGET_CONFIRM_SECONDS);
+      '--tune': TuneHz := StrToFloatDef(Value, 0);
+      '--neighbour': NeighbourHz := StrToFloatDef(Value, 0);
+      '--bandwidth':
+        case Value of
+          'auto': Bandwidth := tbAuto;
+          'narrow': Bandwidth := tbNarrow;
+          'normal': Bandwidth := tbNormal;
+          'wide': Bandwidth := tbWide;
+        else
+          begin
+            WriteLn(StdErr, 'Unknown bandwidth: ', Value);
+            Halt(2);
+          end;
+        end;
     else
       begin
         WriteLn(StdErr, 'Unknown option: ', Key);
@@ -126,7 +160,13 @@ begin
   begin
     WriteLn(StdErr, 'Usage: cw_stream (--wav <file> | --text <message>) ' +
       '[--chunk seconds] [--quiet] [--no-antialias] ' +
-      '[--check] [--max-provisional s] [--max-confirmed s]');
+      '[--check] [--max-provisional s] [--max-confirmed s] ' +
+      '[--tune Hz] [--bandwidth auto|narrow|normal|wide] [--neighbour Hz]');
+    Halt(2);
+  end;
+  if (NeighbourHz > 0) and (SourceText = '') then
+  begin
+    WriteLn(StdErr, '--neighbour needs --text (it adds a station to the synthesised audio)');
     Halt(2);
   end;
   if ModelPath = '' then
@@ -141,6 +181,8 @@ begin
       Stream := TStreamingDecoder.Create(Decoder);
       try
         Stream.AntiAlias := not NoAntiAlias;
+        Stream.Bandwidth := Bandwidth;
+        Stream.TuneHz := TuneHz;
         if SourceText <> '' then
         begin
           { 本文から音を作れるようにしておくと、回帰試験が音声ファイルを
@@ -159,12 +201,28 @@ begin
           ToneOptions.Amplitude := 0.5;
           ToneOptions.NoiseAmplitude := 0;
           Samples := TextToPCM(SourceText, Timing, ToneOptions);
+          { 強い隣の局（付録 CC.5 と同じ場面）: 同調する局を 30 dB 弱くし、
+            隣の局を振幅 0.5 で重ね、弱い雑音を足します。
+            A strong neighbour (the scene of appendix CC.5): the tuned station
+            30 dB down, the neighbour at amplitude 0.5, and weak noise. }
+          if NeighbourHz > 0 then
+          begin
+            ToneOptions.ToneHz := NeighbourHz;
+            Neighbour := TextToPCM(NEIGHBOUR_TEXT, Timing, ToneOptions);
+            RandSeed := 7420;
+            for I := 0 to High(Samples) do
+              Samples[I] := 0.0316 * Samples[I] + 0.05 * (Random - 0.5) +
+                Neighbour[I mod Length(Neighbour)];
+          end;
         end
         else
           LoadWavMono(WavPath, Samples, SampleRate);
         Count := Max(1, Round(ChunkSeconds * SampleRate));
         Position := 0;
         Previous := '';
+        Widths := '';
+        Steps := 0;
+        StepSeconds := 0;
         Rewrites := 0;
         SeenConfirmed := 0;
         NewestPending := -1;
@@ -180,7 +238,12 @@ begin
 
           if not Stream.Ready then
             Continue;
+          Begun := Now;
           Stream.Step;
+          StepSeconds := StepSeconds + (Now - Begun) * SecsPerDay;
+          Inc(Steps);
+          if Pos(Format('±%.0f ', [Stream.AppliedHalfWidthHz]), Widths) = 0 then
+            Widths := Widths + Format('±%.0f ', [Stream.AppliedHalfWidthHz]);
 
           { 音声上の時刻と、投入し終えた時刻の差が体感の遅延です（要件 NFR-1）。
             The gap between a character's time in the audio and the moment it
@@ -230,6 +293,17 @@ begin
         WriteLn('確定: ', DecodedText(Stream.ConfirmedChars));
         WriteLn('暫定: ', DecodedText(Stream.ProvisionalChars));
         WriteLn(Format('確定部分の書き換え: %d 回', [Rewrites]));
+        { 費用は「解析に掛かった壁時計 ÷ 音の時間」で、`cw_tune --tests scale`
+          の「コア相当」と同じ定義です。
+          The cost is wall-clock analysis time over audio time, the same
+          definition as the "cores" of `cw_tune --tests scale`. }
+        WriteLn(Format('解析: %d 回 / 1 回 %.1f ms / %.3f コア相当',
+          [Steps, 1000 * StepSeconds / Max(1, Steps),
+           StepSeconds / Max(1e-9, Length(Samples) / SampleRate)]));
+        if TuneHz > 0 then
+          WriteLn(Format('同調: %.0f Hz / 掛けた幅 %s', [TuneHz, Trim(Widths)]))
+        else
+          WriteLn('同調: なし');
         WriteLn(Format('暫定文字の遅延 95%%: %.2f 秒（目標 %.2f 秒） %s',
           [Percentile95(PendingDelays), TARGET_PENDING_SECONDS,
            BoolToStr(Percentile95(PendingDelays) <= TARGET_PENDING_SECONDS,
@@ -257,6 +331,12 @@ begin
           failing forever. }
         if Check then
         begin
+          if (NeighbourHz > 0) and
+             (Pos(NEIGHBOUR_MARK, DecodedText(Stream.ConfirmedChars)) > 0) then
+          begin
+            WriteLn('同調した局ではなく、隣の局の文を読みました。');
+            Failed := True;
+          end;
           if Percentile95(PendingDelays) > MaxPending then
           begin
             WriteLn(Format('暫定文字の遅延が上限 %.2f 秒を超えました。',
