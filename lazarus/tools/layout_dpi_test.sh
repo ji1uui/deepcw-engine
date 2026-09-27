@@ -85,6 +85,28 @@ else
   echo "  英語の .po がありません（訳を入れたら軸が増えます）"
 fi
 
+# 小さい画面と、整数でない拡大率（付録 CH）。**窓が画面の作業領域に収まる
+# こと**も同じ検査が見る。125% の 1366×768 では、見かけの高さが約 614 で、
+# 前の最小の窓（660）は画面の外へはみ出していた。100 dpi・125% では、拡大の
+# 丸めで 1〜4 画素の重なり・はみ出しが出ていた（96・192 dpi では出ない）。
+# Small screens and non-integer scaling (appendix CH). **The window must fit
+# the screen's work area** too -- the same check looks. At 1366 x 768 with
+# 125% the apparent height is about 614, and the former minimum window (660)
+# ran off the screen. At 100 dpi and 125% the scaling's rounding produced
+# overlaps and overruns of 1 to 4 pixels that 96 and 192 dpi never show.
+echo "  1366x768・120 dpi（125%、日本語）:"
+run_at 120 1366x768x24 125 ja
+echo "  1280x720・96 dpi（日本語）:"
+run_at 96 1280x720x24 126 ja
+echo "  1400x950・100 dpi（日本語）:"
+run_at 100 1400x950x24 127 ja
+if [ -f app/languages/deepcw_station.en.po ]; then
+  echo "  1366x768・120 dpi（125%、English）:"
+  run_at 120 1366x768x24 128 en
+  echo "  1920x1080・144 dpi（150%、English）:"
+  run_at 144 1920x1080x24 129 en
+fi
+
 if [ $FAILED -ne 0 ]; then
   echo "組み方の破綻が見つかりました"
   exit 1

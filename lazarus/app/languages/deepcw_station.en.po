@@ -699,7 +699,7 @@ msgstr "Basis"
 
 #: frmmain.rsftbasisnote
 msgid "基準は「正しさ」ではありません。バグキーの符号は、バグキーの基準で測ります。"
-msgstr "Not a standard of correctness: a bug key is measured against the bug-key basis."
+msgstr "Not correctness: a bug key is measured on the bug-key basis."
 
 #: frmmain.rsftbottomlabel
 msgid "下に出すもの"
