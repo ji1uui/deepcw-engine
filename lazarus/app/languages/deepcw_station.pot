@@ -879,10 +879,6 @@ msgstr ""
 msgid "推移に出す項目"
 msgstr ""
 
-#: frmmain.rsftwavhint
-msgid "受信タブの「WAV ファイルから受信」に、採点したい録音を選んでください。"
-msgstr ""
-
 #: frmmain.rsftwpm
 #, object-pascal-format
 msgid "実効 %0:.1f WPM ／ 短点 %1:.1f ms（ばらつき %2:.1f%%）／ 長短比 %3:.2f"
@@ -1060,6 +1056,18 @@ msgstr ""
 msgid "%0:s%1:s（%2:s に交信済み）"
 msgstr ""
 
+#: frmmain.rsmkgroup
+msgid "文から練習用の音を作る"
+msgstr ""
+
+#: frmmain.rsmknote
+msgid "文字速度は送受信画面の送信欄、実効速度・音程・音量は設定タブの値を使います。"
+msgstr ""
+
+#: frmmain.rsmktextlabel
+msgid "鳴らす文（A-Z 0-9 . , ? /）"
+msgstr ""
+
 #: frmmain.rsmodecontactset
 msgid "交信モードにしました。選んだ 1 局を読みます。受信文は改めて取り直します。"
 msgstr ""
@@ -1213,7 +1221,7 @@ msgid "練習"
 msgstr ""
 
 #: frmmain.rsprtonenote
-msgid "音程と音量は送信タブの設定を使います。"
+msgid "音程と音量は設定タブの「練習で鳴らす音」を使います。"
 msgstr ""
 
 #: frmmain.rsprwpm
@@ -1546,10 +1554,6 @@ msgstr ""
 msgid "運用バンド"
 msgstr ""
 
-#: frmmain.rsrxbrowse
-msgid "参照..."
-msgstr ""
-
 #: frmmain.rsrxcallandrst
 msgid "符号と RST"
 msgstr ""
@@ -1565,11 +1569,6 @@ msgstr ""
 
 #: frmmain.rsrxcopy
 msgid "コピー"
-msgstr ""
-
-#: frmmain.rsrxdecode
-msgctxt "frmmain.rsrxdecode"
-msgid "デコード"
 msgstr ""
 
 #: frmmain.rsrxdenoise
@@ -1598,10 +1597,6 @@ msgstr ""
 
 #: frmmain.rsrxfrominput
 msgid "マイク / ライン入力から受信"
-msgstr ""
-
-#: frmmain.rsrxfromwav
-msgid "WAV ファイルから受信"
 msgstr ""
 
 #: frmmain.rsrxhideworked
@@ -1640,6 +1635,10 @@ msgstr ""
 msgid "送信中（復号を止めています）"
 msgstr ""
 
+#: frmmain.rsrxopenfile
+msgid "ファイルから読む..."
+msgstr ""
+
 #: frmmain.rsrxopentitle
 msgid "モールス音声を開く"
 msgstr ""
@@ -1674,7 +1673,7 @@ msgid "RST は 3 桁で書いてください（例: 599・5NN）。このまま�
 msgstr ""
 
 #: frmmain.rsrxrstnote
-msgid "受けた RST は読めたもの、送った RST は送信タブのものが入ります（直せます）。"
+msgid "受けた RST は読めたもの、送った RST は送信欄のものが入ります（直せます）。"
 msgstr ""
 
 #: frmmain.rsrxrstrcvd
@@ -1720,7 +1719,7 @@ msgstr ""
 
 #: frmmain.rsrxtab
 msgctxt "frmmain.rsrxtab"
-msgid "受信"
+msgid "送受信"
 msgstr ""
 
 #: frmmain.rsrxtext
@@ -1904,6 +1903,10 @@ msgstr ""
 msgid "PortAudio ライブラリ（空欄なら自動検索）"
 msgstr ""
 
+#: frmmain.rssetpracticesound
+msgid "練習で鳴らす音"
+msgstr ""
+
 #: frmmain.rssetprefixes
 msgctxt "frmmain.rssetprefixes"
 msgid "国別前置符字表"
@@ -2048,6 +2051,10 @@ msgstr ""
 msgid "ONNX Runtime ライブラリ（空欄なら自動検索）"
 msgstr ""
 
+#: frmmain.rssetrxdisplay
+msgid "受信テキストの表示"
+msgstr ""
+
 #: frmmain.rssettab
 msgid "設定"
 msgstr ""
@@ -2184,7 +2191,7 @@ msgstr ""
 
 #: frmmain.rstxproblemmissing
 #, object-pascal-format
-msgid "%s の値がありません。自局の符号は設定タブ、相手の符号は送信タブに入れてください。"
+msgid "%s の値がありません。自局の符号は設定タブ、相手の符号は送信欄に入れてください。"
 msgstr ""
 
 #: frmmain.rstxproblemtoolong
@@ -2230,15 +2237,11 @@ msgid "音で鳴らす"
 msgstr ""
 
 #: frmmain.rstxsending
-msgid "送信中の文字"
+msgid "鳴っている文字"
 msgstr ""
 
 #: frmmain.rstxsendingnow
 msgid "送信中"
-msgstr ""
-
-#: frmmain.rstxsettings
-msgid "送信設定"
 msgstr ""
 
 #: frmmain.rstxstop
@@ -2256,17 +2259,12 @@ msgctxt "frmmain.rstxsummary"
 msgid "%0:d 文字 / %1:.1f 秒"
 msgstr ""
 
-#: frmmain.rstxtab
-msgctxt "frmmain.rstxtab"
-msgid "送信"
-msgstr ""
-
 #: frmmain.rstxtemplatelabel
 msgid "定型"
 msgstr ""
 
-#: frmmain.rstxtextlabel
-msgid "送信する文（A-Z 0-9 . , ? / と空白）"
+#: frmmain.rstxtextshort
+msgid "送る文"
 msgstr ""
 
 #: frmmain.rstxtextwpm
