@@ -6,11 +6,11 @@
 # 96 dpi（等倍）・100 dpi・120 dpi（125%）・192 dpi（200%）を、日本語と英語の
 # 2 言語で。150% は付録 AW.5。
 #
-# **等倍と 2 倍だけでは足りません**（付録 CG）。整数倍では、位置も高さも文字も
+# **等倍と 2 倍だけでは足りません**（付録 CH）。整数倍では、位置も高さも文字も
 # 同じ割合で伸びるので、ぴったり付けた部品もぴったりのままです。割り切れない
 # 倍率では、位置と高さが別々に丸められ、文字の高さと幅は書体の都合で割合より
 # 多く伸びます。100 dpi（Xvfb の既定）と 120 dpi で、2 倍では出ない破綻が
-# 15 件出ました。
+# 13 件出ました。
 #
 # Checks that the window's layout does not break on screens of different pixel
 # density (requirement NFR-5.1). **The eye only catches this on the tab that
@@ -18,11 +18,11 @@
 # breakages on every tab itself: 96, 100, 120 (125%) and 192 dpi (200%), in
 # Japanese and English. 144 dpi is measured separately in appendix AW.5.
 #
-# **Unit and double scale are not enough** (appendix CG). At a whole multiple,
+# **Unit and double scale are not enough** (appendix CH). At a whole multiple,
 # positions, heights and text all grow by the same factor, so controls butted
 # together stay butted. At a fractional one, position and height are rounded
 # separately, and text grows by more than the factor, as the font dictates. At
-# 100 dpi (Xvfb's default) and 120 dpi, 15 breakages appeared that double scale
+# 100 dpi (Xvfb's default) and 120 dpi, 13 breakages appeared that double scale
 # never shows.
 set -e
 cd "$(dirname "$0")/.."

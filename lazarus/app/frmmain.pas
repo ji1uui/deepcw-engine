@@ -369,9 +369,14 @@ type
     FStatus: TStatusBar;
     FPollTimer: TTimer;
 
-    { 送信タブ / transmit tab }
+    { 送受信画面の送信欄（`FTxText` ほか）と、練習タブの「文から練習用の音を
+      作る」（`FMkText` と、`FTxSamples` から鳴らす・保存する部品）。
+      The send panel of the operating screen (`FTxText` and the rest) and the
+      practice tab's "make practice sound from text" (`FMkText` and the parts
+      that play and save `FTxSamples`). }
     FTxText: TMemo;
-    FTxCode: TMemo;
+    FMkText: TEdit;
+    FTxCode: TEdit;
     FTxCharWpm: TSpinEdit;
     FTxTextWpm: TSpinEdit;
     FTxToneHz: TSpinEdit;
@@ -487,10 +492,13 @@ type
       UI thread only.** }
     FReducer: TNoiseReducer;
 
-    { 受信タブ / receive tab }
-    FRxFile: TEdit;
-    FRxBrowse: TButton;
-    FRxDecodeFile: TButton;
+    { 送受信画面の受信側 / the receiving side of the operating screen }
+    { 最後に選んだ録音。送受信画面の「ファイルから読む」と、送信訓練の「WAV で
+      採点」が選び、選んだその場で使います。
+      The recording chosen last: picked by "read a file" on the operating
+      screen and by "score a WAV" on the send-practice tab, and used at once. }
+    FRxFilePath: string;
+    FRxOpenFile: TButton;
     FRxStart: TButton;
     FRxStop: TButton;
     FRxClear: TButton;
@@ -728,7 +736,8 @@ type
     FSetInfo: TMemo;
 
     procedure BuildUI;
-    function BuildTransmitTab: TTabSheet;
+    function BuildSendPanel(Host: TWinControl): TPanel;
+    procedure BuildSoundMaker(Host: TWinControl);
     function BuildReceiveTab: TTabSheet;
     function BuildSettingsTab: TTabSheet;
     function BuildPracticeTab: TTabSheet;
@@ -794,6 +803,7 @@ type
     function PrepareForDecoder(const Samples: TSingleArray; SampleRate: Integer): TSingleArray;
 
     procedure TxTextChanged(Sender: TObject);
+    procedure SendTextChanged(Sender: TObject);
     procedure TxOptionsChanged(Sender: TObject);
     procedure RenderTransmit;
     procedure UpdateTxSummary;
@@ -939,7 +949,7 @@ type
     function SelectedRetention: Double;
     procedure UpdateReplayInfo;
 
-    procedure RxBrowseClick(Sender: TObject);
+    procedure RxOpenFileClick(Sender: TObject);
     procedure RxDecodeFileClick(Sender: TObject);
     procedure RxStartClick(Sender: TObject);
     procedure RxStopClick(Sender: TObject);
@@ -1041,11 +1051,9 @@ implementation
   Japanese character count**. `TextCheck` counts this from the `.po` and
   `LayoutCheck` counts, on the real screen, whether it fits (appendix BC). }
 resourcestring
-  { 受信タブ / the receive tab }
-  RsRxTab = '受信';
-  RsRxFromWav = 'WAV ファイルから受信';
-  RsRxDecode = 'デコード';
-  RsRxBrowse = '参照...';
+  { 送受信画面 / the operating screen }
+  RsRxTab = '送受信';
+  RsRxOpenFile = 'ファイルから読む...';
   RsRxFromInput = 'マイク / ライン入力から受信';
   RsRxInputLevel = '入力レベル';
   RsRxStart = '受信開始';
@@ -1089,11 +1097,13 @@ resourcestring
   RsRxBandAny = '指定なし';
   RsRxHideWorked = '交信済みを隠す';
 
-  { 送信タブ / the transmit tab }
-  RsTxTab = '送信';
-  RsTxTextLabel = '送信する文（A-Z 0-9 . , ? / と空白）';
+  { 送信欄 / the send panel }
+  RsTxTextShort = '送る文';
+  { 練習タブの「文から練習用の音を作る」/ the practice tab's text-to-sound }
+  RsMkGroup = '文から練習用の音を作る';
+  RsMkTextLabel = '鳴らす文（A-Z 0-9 . , ? /）';
+  RsMkNote = '文字速度は送受信画面の送信欄、実効速度・音程・音量は設定タブの値を使います。';
   RsTxMorse = 'モールス符号';
-  RsTxSettings = '送信設定';
   RsTxCharWpm = '文字速度 (WPM)';
   RsTxTextWpm = '実効速度 (WPM)';
   RsTxToneHz = '音程 (Hz)';
@@ -1108,7 +1118,7 @@ resourcestring
   RsTxStop = '停止';
   RsTxSaveWav = 'WAV に保存';
   RsTxVerify = '自己デコード確認';
-  RsTxSending = '送信中の文字';
+  RsTxSending = '鳴っている文字';
 
   { 受信練習タブ / the copy-practice tab }
   RsPrTab = '練習';
@@ -1117,7 +1127,7 @@ resourcestring
   RsPrGroups = '出す数';
   RsPrWpm = '速度 (WPM)';
   RsPrNoise = '雑音';
-  RsPrToneNote = '音程と音量は送信タブの設定を使います。';
+  RsPrToneNote = '音程と音量は設定タブの「練習で鳴らす音」を使います。';
   RsPrDelay = '遅らせて正解を出す';
   RsPrDelaySeconds = '遅らせる秒数';
   RsPrDelayNote = '鳴った文字が、この秒数だけ遅れて「正解」に出ます。';
@@ -1162,6 +1172,11 @@ resourcestring
   { 設定タブ / the settings tab }
   RsSetTab = '設定';
   RsSetOperating = '運用設定';
+  { PC で鳴らす音だけに効きます。無線機の側音は無線機が決めます。
+    Affects only the sound played on the PC; the rig decides its own
+    sidetone. }
+  RsSetPracticeSound = '練習で鳴らす音';
+  RsSetRxDisplay = '受信テキストの表示';
   RsSetCaptureRate = '音の細かさ';
   RsSetRate8000 = '8000 Hz（推奨）';
   RsSetCaptureNote = '受信機の音を取り込む細かさです。うまく取り込めないときだけ変えてください。';
@@ -1315,7 +1330,6 @@ resourcestring
   RsFtRunning = '訓練中 %d Hz';
   RsFtSendNow = '送ってください。終わったら「終了して採点」を押してください。';
   RsFtBusyDrill = '訓練中です。先に「終了して採点」を押してください。';
-  RsFtWavHint = '受信タブの「WAV ファイルから受信」に、採点したい録音を選んでください。';
   RsFtNoAudio = '音が取り込めませんでした。入力装置と音量を確かめてください。';
   RsFtNoMonitor = 'モニター音が見つかりませんでした。'#10 +
     '無線機のモニター音量と、受信タブで選んだ入力装置を確かめてください。';
@@ -1547,7 +1561,7 @@ resourcestring
   RsRigConnected = '無線機に繋がりました（応答を確かめました）。';
   RsRxRstRcvd = '受けた RST';
   RsRxRstSent = '送った RST';
-  RsRxRstNote = '受けた RST は読めたもの、送った RST は送信タブのものが入ります（直せます）。';
+  RsRxRstNote = '受けた RST は読めたもの、送った RST は送信欄のものが入ります（直せます）。';
   RsRxRstBad = 'RST は 3 桁で書いてください（例: 599・5NN）。このままでは記録に書きません。';
   RsLoggedBadRst = '%0:s との交信を記録しました。RST「%1:s」は形が違うので書いていません。';
   RsRigModeNotCw = '無線機のモードが CW ではありません（%s）。無線機を CW にしてから送ってください。';
@@ -1597,7 +1611,7 @@ resourcestring
   RsTxProblemUnsendable = '送れない文字があります: 「%s」';
   RsTxProblemTooLong = '長すぎます（%0:s 文字）。%1:d 文字・%2:d 秒までにしてください。';
   RsTxProblemUnexpanded = '展開されていない差し込みがあります: %s';
-  RsTxProblemMissing = '%s の値がありません。自局の符号は設定タブ、相手の符号は送信タブに入れてください。';
+  RsTxProblemMissing = '%s の値がありません。自局の符号は設定タブ、相手の符号は送信欄に入れてください。';
   RsTxProblemUnknown = '知らない差し込みです: %s（使えるのは MYCALL・CALL・RST）';
   RsSetRigGroup = '無線機（送信）';
   RsSetRigModel = '機種番号';
@@ -1871,17 +1885,8 @@ begin
     （付録 BV.4。以前の 560 では受信テキストが見えなくなっていた）。
     Tall enough for both the received text (80) and the waterfall's least
     height (120) (appendix BV.4; at the former 560 the received text
-    disappeared).
-    **660 は 96 dpi でちょうど（余り 1 画素）でした。**文字の行は画素密度に比例
-    せずに伸びるので、120 dpi では受信テキストが 2 画素足りませんでした。要る
-    高さは、96 dpi に換算して 651〜662（96〜192 dpi、日本語・英語で実測。付録 CG）。
-    その上に 8 画素ほど残して 670 にします。
-    **660 was exact at 96 dpi (1 pixel to spare).** Rows of text grow out of
-    proportion to the density, and at 120 dpi the received text came up 2
-    pixels short. The height needed is 651 to 662 in 96-dpi pixels (measured
-    at 96 to 192 dpi in Japanese and English; appendix CG); 670 leaves about 8
-    above that. }
-  Constraints.MinHeight := 670;
+    disappeared). }
+  Constraints.MinHeight := 660;
   Position := poScreenCenter;
 
   FDiagnostics := TStringList.Create;
@@ -2121,16 +2126,15 @@ begin
   FPages.Parent := Self;
   FPages.Align := alClient;
   FPages.AddTabSheet.Free;      { 仮のシートを取り除きます / drop the placeholder sheet }
-  BuildTransmitTab;
   FRxSheet := BuildReceiveTab;
   BuildPracticeTab;
   BuildFistTab;
   FSettingsSheet := BuildSettingsTab;
-  { 起動直後の画面は受信です。ここから受信開始まで操作 1 回で届きます
-    （要件 FR-A.2）。
-    The window opens on the receive tab, one action away from starting
-    reception (requirement FR-A.2). }
-  FPages.PageIndex := 1;
+  { 起動直後の画面は送受信です。ここから受信開始まで操作 1 回で届きます
+    （要件 FR-A.2）。番号ではなくタブそのもので選びます。
+    The window opens on the operating screen, one action away from starting
+    reception (requirement FR-A.2); chosen by the tab itself, not a number. }
+  FPages.ActivePage := FRxSheet;
   FPages.OnChange := @PagesChanged;
 
   FPollTimer := TTimer.Create(Self);
@@ -2285,13 +2289,13 @@ end;
 
 { 枠の高さを、中に置いた部品から決めます。**固定の高さは、画素密度が変わると
   足りなくなります。**枠の見出しと文字の高さは書体で決まり、画素密度に比例して
-  伸びないためです（100 dpi で、最後の行が 2 画素はみ出していた。付録 CG）。
+  伸びないためです（100 dpi で、最後の行が 2 画素はみ出していた。付録 CH）。
   部品は置いた場所に留め（`csAutoSizeKeepChild*`。無いと LCL が左上へ寄せます）、
   最後の部品の下に `Margin` だけ空けます。
   Sizes a box's height from the controls put inside it. **A fixed height runs
   short when the pixel density changes**: the box's caption and the text take
   their height from the font, which does not grow in proportion to the density
-  (at 100 dpi the last row stuck out by 2 pixels; appendix CG). The controls
+  (at 100 dpi the last row stuck out by 2 pixels; appendix CH). The controls
   stay where they were put (`csAutoSizeKeepChild*`; without it the LCL moves
   them to the top left), and `Margin` is left below the last one. }
 procedure FitToChildren(Group: TWinControl; Margin: Integer = 6);
@@ -2302,21 +2306,49 @@ begin
   Group.AutoSize := True;
 end;
 
-function TMainForm.BuildTransmitTab: TTabSheet;
+{ 送受信画面の送信欄（要件 FR-T）。受信テキストのすぐ下に置きます。**読んだ
+  文の真下で返事を作り、そのまま送る**——交信が 1 つの画面で終わるためです。
+  版 2.84 までは別のタブで、1 回の交信のたびに行き来していました（付録 CG）。
+
+  ここに置くのは交信に要るものだけです: 送る文の作り方・送る文・文字速度・
+  無線機の操作。PC で鳴らす・WAV に保存する・自己デコード確認は練習タブ、
+  実効速度・音程・音量は設定タブへ移しました。
+
+  The send panel of the operating screen (requirement FR-T), directly under
+  the received text: **the reply is made right below what was read and sent
+  from there**, so that a contact is finished on one screen. Up to version
+  2.84 it was a separate tab, visited back and forth for every contact
+  (appendix CG).
+
+  Only what a contact needs is here: how the text is made, the text, the
+  character speed, and the rig. Playing on the PC, saving a WAV and the
+  self-decode check went to the practice tab; the effective speed, pitch and
+  volume to the settings tab. }
+function TMainForm.BuildSendPanel(Host: TWinControl): TPanel;
 var
-  Sheet: TTabSheet;
-  Options: TGroupBox;
-  Buttons, Current, Compose, Rig: TPanel;
+  Line: TBevel;
+  Compose, Middle, Speed, Caption_, Rig: TPanel;
 begin
-  Sheet := FPages.AddTabSheet;
-  RegisterCaption(Sheet, @RsTxTab);
-  Result := Sheet;
+  Result := TPanel.Create(Host);
+  Result.Parent := Host;
+  Result.BevelOuter := bvNone;
+  Result.Height := 132;
+  Result.Align := alBottom;
+
+  { 受信の欄との境目。/ The boundary with the receiving side. }
+  Line := TBevel.Create(Result);
+  Line.Parent := Result;
+  Line.Shape := bsTopLine;
+  Line.Height := 4;
+  StackBelow(Line);
+  Line.Align := alTop;
+
   { 送信文の作り方は 3 つ（要件 FR-T.1）: 自動・定型・下の欄への手入力。
     **どれも下の欄へ最終の文として入り、送るのはその欄の文そのもの**です。
     The text comes from one of three places (FR-T.1): automatic, a template,
     or typed into the box below. **All of them end up in that box as the final
     text, and what is sent is exactly the box.** }
-  Compose := AddTopPanel(Sheet, 36);
+  Compose := AddTopPanel(Result, 36);
   AddLabel(Compose, @RsTxComposeLabel, 12, 8);
   FTxStage := TComboBox.Create(Compose);
   FTxStage.Parent := Compose;
@@ -2347,128 +2379,121 @@ begin
   FTxTemplate.Style := csDropDownList;
   AddButton(Compose, @RsTxUseTemplate, 980, 4, 70, @TxTemplateClick);
 
-
-  AddTopLabel(Sheet, @RsTxTextLabel);
-  FTxText := TMemo.Create(Sheet);
-  FTxText.Parent := Sheet;
-  FTxText.Height := 90;
+  { 送る文と、文字速度。速度は相手に合わせて交信中に変えるので、ここに置きます。
+    The text and the character speed: the speed is matched to the other
+    station during a contact, so it lives here. }
+  Middle := AddTopPanel(Result, 54);
+  Speed := TPanel.Create(Middle);
+  Speed.Parent := Middle;
+  Speed.BevelOuter := bvNone;
+  Speed.Width := 150;
+  Speed.Align := alRight;
+  AddLabel(Speed, @RsTxCharWpm, 8, 2);
+  FTxCharWpm := AddSpin(Speed, 8, 22, 5, 60, 20, @TxOptionsChanged);
+  Caption_ := TPanel.Create(Middle);
+  Caption_.Parent := Middle;
+  Caption_.BevelOuter := bvNone;
+  Caption_.Width := 72;
+  Caption_.Align := alLeft;
+  AddLabel(Caption_, @RsTxTextShort, 12, 6);
+  FTxText := TMemo.Create(Middle);
+  FTxText.Parent := Middle;
   FTxText.ScrollBars := ssAutoVertical;
   FTxText.Text := 'CQ CQ DE JA1ABC K';
-  FTxText.OnChange := @TxTextChanged;
-  Stretch(FTxText, alTop);
+  FTxText.OnChange := @SendTextChanged;
+  FTxText.Align := alClient;
+  FTxText.BorderSpacing.Around := 2;
 
-  AddTopLabel(Sheet, @RsTxMorse);
-  FTxCode := TMemo.Create(Sheet);
-  FTxCode.Parent := Sheet;
-  FTxCode.Height := 70;
+  { 無線機で送る（要件 FR-T.2・T.3）。**止めるボタンは決して無効にしません。**
+    Sending through the rig (FR-T.2, T.3). **The stop button is never
+    disabled.** }
+  Rig := AddTopPanel(Result, 36);
+  AddLabel(Rig, @RsRigGroup, 12, 10);
+  FRigConnect := AddButton(Rig, @RsRigConnect, 70, 2, 80, @RigConnectClick);
+  FRigDisconnect := AddButton(Rig, @RsRigDisconnect, 156, 2, 96, @RigDisconnectClick);
+  FRigSend := AddButton(Rig, @RsRigSend, 262, 2, 140, @RigSendClick);
+  FRigStop := AddButton(Rig, @RsRigStop, 410, 2, 130, @RigStopClick);
+  FRigPower := AddButton(Rig, @RsRigPower, 548, 2, 120, @RigPowerClick);
+  FRigPower.Enabled := False;
+  FRigStatus := AddLabel(Rig, '', 680, 10);
+end;
+
+{ 練習タブの「文から練習用の音を作る」（要件 FR-F.1）。**電波は出しません。**
+  PC で鳴らす・WAV に保存する・自己デコードで確かめる。版 2.84 までは送信
+  タブにあり、交信で送る文と同じ欄を使っていました（付録 CG）。
+
+  文字速度は送信欄、実効速度・音程・音量・受信練習用ノイズの扱いは前と同じ
+  （`RenderTransmit`）で、変えたのは**どの文から作るか**だけです。
+
+  The practice tab's "make practice sound from text" (requirement FR-F.1).
+  **Nothing goes on air**: it plays on the PC, saves a WAV, and checks itself
+  by decoding. Up to version 2.84 this sat on the transmit tab and used the
+  very box the contact was sent from (appendix CG).
+
+  The character speed comes from the send panel and the effective speed,
+  pitch, volume and practice noise are handled as before (`RenderTransmit`);
+  only **which text it is made from** has changed. }
+procedure TMainForm.BuildSoundMaker(Host: TWinControl);
+var
+  Group: TGroupBox;
+begin
+  Group := TGroupBox.Create(Host);
+  Group.Parent := Host;
+  Group.Height := 176;
+  RegisterCaption(Group, @RsMkGroup);
+  Stretch(Group, alTop);
+
+  AddLabel(Group, @RsMkTextLabel, 14, 8);
+  FMkText := TEdit.Create(Group);
+  FMkText.Parent := Group;
+  FMkText.SetBounds(280, 4, 440, 26);
+  FMkText.CharCase := ecUppercase;
+  FMkText.Text := 'CQ CQ DE JA1ABC K';
+  FMkText.OnChange := @TxTextChanged;
+  FTxSummary := AddLabel(Group, '', 736, 8);
+
+  AddLabel(Group, @RsTxMorse, 14, 40);
+  FTxCode := TEdit.Create(Group);
+  FTxCode.Parent := Group;
+  FTxCode.SetBounds(280, 36, 440, 26);
   FTxCode.ReadOnly := True;
-  FTxCode.ScrollBars := ssAutoVertical;
   FTxCode.Font.Name := 'Monospace';
-  Stretch(FTxCode, alTop);
+  AddLabel(Group, @RsTxSending, 736, 40);
+  FTxCurrentChar := AddLabel(Group, '-', 860, 34);
+  FTxCurrentChar.Font.Size := 14;
+  FTxCurrentCode := AddLabel(Group, '', 890, 40);
+  FTxCurrentCode.Font.Name := 'Monospace';
 
-  Options := TGroupBox.Create(Sheet);
-  Options.Parent := Sheet;
-  Options.Height := 110;
-  RegisterCaption(Options, @RsTxSettings);
-  Stretch(Options, alTop);
-
-  AddLabel(Options, @RsTxCharWpm, 14, 6);
-  FTxCharWpm := AddSpin(Options, 14, 26, 5, 60, 20, @TxOptionsChanged);
-  AddLabel(Options, @RsTxTextWpm, 134, 6);
-  FTxTextWpm := AddSpin(Options, 134, 26, 5, 60, 20, @TxOptionsChanged);
-  AddLabel(Options, @RsTxToneHz, 254, 6);
-  FTxToneHz := AddSpin(Options, 254, 26, 300, 1500, 700, @TxOptionsChanged);
-
-  { つまみも、隣の数値欄と同じく札の 20 画素下に置きます。**18 では、120 dpi で
-    札と重なりました。**札の高さは書体で決まり、画素密度に比例しません（96 dpi で
-    17 画素、120 dpi で 24 画素。付録 CG）。
-    The sliders sit 20 pixels below their labels, like the number boxes beside
-    them. **At 18 they overlapped the label at 120 dpi**: a label's height comes
-    from the font and does not grow in proportion to the density (17 pixels at
-    96 dpi, 24 at 120; appendix CG). }
-  AddLabel(Options, @RsTxVolume, 360, 6);
-  FTxVolume := TTrackBar.Create(Options);
-  FTxVolume.Parent := Options;
-  FTxVolume.SetBounds(360, 26, 160, 36);
-  FTxVolume.Min := 0;
-  FTxVolume.Max := 100;
-  FTxVolume.Position := 60;
-  FTxVolume.OnChange := @TxOptionsChanged;
-
-  AddLabel(Options, @RsTxNoise, 540, 6);
-  FTxNoise := TTrackBar.Create(Options);
-  FTxNoise.Parent := Options;
-  FTxNoise.SetBounds(540, 26, 160, 36);
+  FTxSend := AddButton(Group, @RsTxSend, 14, 70, 110, @TxSendClick);
+  FTxStop := AddButton(Group, @RsTxStop, 130, 70, 80, @TxStopClick);
+  FTxSave := AddButton(Group, @RsTxSaveWav, 218, 70, 120, @TxSaveClick);
+  FTxVerify := AddButton(Group, @RsTxVerify, 346, 70, 160, @TxVerifyClick);
+  AddLabel(Group, @RsTxNoise, 524, 76);
+  FTxNoise := TTrackBar.Create(Group);
+  FTxNoise.Parent := Group;
+  FTxNoise.SetBounds(660, 66, 160, 36);
   FTxNoise.Min := 0;
   FTxNoise.Max := 40;
   FTxNoise.Position := 0;
   FTxNoise.OnChange := @TxOptionsChanged;
 
-  FTxSummary := AddLabel(Options, '', 726, 30);
+  FTxProgress := TProgressBar.Create(Group);
+  FTxProgress.Parent := Group;
+  FTxProgress.SetBounds(14, 108, 806, 14);
 
-  Buttons := AddTopPanel(Sheet, 40);
-  FTxSend := AddButton(Buttons, @RsTxSend, 12, 4, 110, @TxSendClick);
-  FTxStop := AddButton(Buttons, @RsTxStop, 130, 4, 110, @TxStopClick);
-  FTxSave := AddButton(Buttons, @RsTxSaveWav, 248, 4, 130, @TxSaveClick);
-  FTxVerify := AddButton(Buttons, @RsTxVerify, 386, 4, 160, @TxVerifyClick);
-
-  { 無線機で送る（要件 FR-T.2・T.3）。**止めるボタンは決して無効にしません。**
-    Sending through the rig (FR-T.2, T.3). **The stop button is never
-    disabled.** }
-  Rig := AddTopPanel(Sheet, 40);
-  AddLabel(Rig, @RsRigGroup, 12, 12);
-  FRigConnect := AddButton(Rig, @RsRigConnect, 70, 4, 80, @RigConnectClick);
-  FRigDisconnect := AddButton(Rig, @RsRigDisconnect, 156, 4, 96, @RigDisconnectClick);
-  FRigSend := AddButton(Rig, @RsRigSend, 262, 4, 140, @RigSendClick);
-  FRigStop := AddButton(Rig, @RsRigStop, 410, 4, 130, @RigStopClick);
-  FRigPower := AddButton(Rig, @RsRigPower, 548, 4, 120, @RigPowerClick);
-  FRigPower.Enabled := False;
-  FRigStatus := AddLabel(Rig, '', 680, 12);
-
-  FTxProgress := TProgressBar.Create(Sheet);
-  FTxProgress.Parent := Sheet;
-  FTxProgress.Height := 18;
-  Stretch(FTxProgress, alTop);
-
-  AddTopLabel(Sheet, @RsTxSending);
-  Current := AddTopPanel(Sheet, 90);
-  FTxCurrentChar := AddLabel(Current, '-', 12, 0);
-  FTxCurrentChar.Font.Size := 28;
-  FTxCurrentCode := AddLabel(Current, '', 12, 54);
-  FTxCurrentCode.Font.Size := 16;
-  FTxCurrentCode.Font.Name := 'Monospace';
+  AddLabel(Group, @RsMkNote, 14, 128);
 end;
 
 function TMainForm.BuildReceiveTab: TTabSheet;
 var
   Sheet: TTabSheet;
-  FileBox, LiveBox: TGroupBox;
+  LiveBox: TGroupBox;
   LiveControls, LevelPanel, WaterfallPanel, TuneTools, TextPanel: TPanel;
-  TextTools, FindTools: TPanel;
+  Header, FindTools, SendPanel: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
   RegisterCaption(Sheet, @RsRxTab);
   Result := Sheet;
-
-  FileBox := TGroupBox.Create(Sheet);
-  FileBox.Parent := Sheet;
-  FileBox.Height := 76;
-  RegisterCaption(FileBox, @RsRxFromWav);
-  Stretch(FileBox, alTop);
-
-  { alRight は生成順に右から詰めるため、デコードボタンを先に作って最も右へ
-    配置します。
-
-    alRight fills from the right in creation order, so the decode button is
-    created first and ends up furthest right. }
-  FRxDecodeFile := AddButton(FileBox, @RsRxDecode, 0, 0, 120, @RxDecodeFileClick);
-  Stretch(FRxDecodeFile, alRight);
-  FRxBrowse := AddButton(FileBox, @RsRxBrowse, 0, 0, 90, @RxBrowseClick);
-  Stretch(FRxBrowse, alRight);
-  FRxFile := TEdit.Create(FileBox);
-  FRxFile.Parent := FileBox;
-  FRxFile.Text := '';
-  Stretch(FRxFile, alClient);
 
   LiveBox := TGroupBox.Create(Sheet);
   LiveBox.Parent := Sheet;
@@ -2504,11 +2529,11 @@ begin
 
   { 2 行目は、1 行目のボタン（22 から高さ 30）の 2 画素下から。**ぴったり 52 に
     付けると、120 dpi で 1 画素重なりました。**位置と高さは別々に丸められ、
-    27.5 と 37.5 がどちらも切り上がるためです（付録 CG）。
+    27.5 と 37.5 がどちらも切り上がるためです（付録 CH）。
     The second row starts 2 pixels below the first row's buttons (22, 30 tall).
     **Butted against them at 52, it overlapped by a pixel at 120 dpi**: position
     and height are rounded separately, and 27.5 and 37.5 both round up
-    (appendix CG). }
+    (appendix CH). }
   AddLabel(LiveControls, @RsRxDevice, 8, 58);
   FRxDevice := TComboBox.Create(LiveControls);
   FRxDevice.Parent := LiveControls;
@@ -2518,9 +2543,9 @@ begin
   FRxDeviceRefresh := AddButton(LiveControls, @RsRxRescan, 466, 54, 80,
     @RxDeviceRefreshClick);
 
-  { 札は選択欄の 20 画素上。18 では 120 dpi で欄と重なりました（付録 CG）。
+  { 札は選択欄の 20 画素上。18 では 120 dpi で欄と重なりました（付録 CH）。
     The label is 20 pixels above its box; at 18 it overlapped the box at
-    120 dpi (appendix CG). }
+    120 dpi (appendix CH). }
   AddLabel(LiveControls, @RsRxSettleLabel, 390, 2);
   FRxConfirmSpeed := TComboBox.Create(LiveControls);
   FRxConfirmSpeed.Parent := LiveControls;
@@ -2595,8 +2620,6 @@ begin
   FRxDeviceRefresh.TabOrder := 6;
   FRxMode.TabOrder := 7;
 
-  FRxBusy := AddTopLabel(Sheet, '');
-
   WaterfallPanel := TPanel.Create(Sheet);
   WaterfallPanel.Parent := Sheet;
   WaterfallPanel.Align := alBottom;
@@ -2661,73 +2684,45 @@ begin
   TextPanel.Parent := Sheet;
   TextPanel.Align := alClient;
   TextPanel.BevelOuter := bvNone;
-  AddTopLabel(TextPanel, @RsRxText);
 
-  TextTools := TPanel.Create(TextPanel);
-  TextTools.Parent := TextPanel;
-  { つまみ（`TTrackBar`）は、部品側が要る高さを持っています。実測で 39 画素
-    あり、34 の行に入れると下がはみ出していました。
-    The slider carries a height of its own -- 39 pixels, measured -- and stuck
-    out of the bottom of a 34-pixel row. }
-  TextTools.Height := 42;
-  StackBelow(TextTools);
-  TextTools.Align := alTop;
-  TextTools.BevelOuter := bvNone;
-
-  FRxShowDoubt := TCheckBox.Create(TextTools);
-  FRxShowDoubt.Parent := TextTools;
-  { 幅は 200。**訳した文言のために詰めてあります**（要件 NFR-7.6）。中の文字は
-    日本語 154 画素・英語 149 画素で、印の分を足しても 200 に収まります。空けた
-    40 画素は隣の「濃淡」に回っています。
-    200 wide: **tightened to make room for the translations** (NFR-7.6). The
-    text inside is 154 pixels in Japanese and 149 in English, which fits 200
-    with the box itself; the 40 pixels freed go to the label beside it. }
-  FRxShowDoubt.SetBounds(6, 7, 200, 22);
-  { **「正しさ」とは言いません**（要件 FR-C.5）。この値は「モデルがどれだけ
-    迷わなかったか」であって、当たっているかどうかではありません。断定する語を
-    使えば、利用者は確かめる手立て（読み直し・聴き直し）を使わなくなります。
-    **Never "correctness"** (requirement FR-C.5): the value is how little the
-    model wavered, not whether it was right. Words that assert would stop the
-    operator reaching for the ways of checking -- re-reading and replaying. }
-  RegisterCaption(FRxShowDoubt, @RsRxShade);
-  FRxShowDoubt.Checked := True;
-  FRxShowDoubt.OnChange := @RxDisplayChanged;
-
-  { 「濃淡」は 28 画素ですが `Shade` は 45 画素あり、254 に置くとスライダーに
-    6 画素食い込みます（付録 BC.4 で検査が見つけました）。210 へ寄せます。
-    `濃淡` is 28 pixels and `Shade` is 45: at 254 it ran 6 pixels into the
-    slider, which the check found (appendix BC.4). It moves to 210. }
-  AddLabel(TextTools, @RsRxShadeAmount, 210, 9);
-  FRxDoubtStrength := TTrackBar.Create(TextTools);
-  FRxDoubtStrength.Parent := TextTools;
-  FRxDoubtStrength.SetBounds(288, 2, 120, 30);
-  FRxDoubtStrength.Min := 0;
-  FRxDoubtStrength.Max := 100;
-  FRxDoubtStrength.Position := 100;
-  FRxDoubtStrength.ShowSelRange := False;
-  FRxDoubtStrength.OnChange := @RxDisplayChanged;
-
-  AddLabel(TextTools, @RsRxFontSize, 424, 9);
-  FRxFontSize := AddSpin(TextTools, 512, 5, 9, 32, 14, @RxDisplayChanged);
-  FRxCopy := AddButton(TextTools, @RsRxCopy, 604, 2, 90, @RxCopyClick);
+  { 見出しの行: 「受信テキスト」・解析中の知らせ・ファイルから読む・コピー。
+    表示の好み（濃淡・文字の大きさ・波形に重ねる）は設定タブへ移し、WAV の
+    行はここのボタン 1 つにしました。**空いた高さを送信欄に回すため**です
+    （付録 CG）。
+    The heading row: "received text", the busy note, read a file, copy. The
+    display preferences (shading, size, overlay) went to the settings tab and
+    the WAV row became one button here, **so that the height they took could
+    go to the send panel** (appendix CG). }
+  Header := TPanel.Create(TextPanel);
+  Header.Parent := TextPanel;
+  Header.Height := 34;
+  StackBelow(Header);
+  Header.Align := alTop;
+  Header.BevelOuter := bvNone;
+  AddLabel(Header, @RsRxText, 6, 9);
+  FRxBusy := AddLabel(Header, '', 130, 9);
+  { alRight の並びは作った順ではなく `Left` の値で決まります（実物で逆に
+    並んだ）。見た目の左から「ファイル・コピー・符号と RST」になるよう、その
+    順に大きな `Left` を与えます。
+    Controls aligned alRight are ordered by their `Left`, not by creation
+    (they came out reversed on screen), so increasing `Left` values give
+    "file, copy, call and RST" from the left. }
   { 呼出符号と信号報告だけを送る口です（要件 FR-E.2）。全文をコピーしてから
     目で探して切り出すのでは「操作 1 回」になりません。
     Sends just the call sign and the report (requirement FR-E.2). Copying the
     whole transcript and then hunting through it by eye is not "one press". }
-  FRxCopyCall := AddButton(TextTools, @RsRxCallAndRst, 700, 2, 130,
-    @RxCopyCallClick);
+  FRxCopyCall := AddButton(Header, @RsRxCallAndRst, 3000, 0, 130, @RxCopyCallClick);
+  Stretch(FRxCopyCall, alRight, 2);
   FRxCopyCall.Enabled := False;
-
-  { 読んだ文字をウォーターフォールに重ねるか（要件 FR-D.6）。重ねた文字は信号を
-    隠すので、切れるようにしてあります。
-    Whether to lay the characters over the waterfall (requirement FR-D.6). They
-    cover the signals, so they can be turned off. }
-  FRxAlign := TCheckBox.Create(TextTools);
-  FRxAlign.Parent := TextTools;
-  FRxAlign.SetBounds(840, 6, 200, 24);
-  RegisterCaption(FRxAlign, @RsRxOverlay);
-  FRxAlign.Checked := True;
-  FRxAlign.OnChange := @RxDisplayChanged;
+  FRxCopy := AddButton(Header, @RsRxCopy, 2000, 0, 90, @RxCopyClick);
+  Stretch(FRxCopy, alRight, 2);
+  FRxOpenFile := AddButton(Header, @RsRxOpenFile, 1000, 0, 150, @RxOpenFileClick);
+  Stretch(FRxOpenFile, alRight, 2);
+  { 見た目の順にタブで進むよう、番号で並べます（要件 NFR-5.6）。
+    Numbered so that Tab follows the order on screen (NFR-5.6). }
+  FRxOpenFile.TabOrder := 0;
+  FRxCopy.TabOrder := 1;
+  FRxCopyCall.TabOrder := 2;
 
   { 検索と聴き直しは、表示の設定とは別の行に置きます。同じ行に並べると、窓を
     狭くしたときに右端の操作が画面の外へ出て、押せなくなります（最小幅 900）。
@@ -2849,6 +2844,12 @@ begin
     moved left, reaching past its parent. Left to the text it grows by exactly
     as much as the sentence does (appendix AW.3). }
   RegisterCaption(FRxReplayInfo, @RsRxReplayHint);
+
+  { 送信欄は受信テキストの下（`alBottom`）。受信テキストの `alClient` より先に
+    場所を取らせるため、ここで作ります。
+    The send panel sits under the received text (`alBottom`), made here so it
+    claims its place before the text's `alClient`. }
+  SendPanel := BuildSendPanel(TextPanel);
 
   FRxTranscript := TTranscriptView.Create(TextPanel);
   FRxTranscript.OnResize := @RxTranscriptResized;
@@ -2993,6 +2994,12 @@ begin
     **Only the order is changed, never the placement**: assigning `TabOrder` has
     LCL renumber the siblings around it. }
   WaterfallPanel.TabOrder := TextPanel.TabOrder;
+  { 送信欄は画面では受信テキストの下なので、Tab でも受信テキスト・一覧の後に
+    来ます。場所を先に取るために先に作ったぶんを、順序だけ最後へ回します。
+    The send panel is below the received text on screen, so Tab reaches it
+    after the text and the list; made early to claim its place, it is only
+    moved to the end of the order. }
+  SendPanel.TabOrder := TextPanel.ControlCount - 1;
 end;
 
 { 受信練習のタブ（要件 FR-F.3）。
@@ -3016,6 +3023,7 @@ end;
 function TMainForm.BuildPracticeTab: TTabSheet;
 var
   Sheet: TTabSheet;
+  Scroller: TScrollBox;
   Options: TGroupBox;
   Buttons: TPanel;
   Kind: TExerciseKind;
@@ -3023,9 +3031,19 @@ begin
   Sheet := FPages.AddTabSheet;
   RegisterCaption(Sheet, @RsPrTab);
   Result := Sheet;
+  { 巻き取れる欄に載せます。「文から練習用の音を作る」を足して、最小の窓の
+    高さに収まらなくなったためです（設定タブと同じ。教訓 10.36）。
+    Carried in a scrolling area: with "make practice sound from text" added,
+    it no longer fits the smallest window (as the settings tab; lesson
+    10.36). }
+  Scroller := TScrollBox.Create(Sheet);
+  Scroller.Parent := Sheet;
+  Scroller.Align := alClient;
+  Scroller.BorderStyle := bsNone;
+  Scroller.HorzScrollBar.Visible := False;
 
-  Options := TGroupBox.Create(Sheet);
-  Options.Parent := Sheet;
+  Options := TGroupBox.Create(Scroller);
+  Options.Parent := Scroller;
   Options.Height := 124;
   RegisterCaption(Options, @RsPrExercise);
   Stretch(Options, alTop);
@@ -3045,9 +3063,9 @@ begin
   AddLabel(Options, @RsPrWpm, 330, 8);
   FPrWpm := AddSpin(Options, 330, 30, 5, 40, 20, @PrOptionsChanged);
 
-  { 札の 20 画素下。18 では 120 dpi で札と重なりました（付録 CG）。
+  { 札の 20 画素下。18 では 120 dpi で札と重なりました（付録 CH）。
     20 pixels below the label; at 18 it overlapped the label at 120 dpi
-    (appendix CG). }
+    (appendix CH). }
   AddLabel(Options, @RsPrNoise, 440, 8);
   FPrNoise := TTrackBar.Create(Options);
   FPrNoise.Parent := Options;
@@ -3078,7 +3096,7 @@ begin
     REVEAL_DELAY_DEFAULT_SECONDS, @PrOptionsChanged);
   AddLabel(Options, @RsPrDelayNote, 440, 78);
 
-  Buttons := AddTopPanel(Sheet, 40);
+  Buttons := AddTopPanel(Scroller, 40);
   FPrPlay := AddButton(Buttons, @RsPrPlay, 12, 4, 150, @PrPlayClick);
   FPrAgain := AddButton(Buttons, @RsPrAgain, 170, 4, 150, @PrAgainClick);
   FPrAgain.Enabled := False;
@@ -3086,31 +3104,33 @@ begin
   FPrStop.Enabled := False;
   FPrSummary := AddLabel(Buttons, @RsPrStartHint, 440, 12);
 
-  AddTopLabel(Sheet, @RsPrCopyLabel);
-  FPrCopy := TMemo.Create(Sheet);
-  FPrCopy.Parent := Sheet;
+  AddTopLabel(Scroller, @RsPrCopyLabel);
+  FPrCopy := TMemo.Create(Scroller);
+  FPrCopy.Parent := Scroller;
   FPrCopy.Height := 90;
   FPrCopy.ScrollBars := ssAutoVertical;
   FPrCopy.Font.Size := 14;
   Stretch(FPrCopy, alTop);
 
-  Buttons := AddTopPanel(Sheet, 40);
+  Buttons := AddTopPanel(Scroller, 40);
   FPrMark := AddButton(Buttons, @RsPrMark, 12, 4, 130, @PrMarkClick);
   FPrMark.Enabled := False;
   FPrResult := AddLabel(Buttons, '', 156, 12);
 
-  AddTopLabel(Sheet, @RsPrAnswer);
-  FPrAnswer := TMemo.Create(Sheet);
-  FPrAnswer.Parent := Sheet;
+  AddTopLabel(Scroller, @RsPrAnswer);
+  FPrAnswer := TMemo.Create(Scroller);
+  FPrAnswer.Parent := Scroller;
   FPrAnswer.Height := 70;
   FPrAnswer.ReadOnly := True;
   FPrAnswer.ScrollBars := ssAutoVertical;
   FPrAnswer.Font.Size := 14;
   Stretch(FPrAnswer, alTop);
 
-  FPrMistakes := AddTopLabel(Sheet, '');
-  FPrHistory := AddTopLabel(Sheet, '');
+  FPrMistakes := AddTopLabel(Scroller, '');
+  FPrHistory := AddTopLabel(Scroller, '');
   PrShowHistory;
+
+  BuildSoundMaker(Scroller);
 end;
 
 { 練習の記録の置き場所。送信訓練の記録と同じところに置きます。
@@ -3506,11 +3526,11 @@ begin
   FFtBasis.OnChange := @FtOptionsChanged;
   { 採点の基準のすぐ下に置きます。右隣に置くと行に収まりませんでした。
     **右端は枠に留め、収まらなければ折り返します。**英語の文は 120 dpi で枠の外へ
-    出ました。文字の幅は画素密度に比例して伸びないためです（付録 CG）。
+    出ました。文字の幅は画素密度に比例して伸びないためです（付録 CH）。
     Directly under the basis; to its right it did not fit on the row. **Its
     right edge is held to the box, and it wraps when it does not fit**: the
     English ran out of the box at 120 dpi, since text does not widen in
-    proportion to the density (appendix CG). }
+    proportion to the density (appendix CH). }
   BasisNote := AddLabel(Options, @RsFtBasisNote, 496, 60);
   BasisNote.WordWrap := True;
   BasisNote.AnchorSide[akRight].Control := Options;
@@ -3815,19 +3835,32 @@ procedure TMainForm.FtWavClick(Sender: TObject);
 var
   Samples: TSingleArray;
   SampleRate: Integer;
+  Dialog: TOpenDialog;
 begin
   if FFtCapture <> nil then
   begin
     SetStatus('', '', RsFtBusyDrill);
     Exit;
   end;
-  if FRxFile.Text = '' then
-  begin
-    SetStatus('', '', RsFtWavHint);
-    Exit;
+  { 採点する録音をここで選びます。前は受信タブのファイル欄を借りていて、
+    **別のタブで選んでから戻る**必要がありました（付録 CG）。
+    The recording to score is chosen here. It used to borrow the receive tab's
+    file box, which meant **choosing on another tab and coming back**
+    (appendix CG). }
+  Dialog := TOpenDialog.Create(Self);
+  try
+    Dialog.Title := RsRxOpenTitle;
+    Dialog.Filter := RsWavOpenFilter;
+    if FRxFilePath <> '' then
+      Dialog.InitialDir := ExtractFilePath(FRxFilePath);
+    if not Dialog.Execute then
+      Exit;
+    FRxFilePath := Dialog.FileName;
+  finally
+    Dialog.Free;
   end;
   try
-    LoadWavMono(FRxFile.Text, Samples, SampleRate);
+    LoadWavMono(FRxFilePath, Samples, SampleRate);
   except
     on E: Exception do
     begin
@@ -4121,6 +4154,7 @@ var
   Sheet: TTabSheet;
   Scroller: TScrollBox;
   Operating, Advanced, RigGroup, RigAdvGroup, ExtGroup: TGroupBox;
+  SoundGroup, DisplayGroup: TGroupBox;
   Row, Apply: TPanel;
   Choice: TTunerBandwidth;
   Language_: Integer;
@@ -4225,10 +4259,10 @@ begin
     232, 36);
 
   { 選択欄は 130 から。**120 では、英語の札（Replay window）が 120 dpi で欄に
-    重なりました。**文字の幅は画素密度に比例して伸びません（付録 CG）。
+    重なりました。**文字の幅は画素密度に比例して伸びません（付録 CH）。
     The box starts at 130. **At 120 the English label (Replay window) ran into
     it at 120 dpi**: text does not widen in proportion to the density
-    (appendix CG). }
+    (appendix CH). }
   AddLabel(Operating, @RsSetRetention, 14, 62);
   FSetRetention := TComboBox.Create(Operating);
   FSetRetention.Parent := Operating;
@@ -4350,6 +4384,83 @@ begin
   FSetLanguage.ItemIndex := UI_LANG_DEFAULT;
   FSetLanguage.OnChange := @SetLanguageChanged;
   FSetLanguageInfo := AddLabel(Operating, '', 380, 278);
+
+  { ── 練習で鳴らす音 ──（版 2.85 で送信タブから移した。付録 CG）
+    PC で鳴らす音（受信練習・文から作る音）にだけ効きます。**無線機の側音は
+    無線機が決めます**ので、交信には関わりません。文字速度は交信中に変えるので
+    送信欄に残しました。
+    The sound played on the PC (moved from the transmit tab in 2.85; appendix
+    CG). It affects only what the PC plays -- copy practice and sound made from
+    text. **The rig decides its own sidetone**, so a contact is not affected.
+    The character speed is changed during contacts and stays in the send
+    panel. }
+  SoundGroup := TGroupBox.Create(Scroller);
+  SoundGroup.Parent := Scroller;
+  SoundGroup.Height := 92;
+  RegisterCaption(SoundGroup, @RsSetPracticeSound);
+  Stretch(SoundGroup, alTop);
+  AddLabel(SoundGroup, @RsTxTextWpm, 14, 6);
+  FTxTextWpm := AddSpin(SoundGroup, 14, 26, 5, 60, 20, @TxOptionsChanged);
+  AddLabel(SoundGroup, @RsTxToneHz, 150, 6);
+  FTxToneHz := AddSpin(SoundGroup, 150, 26, 300, 1500, 700, @TxOptionsChanged);
+  { つまみも、隣の数値欄と同じく札の 20 画素下に置きます。**18 では、120 dpi で
+    札と重なりました。**札の高さは書体で決まり、画素密度に比例しません（96 dpi で
+    17 画素、120 dpi で 24 画素。付録 CH）。
+    The slider sits 20 pixels below its label, like the number boxes beside
+    it. **At 18 it overlapped the label at 120 dpi**: a label's height comes
+    from the font and does not grow in proportion to the density (17 pixels at
+    96 dpi, 24 at 120; appendix CH). }
+  AddLabel(SoundGroup, @RsTxVolume, 270, 6);
+  FTxVolume := TTrackBar.Create(SoundGroup);
+  FTxVolume.Parent := SoundGroup;
+  FTxVolume.SetBounds(270, 26, 160, 36);
+  FTxVolume.Min := 0;
+  FTxVolume.Max := 100;
+  FTxVolume.Position := 60;
+  FTxVolume.OnChange := @TxOptionsChanged;
+
+  { ── 受信テキストの表示 ──（版 2.85 で送受信画面から移した。付録 CG）
+    一度決めたら変えない好みなので、交信中の画面から外して、送信欄に高さを
+    回しました。
+    How the received text is shown (moved from the operating screen in 2.85;
+    appendix CG): preferences set once, taken off the contact screen so their
+    height could go to the send panel. }
+  DisplayGroup := TGroupBox.Create(Scroller);
+  DisplayGroup.Parent := Scroller;
+  DisplayGroup.Height := 92;
+  RegisterCaption(DisplayGroup, @RsSetRxDisplay);
+  Stretch(DisplayGroup, alTop);
+  FRxShowDoubt := TCheckBox.Create(DisplayGroup);
+  FRxShowDoubt.Parent := DisplayGroup;
+  FRxShowDoubt.SetBounds(14, 8, 220, 22);
+  { **「正しさ」とは言いません**（要件 FR-C.5）。この値は「モデルがどれだけ
+    迷わなかったか」であって、当たっているかどうかではありません。
+    **Never "correctness"** (requirement FR-C.5): the value is how little the
+    model wavered, not whether it was right. }
+  RegisterCaption(FRxShowDoubt, @RsRxShade);
+  FRxShowDoubt.Checked := True;
+  FRxShowDoubt.OnChange := @RxDisplayChanged;
+  AddLabel(DisplayGroup, @RsRxShadeAmount, 250, 10);
+  FRxDoubtStrength := TTrackBar.Create(DisplayGroup);
+  FRxDoubtStrength.Parent := DisplayGroup;
+  FRxDoubtStrength.SetBounds(310, 2, 120, 30);
+  FRxDoubtStrength.Min := 0;
+  FRxDoubtStrength.Max := 100;
+  FRxDoubtStrength.Position := 100;
+  FRxDoubtStrength.ShowSelRange := False;
+  FRxDoubtStrength.OnChange := @RxDisplayChanged;
+  AddLabel(DisplayGroup, @RsRxFontSize, 450, 10);
+  FRxFontSize := AddSpin(DisplayGroup, 560, 6, 9, 32, 14, @RxDisplayChanged);
+  { 読んだ文字をウォーターフォールに重ねるか（要件 FR-D.6）。重ねた文字は信号を
+    隠すので、切れるようにしてあります。
+    Whether to lay the characters over the waterfall (requirement FR-D.6). They
+    cover the signals, so they can be turned off. }
+  FRxAlign := TCheckBox.Create(DisplayGroup);
+  FRxAlign.Parent := DisplayGroup;
+  FRxAlign.SetBounds(14, 42, 260, 24);
+  RegisterCaption(FRxAlign, @RsRxOverlay);
+  FRxAlign.Checked := True;
+  FRxAlign.OnChange := @RxDisplayChanged;
 
   { ── 無線機（送信）: 要件 FR-T ──
     The rig (sending): requirement FR-T. }
@@ -5762,6 +5873,15 @@ end;
 procedure TMainForm.TxTextChanged(Sender: TObject);
 begin
   RenderTransmit;
+end;
+
+{ 送信欄の文。**音は作りません**——無線機は文そのものを送り、PC で鳴らす音は
+  練習タブの文から作ります（付録 CG）。覚えておくだけです。
+  The send panel's text. **No sound is made from it**: the rig sends the text
+  itself, and the sound the PC plays is made from the practice tab's text
+  (appendix CG). It is only remembered. }
+procedure TMainForm.SendTextChanged(Sender: TObject);
+begin
   if Sender <> nil then
     MarkSettingsDirty;
 end;
@@ -6367,8 +6487,10 @@ var
   Timing: TCWTiming;
   Options: TCWToneOptions;
 begin
-  FTxNormalized := NormalizeText(FTxText.Text);
-  FTxCode.Text := TextToMorseCode(FTxText.Text);
+  { 作るのは練習タブの「鳴らす文」から（付録 CG）。/ Made from the practice
+    tab's text to play (appendix CG). }
+  FTxNormalized := NormalizeText(FMkText.Text);
+  FTxCode.Text := TextToMorseCode(FMkText.Text);
 
   Timing.CharWpm := FTxCharWpm.Value;
   Timing.TextWpm := Min(FTxTextWpm.Value, FTxCharWpm.Value);
@@ -6380,7 +6502,7 @@ begin
   Options.NoiseAmplitude := FTxNoise.Position / 100;
 
   try
-    FTxSegments := TextToSegments(FTxText.Text, Timing);
+    FTxSegments := TextToSegments(FMkText.Text, Timing);
     FTxSamples := SegmentsToPCM(FTxSegments, Options);
     FTxRenderFailed := False;
     UpdateTxSummary;
@@ -6480,7 +6602,7 @@ begin
     SetLength(Samples, Needed);
 
   FAppendMode := False;
-  FPages.PageIndex := 1;
+  FPages.ActivePage := FRxSheet;
   StartDecode(Samples, FTxSampleRate);
 end;
 
@@ -6546,19 +6668,29 @@ end;
 
 { ---- receive ---- }
 
-procedure TMainForm.RxBrowseClick(Sender: TObject);
+{ 録音を選び、**選んだらそのまま読みます**（付録 CG）。前は場所の欄・参照・
+  デコードの 3 つに分かれていました。
+  Chooses a recording and **reads it as soon as it is chosen** (appendix CG);
+  it used to be three pieces -- a path box, browse, and decode. }
+procedure TMainForm.RxOpenFileClick(Sender: TObject);
 var
   Dialog: TOpenDialog;
 begin
+  if DecoderBusy then
+    Exit;
   Dialog := TOpenDialog.Create(Self);
   try
     Dialog.Title := RsRxOpenTitle;
     Dialog.Filter := RsWavOpenFilter;
-    if Dialog.Execute then
-      FRxFile.Text := Dialog.FileName;
+    if FRxFilePath <> '' then
+      Dialog.InitialDir := ExtractFilePath(FRxFilePath);
+    if not Dialog.Execute then
+      Exit;
+    FRxFilePath := Dialog.FileName;
   finally
     Dialog.Free;
   end;
+  RxDecodeFileClick(Sender);
 end;
 
 procedure TMainForm.RxDecodeFileClick(Sender: TObject);
@@ -6591,10 +6723,10 @@ begin
   FRxBusy.Caption := RsDecodingBusy;
   if BandMode then
     FDecodeThread := TDecodeThread.CreateFile(FDecoder, FMulti, FHistory,
-      FRxFile.Text, @FileLoaded, @FileShaped, @DecodeFinished)
+      FRxFilePath, @FileLoaded, @FileShaped, @DecodeFinished)
   else
     FDecodeThread := TDecodeThread.CreateFile(FDecoder, nil, FHistory,
-      FRxFile.Text, @FileLoaded, @FileShaped, @DecodeFinished);
+      FRxFilePath, @FileLoaded, @FileShaped, @DecodeFinished);
 end;
 
 { ファイルが読めたとき（復号のスレッドが待っている間に、画面のスレッドで）。
@@ -9302,7 +9434,7 @@ var
   Clicked, Spent: Int64;
 begin
   Result := TStringList.Create;
-  FRxFile.Text := FileName;
+  FRxFilePath := FileName;
   if TuneHz > 0 then
   begin
     FRxWaterfall.TuneHz := TuneHz;
@@ -9796,7 +9928,7 @@ begin
     that cannot be stopped however much the operator wants to.** Pressing it on
     the running program is what showed this. }
   FRxStop.Enabled := (FCapture <> nil) or FWaiting;
-  FRxDecodeFile.Enabled := not DecoderBusy;
+  FRxOpenFile.Enabled := not DecoderBusy;
   { 聴き直しの操作は、保管の中身と再生の状態で決まります。どちらもここでしか
     変わらないので、毎回まとめて映します。
     The replay controls follow what the store holds and whether it is playing;

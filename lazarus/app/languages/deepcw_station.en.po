@@ -903,10 +903,6 @@ msgstr "Trend"
 msgid "推移に出す項目"
 msgstr "Trend shows"
 
-#: frmmain.rsftwavhint
-msgid "受信タブの「WAV ファイルから受信」に、採点したい録音を選んでください。"
-msgstr "Choose the recording under \"Receive from WAV file\" on the Receive tab."
-
 #: frmmain.rsftwpm
 #, object-pascal-format
 msgid "実効 %0:.1f WPM ／ 短点 %1:.1f ms（ばらつき %2:.1f%%）／ 長短比 %3:.2f"
@@ -1084,6 +1080,18 @@ msgstr " (heard once)"
 msgid "%0:s%1:s（%2:s に交信済み）"
 msgstr "%0:s%1:s (worked on %2:s)"
 
+#: frmmain.rsmkgroup
+msgid "文から練習用の音を作る"
+msgstr "Sound from text"
+
+#: frmmain.rsmknote
+msgid "文字速度は送受信画面の送信欄、実効速度・音程・音量は設定タブの値を使います。"
+msgstr "Character speed: send panel. Effective speed, tone, volume: Settings tab."
+
+#: frmmain.rsmktextlabel
+msgid "鳴らす文（A-Z 0-9 . , ? /）"
+msgstr "Text to play (A-Z 0-9 . , ? /)"
+
 #: frmmain.rsmodecontactset
 msgid "交信モードにしました。選んだ 1 局を読みます。受信文は改めて取り直します。"
 msgstr "Contact mode: reads the chosen station. Text starts over."
@@ -1237,8 +1245,8 @@ msgid "練習"
 msgstr "Practice"
 
 #: frmmain.rsprtonenote
-msgid "音程と音量は送信タブの設定を使います。"
-msgstr "Tone and volume: see the Transmit tab."
+msgid "音程と音量は設定タブの「練習で鳴らす音」を使います。"
+msgstr "Tone and volume: Settings, Practice sound."
 
 #: frmmain.rsprwpm
 msgid "速度 (WPM)"
@@ -1570,10 +1578,6 @@ msgstr "Any"
 msgid "運用バンド"
 msgstr "Band"
 
-#: frmmain.rsrxbrowse
-msgid "参照..."
-msgstr "Browse..."
-
 #: frmmain.rsrxcallandrst
 msgid "符号と RST"
 msgstr "Call + RST"
@@ -1590,11 +1594,6 @@ msgstr "Copied the received text (length %d)."
 #: frmmain.rsrxcopy
 msgid "コピー"
 msgstr "Copy"
-
-#: frmmain.rsrxdecode
-msgctxt "frmmain.rsrxdecode"
-msgid "デコード"
-msgstr "Decode"
 
 #: frmmain.rsrxdenoise
 msgid "帯域外の雑音を抑える"
@@ -1623,10 +1622,6 @@ msgstr "Text size"
 #: frmmain.rsrxfrominput
 msgid "マイク / ライン入力から受信"
 msgstr "Receive from mic / line in"
-
-#: frmmain.rsrxfromwav
-msgid "WAV ファイルから受信"
-msgstr "Receive from WAV file"
 
 #: frmmain.rsrxhideworked
 msgid "交信済みを隠す"
@@ -1664,6 +1659,10 @@ msgstr "Monitor"
 msgid "送信中（復号を止めています）"
 msgstr "Sending (decoding paused)"
 
+#: frmmain.rsrxopenfile
+msgid "ファイルから読む..."
+msgstr "Read a file..."
+
 #: frmmain.rsrxopentitle
 msgid "モールス音声を開く"
 msgstr "Open Morse audio"
@@ -1698,8 +1697,8 @@ msgid "RST は 3 桁で書いてください（例: 599・5NN）。このまま�
 msgstr "Write RST as 3 digits (e.g. 599, 5NN); as is, it will not be logged."
 
 #: frmmain.rsrxrstnote
-msgid "受けた RST は読めたもの、送った RST は送信タブのものが入ります（直せます）。"
-msgstr "Rcvd is the RST read, sent is the Transmit tab RST (both editable)."
+msgid "受けた RST は読めたもの、送った RST は送信欄のものが入ります（直せます）。"
+msgstr "Rcvd is the RST read, sent is the send panel RST (both editable)."
 
 #: frmmain.rsrxrstrcvd
 msgid "受けた RST"
@@ -1744,8 +1743,8 @@ msgstr "Stop"
 
 #: frmmain.rsrxtab
 msgctxt "frmmain.rsrxtab"
-msgid "受信"
-msgstr "Receive"
+msgid "送受信"
+msgstr "Operate"
 
 #: frmmain.rsrxtext
 msgid "受信テキスト"
@@ -1928,6 +1927,10 @@ msgstr "Operating"
 msgid "PortAudio ライブラリ（空欄なら自動検索）"
 msgstr "PortAudio library (blank to search)"
 
+#: frmmain.rssetpracticesound
+msgid "練習で鳴らす音"
+msgstr "Practice sound"
+
 #: frmmain.rssetprefixes
 msgctxt "frmmain.rssetprefixes"
 msgid "国別前置符字表"
@@ -2072,6 +2075,10 @@ msgstr "Call sign list"
 msgid "ONNX Runtime ライブラリ（空欄なら自動検索）"
 msgstr "ONNX Runtime library (blank to search)"
 
+#: frmmain.rssetrxdisplay
+msgid "受信テキストの表示"
+msgstr "Text display"
+
 #: frmmain.rssettab
 msgid "設定"
 msgstr "Settings"
@@ -2208,7 +2215,7 @@ msgstr "The text is empty."
 
 #: frmmain.rstxproblemmissing
 #, object-pascal-format
-msgid "%s の値がありません。自局の符号は設定タブ、相手の符号は送信タブに入れてください。"
+msgid "%s の値がありません。自局の符号は設定タブ、相手の符号は送信欄に入れてください。"
 msgstr "No value for %s. Set your call on Settings, theirs on this tab."
 
 #: frmmain.rstxproblemtoolong
@@ -2254,16 +2261,12 @@ msgid "音で鳴らす"
 msgstr "Play"
 
 #: frmmain.rstxsending
-msgid "送信中の文字"
-msgstr "Now sending"
+msgid "鳴っている文字"
+msgstr "Now playing"
 
 #: frmmain.rstxsendingnow
 msgid "送信中"
 msgstr "Sending"
-
-#: frmmain.rstxsettings
-msgid "送信設定"
-msgstr "Transmit"
 
 #: frmmain.rstxstop
 msgctxt "frmmain.rstxstop"
@@ -2280,18 +2283,13 @@ msgctxt "frmmain.rstxsummary"
 msgid "%0:d 文字 / %1:.1f 秒"
 msgstr "%0:d chars / %1:.1f s"
 
-#: frmmain.rstxtab
-msgctxt "frmmain.rstxtab"
-msgid "送信"
-msgstr "Transmit"
-
 #: frmmain.rstxtemplatelabel
 msgid "定型"
 msgstr "Template"
 
-#: frmmain.rstxtextlabel
-msgid "送信する文（A-Z 0-9 . , ? / と空白）"
-msgstr "Text to send (A-Z 0-9 . , ? / space)"
+#: frmmain.rstxtextshort
+msgid "送る文"
+msgstr "Text"
 
 #: frmmain.rstxtextwpm
 msgid "実効速度 (WPM)"
