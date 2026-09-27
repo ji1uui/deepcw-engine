@@ -506,6 +506,19 @@ type
     FRxAntiAlias: TCheckBox;
     FRxTranscript: TTranscriptView;
     FRxSheet: TTabSheet;
+    { 送受信画面の中身を載せる巻き取り欄と、その中身（付録 CH）。/ The scrolling
+      box that carries the operating screen, and its content (appendix CH). }
+    FRxScroller: TScrollBox;
+    FRxContent: TPanel;
+    { 最初に表示したときに、窓を作業領域へ合わせたか。前回の窓の位置と大きさ
+      （`[window]`。無ければ幅 0）と、それを書いたときの画素密度。
+      Whether the window has been fitted to the work area on first show; the
+      last session's bounds (`[window]`; width 0 when none) and the pixel
+      density they were written at. }
+    FWindowFitted: Boolean;
+    FSavedBounds: TRect;
+    FSavedPpi: Integer;
+    FSavedMaximized: Boolean;
     { ウォーターフォールの枠。受信テキストに高さを譲るために手元に控えます
       （付録 BV.4）。/ The waterfall's panel, kept to hand so that it can give
       height to the received text (appendix BV.4). }
@@ -739,6 +752,11 @@ type
     function BuildSendPanel(Host: TWinControl): TPanel;
     procedure BuildSoundMaker(Host: TWinControl);
     function BuildReceiveTab: TTabSheet;
+    procedure FormFirstShow(Sender: TObject);
+    procedure CheckWindowFits(Problems: TStringList);
+    procedure ScrollerResized(Sender: TObject);
+    function AddScrollingContent(Sheet: TTabSheet; MinWidth96,
+      MinHeight96: Integer; out Box: TScrollBox): TPanel;
     function BuildSettingsTab: TTabSheet;
     function BuildPracticeTab: TTabSheet;
 
@@ -1647,6 +1665,19 @@ const
   RX_TRANSCRIPT_MIN_96 = 80;
   RX_WATERFALL_DEFAULT_96 = 230;
   RX_WATERFALL_MIN_96 = 120;
+  { 送受信画面の中身が要る大きさ（96 dpi での画素）。窓の最小（1040×660）で
+    実測した送受信タブの中の大きさ。**これより狭い・低い画面では押し潰さず、
+    巻き取らせます**（付録 CH）。
+    The size the operating screen's content needs (pixels at 96 dpi), measured
+    as the tab's client size at the window minimum (1040 x 660). **On a
+    smaller screen it scrolls instead of being crushed** (appendix CH). }
+  OPERATE_MIN_WIDTH_96 = 1036;
+  OPERATE_MIN_HEIGHT_96 = 608;
+  { 送信訓練タブの中身が要る高さ。窓 700 で重なりが無く、680 で重なった
+    （付録 CH）ので、窓 700 のときのタブの中の高さ。
+    The height the send-practice tab's content needs: no overlap at a window
+    of 700, overlaps at 680 (appendix CH), so the tab's client height at 700. }
+  FIST_MIN_HEIGHT_96 = 648;
 
 { ノイズ低減の選択肢の鍵。**画面の項目と同じ順**です（要件 FR-N）。
   The noise-reduction keys, **in the order of the items on screen** (FR-N). }
@@ -1888,6 +1919,10 @@ begin
     disappeared). }
   Constraints.MinHeight := 660;
   Position := poScreenCenter;
+  { 画面の大きさに合わせるのは、画素密度に合わせて拡大されたあと、最初に
+    表示するときです（`FormFirstShow`）。/ Fitting to the screen happens on
+    first show, after scaling to the pixel density (`FormFirstShow`). }
+  OnShow := @FormFirstShow;
 
   FDiagnostics := TStringList.Create;
   { 地方時は、日付で名付ける記録（`FJournal`）を開く**前に** OS へ合わせます。
@@ -2289,15 +2324,14 @@ end;
 
 { 枠の高さを、中に置いた部品から決めます。**固定の高さは、画素密度が変わると
   足りなくなります。**枠の見出しと文字の高さは書体で決まり、画素密度に比例して
-  伸びないためです（100 dpi で、最後の行が 2 画素はみ出していた。付録 CH）。
-  部品は置いた場所に留め（`csAutoSizeKeepChild*`。無いと LCL が左上へ寄せます）、
-  最後の部品の下に `Margin` だけ空けます。
+  伸びないためです（付録 CI）。部品は置いた場所に留め（`csAutoSizeKeepChild*`。
+  無いと LCL が左上へ寄せます）、最後の部品の下に `Margin` だけ空けます。
   Sizes a box's height from the controls put inside it. **A fixed height runs
   short when the pixel density changes**: the box's caption and the text take
   their height from the font, which does not grow in proportion to the density
-  (at 100 dpi the last row stuck out by 2 pixels; appendix CH). The controls
-  stay where they were put (`csAutoSizeKeepChild*`; without it the LCL moves
-  them to the top left), and `Margin` is left below the last one. }
+  (appendix CI). The controls stay where they were put
+  (`csAutoSizeKeepChild*`; without it the LCL moves them to the top left), and
+  `Margin` is left below the last one. }
 procedure FitToChildren(Group: TWinControl; Margin: Integer = 6);
 begin
   Group.ControlStyle := Group.ControlStyle +
@@ -2495,8 +2529,16 @@ begin
   RegisterCaption(Sheet, @RsRxTab);
   Result := Sheet;
 
-  LiveBox := TGroupBox.Create(Sheet);
-  LiveBox.Parent := Sheet;
+  { 中身は巻き取り欄に載せます。**画面が中身より小さいときだけ**巻き取りが
+    出ます。ふだんは中身が欄いっぱいに広がり、見た目は前と同じです（付録 CH）。
+    The content rides in a scrolling box, which scrolls **only when the screen
+    is smaller than the content**; otherwise the content fills it and looks as
+    before (appendix CH). }
+  FRxContent := AddScrollingContent(Sheet, OPERATE_MIN_WIDTH_96,
+    OPERATE_MIN_HEIGHT_96, FRxScroller);
+
+  LiveBox := TGroupBox.Create(FRxContent);
+  LiveBox.Parent := FRxContent;
   LiveBox.Height := 120;
   RegisterCaption(LiveBox, @RsRxFromInput);
   Stretch(LiveBox, alTop);
@@ -2527,29 +2569,24 @@ begin
   FRxStop := AddButton(LiveControls, @RsRxStop, 126, 22, 110, @RxStopClick);
   FRxClear := AddButton(LiveControls, @RsRxClear, 244, 22, 130, @RxClearClick);
 
-  { 2 行目は、1 行目のボタン（22 から高さ 30）の 2 画素下から。**ぴったり 52 に
-    付けると、120 dpi で 1 画素重なりました。**位置と高さは別々に丸められ、
-    27.5 と 37.5 がどちらも切り上がるためです（付録 CH）。
-    The second row starts 2 pixels below the first row's buttons (22, 30 tall).
-    **Butted against them at 52, it overlapped by a pixel at 120 dpi**: position
-    and height are rounded separately, and 27.5 and 37.5 both round up
-    (appendix CH). }
-  AddLabel(LiveControls, @RsRxDevice, 8, 58);
+  { 2 行目は 1 行目の釦（22＋30）から 4 画素空けます。**ぴったり付けると、
+    125% の拡大の丸めで 1 画素重なりました**（付録 CH）。
+    The second row keeps 4 pixels below the first row's buttons (22 + 30):
+    **flush against them, 125% scaling's rounding overlapped them by one
+    pixel** (appendix CH). }
+  AddLabel(LiveControls, @RsRxDevice, 8, 60);
   FRxDevice := TComboBox.Create(LiveControls);
   FRxDevice.Parent := LiveControls;
-  FRxDevice.SetBounds(78, 54, 380, 28);
+  FRxDevice.SetBounds(78, 56, 380, 28);
   FRxDevice.Style := csDropDownList;
   FRxDevice.OnChange := @RxConfirmSpeedChanged;
-  FRxDeviceRefresh := AddButton(LiveControls, @RsRxRescan, 466, 54, 80,
+  FRxDeviceRefresh := AddButton(LiveControls, @RsRxRescan, 466, 56, 80,
     @RxDeviceRefreshClick);
 
-  { 札は選択欄の 20 画素上。18 では 120 dpi で欄と重なりました（付録 CH）。
-    The label is 20 pixels above its box; at 18 it overlapped the box at
-    120 dpi (appendix CH). }
-  AddLabel(LiveControls, @RsRxSettleLabel, 390, 2);
+  AddLabel(LiveControls, @RsRxSettleLabel, 390, 1);
   FRxConfirmSpeed := TComboBox.Create(LiveControls);
   FRxConfirmSpeed.Parent := LiveControls;
-  FRxConfirmSpeed.SetBounds(390, 22, 150, 28);
+  FRxConfirmSpeed.SetBounds(390, 24, 150, 28);
   FRxConfirmSpeed.Style := csDropDownList;
   RegisterItem(FRxConfirmSpeed, 0, @RsRxSettleFast);
   RegisterItem(FRxConfirmSpeed, 1, @RsRxSettleNormal);
@@ -2562,10 +2599,10 @@ begin
     How reception is used. The requirement is that the mode **is always visible**
     (FR-I.6), so the choice itself sits in the control row with a word of
     explanation beside it. }
-  AddLabel(LiveControls, @RsRxModeLabel, 556, 58);
+  AddLabel(LiveControls, @RsRxModeLabel, 556, 60);
   FRxMode := TComboBox.Create(LiveControls);
   FRxMode.Parent := LiveControls;
-  FRxMode.SetBounds(646, 54, 150, 28);
+  FRxMode.SetBounds(646, 56, 150, 28);
   FRxMode.Style := csDropDownList;
   { 表記は短くします。長い説明を選択肢に入れると、狭い窓で切れて**どちらを
     選んでいるのかが読めなくなります。**モードが常に見えていることが要件です
@@ -2620,8 +2657,8 @@ begin
   FRxDeviceRefresh.TabOrder := 6;
   FRxMode.TabOrder := 7;
 
-  WaterfallPanel := TPanel.Create(Sheet);
-  WaterfallPanel.Parent := Sheet;
+  WaterfallPanel := TPanel.Create(FRxContent);
+  WaterfallPanel.Parent := FRxContent;
   WaterfallPanel.Align := alBottom;
   WaterfallPanel.Height := RX_WATERFALL_DEFAULT_96;
   FRxWaterfallPanel := WaterfallPanel;
@@ -2680,8 +2717,8 @@ begin
   FRxWaterfall.Message_ := FWfMessage^;
   Stretch(FRxWaterfall, alClient);
 
-  TextPanel := TPanel.Create(Sheet);
-  TextPanel.Parent := Sheet;
+  TextPanel := TPanel.Create(FRxContent);
+  TextPanel.Parent := FRxContent;
   TextPanel.Align := alClient;
   TextPanel.BevelOuter := bvNone;
 
@@ -3063,13 +3100,10 @@ begin
   AddLabel(Options, @RsPrWpm, 330, 8);
   FPrWpm := AddSpin(Options, 330, 30, 5, 40, 20, @PrOptionsChanged);
 
-  { 札の 20 画素下。18 では 120 dpi で札と重なりました（付録 CH）。
-    20 pixels below the label; at 18 it overlapped the label at 120 dpi
-    (appendix CH). }
   AddLabel(Options, @RsPrNoise, 440, 8);
   FPrNoise := TTrackBar.Create(Options);
   FPrNoise.Parent := Options;
-  FPrNoise.SetBounds(440, 28, 160, 36);
+  FPrNoise.SetBounds(440, 30, 160, 36);
   FPrNoise.Min := 0;
   FPrNoise.Max := 40;
   FPrNoise.Position := 10;
@@ -3469,8 +3503,9 @@ end;
 function TMainForm.BuildFistTab: TTabSheet;
 var
   Sheet: TTabSheet;
+  Host: TPanel;
+  HostBox: TScrollBox;
   Options: TGroupBox;
-  BasisNote: TLabel;
   Buttons: TPanel;
   Kind: TExerciseKind;
   Standard_: TFistStandard;
@@ -3481,9 +3516,14 @@ begin
   Sheet := FPages.AddTabSheet;
   RegisterCaption(Sheet, @RsFtTab);
   Result := Sheet;
+  { 中身は巻き取り欄に載せます。窓が低いと、結果の欄と下の図が重なって
+    いました（付録 CH）。/ The content rides in a scrolling box: in a low
+    window the result box and the charts below overlapped (appendix CH). }
+  Host := AddScrollingContent(Sheet, OPERATE_MIN_WIDTH_96, FIST_MIN_HEIGHT_96,
+    HostBox);
 
-  Options := TGroupBox.Create(Sheet);
-  Options.Parent := Sheet;
+  Options := TGroupBox.Create(Host);
+  Options.Parent := Host;
   Options.Height := 124;
   RegisterCaption(Options, @RsFtTextAndScore);
   Stretch(Options, alTop);
@@ -3525,18 +3565,8 @@ begin
   FFtBasis.ItemIndex := 0;
   FFtBasis.OnChange := @FtOptionsChanged;
   { 採点の基準のすぐ下に置きます。右隣に置くと行に収まりませんでした。
-    **右端は枠に留め、収まらなければ折り返します。**英語の文は 120 dpi で枠の外へ
-    出ました。文字の幅は画素密度に比例して伸びないためです（付録 CH）。
-    Directly under the basis; to its right it did not fit on the row. **Its
-    right edge is held to the box, and it wraps when it does not fit**: the
-    English ran out of the box at 120 dpi, since text does not widen in
-    proportion to the density (appendix CH). }
-  BasisNote := AddLabel(Options, @RsFtBasisNote, 496, 60);
-  BasisNote.WordWrap := True;
-  BasisNote.AnchorSide[akRight].Control := Options;
-  BasisNote.AnchorSide[akRight].Side := asrRight;
-  BasisNote.Anchors := [akLeft, akTop, akRight];
-  BasisNote.BorderSpacing.Right := 8;
+    Directly under the basis; to its right it did not fit on the row. }
+  AddLabel(Options, @RsFtBasisNote, 496, 60);
 
   { 課題文なしでも測れますが、間隔の種別をしきい値で分けるため**参考値**に
     なります（要件 FR-H.3）。画面でそう分かるようにします。
@@ -3551,16 +3581,20 @@ begin
 
   FFtNew := AddButton(Options, @RsFtNew, 330, 70, 150, @FtNewClick);
 
-  Buttons := AddTopPanel(Sheet, 40);
+  Buttons := AddTopPanel(Host, 40);
   FFtStart := AddButton(Buttons, @RsFtStart, 12, 4, 120, @FtStartClick);
   FFtStop := AddButton(Buttons, @RsFtFinish, 140, 4, 150, @FtStopClick);
   FFtStop.Enabled := False;
-  FFtWav := AddButton(Buttons, @RsFtFromWav, 298, 4, 150, @FtWavClick);
-  FFtStatus := AddLabel(Buttons, @RsFtStartHint, 460, 12);
+  FFtWav := AddButton(Buttons, @RsFtFromWav, 298, 4, 140, @FtWavClick);
+  { 案内文は長いので左へ寄せ、右端に余白を残します。460 では 125% の画面で
+    枠の外へ 4 画素出ました（付録 CH）。/ The guidance is long, so it moves
+    left to leave room at the right edge: at 460 it ran 4 pixels outside at
+    125% (appendix CH). }
+  FFtStatus := AddLabel(Buttons, @RsFtStartHint, 446, 12);
 
-  AddTopLabel(Sheet, @RsFtTextLabel);
-  FFtText := TMemo.Create(Sheet);
-  FFtText.Parent := Sheet;
+  AddTopLabel(Host, @RsFtTextLabel);
+  FFtText := TMemo.Create(Host);
+  FFtText.Parent := Host;
   { **推移（要件 FR-H.10）に高さを残すため、上の欄は詰めます。**窓の既定の
     高さでは、足し合わせるとグラフの場所が無くなります。
     **The sections above are kept tight so that the trend has room**: at the
@@ -3575,19 +3609,19 @@ begin
   FFtText.Font.Size := 14;
   Stretch(FFtText, alTop);
 
-  AddTopLabel(Sheet, @RsFtScore);
+  AddTopLabel(Host, @RsFtScore);
   { 採点の欄は、余った高さを受け取ります。**下端の推移と、上の課題文は
     読める高さを先に取り、伸び縮みはここが引き受けます。**中身は巻き取れます。
     The score takes what height is left: **the trend at the foot and the text
     above it claim a readable height first**, and the give and take happens
     here, where the content scrolls. }
-  FFtResult := TMemo.Create(Sheet);
-  FFtResult.Parent := Sheet;
+  FFtResult := TMemo.Create(Host);
+  FFtResult.Parent := Host;
   FFtResult.ReadOnly := True;
   FFtResult.ScrollBars := ssAutoVertical;
   Stretch(FFtResult, alClient);
 
-  FFtAdvice := AddTopLabel(Sheet, '');
+  FFtAdvice := AddTopLabel(Host, '');
 
   { 推移（要件 FR-H.10）。**鍵の種類ごとに分けて出せます。**鍵が違えば送り方が
     違うので、混ぜて並べた線は上達ではなく持ち替えを映します。
@@ -3604,8 +3638,8 @@ begin
     the graph about ninety pixels at the window's default size, where the lines
     are thicker than the gaps between the gridlines.** The height that can be
     read is taken first, and what is left goes to the list, which scrolls. }
-  Bottom := TPanel.Create(Sheet);
-  Bottom.Parent := Sheet;
+  Bottom := TPanel.Create(Host);
+  Bottom.Parent := Host;
   Bottom.Align := alBottom;
   Bottom.Height := 304;
   Bottom.BevelOuter := bvNone;
@@ -4258,15 +4292,10 @@ begin
   AddLabel(Operating, @RsSetCaptureNote,
     232, 36);
 
-  { 選択欄は 130 から。**120 では、英語の札（Replay window）が 120 dpi で欄に
-    重なりました。**文字の幅は画素密度に比例して伸びません（付録 CH）。
-    The box starts at 130. **At 120 the English label (Replay window) ran into
-    it at 120 dpi**: text does not widen in proportion to the density
-    (appendix CH). }
   AddLabel(Operating, @RsSetRetention, 14, 62);
   FSetRetention := TComboBox.Create(Operating);
   FSetRetention.Parent := Operating;
-  FSetRetention.SetBounds(130, 58, 110, 28);
+  FSetRetention.SetBounds(132, 58, 110, 28);
   FSetRetention.Style := csDropDownList;
   RegisterItem(FSetRetention, 0, @RsSetRetention5);
   RegisterItem(FSetRetention, 1, @RsSetRetention10);
@@ -4274,7 +4303,7 @@ begin
   RegisterItem(FSetRetention, 3, @RsSetRetention30);
   FSetRetention.ItemIndex := 1;
   FSetRetention.OnChange := @RxRetentionChanged;
-  AddLabel(Operating, @RsSetRetentionNote, 258, 62);
+  AddLabel(Operating, @RsSetRetentionNote, 260, 62);
 
   FSetJournal := TCheckBox.Create(Operating);
   FSetJournal.Parent := Operating;
@@ -4403,17 +4432,10 @@ begin
   FTxTextWpm := AddSpin(SoundGroup, 14, 26, 5, 60, 20, @TxOptionsChanged);
   AddLabel(SoundGroup, @RsTxToneHz, 150, 6);
   FTxToneHz := AddSpin(SoundGroup, 150, 26, 300, 1500, 700, @TxOptionsChanged);
-  { つまみも、隣の数値欄と同じく札の 20 画素下に置きます。**18 では、120 dpi で
-    札と重なりました。**札の高さは書体で決まり、画素密度に比例しません（96 dpi で
-    17 画素、120 dpi で 24 画素。付録 CH）。
-    The slider sits 20 pixels below its label, like the number boxes beside
-    it. **At 18 it overlapped the label at 120 dpi**: a label's height comes
-    from the font and does not grow in proportion to the density (17 pixels at
-    96 dpi, 24 at 120; appendix CH). }
   AddLabel(SoundGroup, @RsTxVolume, 270, 6);
   FTxVolume := TTrackBar.Create(SoundGroup);
   FTxVolume.Parent := SoundGroup;
-  FTxVolume.SetBounds(270, 26, 160, 36);
+  FTxVolume.SetBounds(270, 30, 160, 36);
   FTxVolume.Min := 0;
   FTxVolume.Max := 100;
   FTxVolume.Position := 60;
@@ -4467,6 +4489,13 @@ begin
   RigGroup := TGroupBox.Create(Scroller);
   RigGroup.Parent := Scroller;
   RegisterCaption(RigGroup, @RsSetRigGroup);
+  { 高さは中身から決めます（`FitToChildren`）。固定の 262 では 100 dpi の
+    丸めで最後の行が 2 画素はみ出しました（付録 CH）。**固定の値を上げても、
+    行を足すたび・書体が変わるたびに同じことが起きます**（付録 CI）。
+    The height comes from the contents (`FitToChildren`). At a fixed 262 the
+    last row stuck out by two pixels after 100 dpi rounding (appendix CH).
+    **Raising the fixed value only waits for the next added row or a different
+    font to do the same** (appendix CI). }
   FitToChildren(RigGroup);
   Stretch(RigGroup, alTop);
   AddLabel(RigGroup, @RsSetRigModel, 14, 10);
@@ -4692,6 +4721,135 @@ begin
   Stretch(FSetInfo, alTop);
 end;
 
+{ タブの中身（送受信・送信訓練）を、欄いっぱいに、ただし要る大きさ
+  （`Constraints`）以上に保ちます（付録 CH）。**画面が小さいときは押し潰さずに
+  巻き取らせます。**押し潰すと、受信テキストか送信欄のどちらかが見えなくなり、
+  しかもそれに気づけません。
+  Keeps a tab's content (operating, send practice) filling its box but never
+  below the size it needs (`Constraints`; appendix CH). **On a small screen it
+  scrolls rather than being crushed**: crushed, the received text or the send
+  panel would vanish, with nothing to say so. }
+procedure TMainForm.ScrollerResized(Sender: TObject);
+var
+  Box: TScrollBox;
+  Content: TControl;
+  W, H: Integer;
+begin
+  Box := Sender as TScrollBox;
+  if Box.ControlCount = 0 then
+    Exit;
+  Content := Box.Controls[0];
+  W := Max(Box.ClientWidth, Content.Constraints.MinWidth);
+  H := Max(Box.ClientHeight, Content.Constraints.MinHeight);
+  if (Content.Width <> W) or (Content.Height <> H) then
+    Content.SetBounds(Content.Left, Content.Top, W, H);
+end;
+
+{ タブの中身を載せる巻き取り欄と、中身の枠を作ります。中身の最小の大きさは
+  `Constraints` に持たせます（画素密度に合わせて LCL が拡大する）。
+  Makes a tab's scrolling box and the panel that carries its content. The
+  content's least size lives in `Constraints`, which the LCL scales to the
+  pixel density. }
+function TMainForm.AddScrollingContent(Sheet: TTabSheet; MinWidth96,
+  MinHeight96: Integer; out Box: TScrollBox): TPanel;
+begin
+  Box := TScrollBox.Create(Sheet);
+  Box.Parent := Sheet;
+  Box.Align := alClient;
+  Box.BorderStyle := bsNone;
+  Box.OnResize := @ScrollerResized;
+  Result := TPanel.Create(Box);
+  Result.Parent := Box;
+  Result.BevelOuter := bvNone;
+  Result.Constraints.MinWidth := MinWidth96;
+  Result.Constraints.MinHeight := MinHeight96;
+  Result.SetBounds(0, 0, MinWidth96, MinHeight96);
+end;
+
+{ 最初に表示するとき、窓を画面の作業領域（タスクバーを除いた所）へ収めます
+  （付録 CH）。前回の位置と大きさがあれば、それを画素密度の違いを直して使い、
+  作業領域の外なら捨てて中央に置きます。
+  1366×768 を 125% で使うと見かけの高さは約 614 で、**前の最小の高さ 660 では
+  窓の下端（送信欄と波形）が画面の外に出ていました。**最小の大きさも作業領域に
+  合わせて下げ、足りない分は送受信画面が巻き取ります。
+
+  On first show the window is fitted into the screen's work area (the part
+  without the task bar; appendix CH). The last session's bounds are used when
+  present, corrected for a change of pixel density, and discarded for the
+  centre when they lie outside the work area.
+  At 1366 x 768 with 125% scaling the apparent height is about 614, and **with
+  the former minimum height of 660 the bottom of the window -- the send panel
+  and the waterfall -- was off the screen.** The minimum size is lowered to
+  the work area too, and the operating screen scrolls for the rest. }
+procedure TMainForm.FormFirstShow(Sender: TObject);
+const
+  { 題名の帯と枠のぶん（96 dpi）。/ Room for the title bar and frame (96 dpi). }
+  FRAME_96 = 40;
+  EDGE_96 = 8;
+var
+  Area, Want: TRect;
+  AreaW, AreaH, Frame, Edge, W, H, L, T: Integer;
+  Restore: Boolean;
+begin
+  if FWindowFitted then
+    Exit;
+  FWindowFitted := True;
+  if Monitor <> nil then
+    Area := Monitor.WorkareaRect
+  else
+    Area := Screen.WorkAreaRect;
+  AreaW := Area.Right - Area.Left;
+  AreaH := Area.Bottom - Area.Top;
+  if (AreaW <= 0) or (AreaH <= 0) then
+    Exit;
+  Frame := Scale96ToForm(FRAME_96);
+  Edge := Scale96ToForm(EDGE_96);
+  Constraints.MinWidth := Max(200, Min(Constraints.MinWidth, AreaW - Edge));
+  Constraints.MinHeight := Max(200, Min(Constraints.MinHeight, AreaH - Frame));
+
+  W := Width;
+  H := Height;
+  Restore := False;
+  if FSavedBounds.Right > FSavedBounds.Left then
+  begin
+    Want := FSavedBounds;
+    { 書いたときと画素密度が違えば、大きさを比で直します。/ A different pixel
+      density rescales the size. }
+    if (FSavedPpi > 0) and (FSavedPpi <> Screen.PixelsPerInch) then
+    begin
+      W := MulDiv(Want.Right - Want.Left, Screen.PixelsPerInch, FSavedPpi);
+      H := MulDiv(Want.Bottom - Want.Top, Screen.PixelsPerInch, FSavedPpi);
+    end
+    else
+    begin
+      W := Want.Right - Want.Left;
+      H := Want.Bottom - Want.Top;
+    end;
+    { 左上が作業領域の中に在るときだけ、前の位置を使います。外した画面に
+      窓を出すと、どこにも見えません。/ The old position is used only when
+      its top-left lies in the work area: on a monitor that is gone, the
+      window would be nowhere to be seen. }
+    Restore := (Want.Left >= Area.Left) and (Want.Left < Area.Right - Edge) and
+      (Want.Top >= Area.Top) and (Want.Top < Area.Bottom - Frame);
+  end;
+  W := Max(Constraints.MinWidth, Min(W, AreaW - Edge));
+  H := Max(Constraints.MinHeight, Min(H, AreaH - Frame));
+  if Restore then
+  begin
+    L := Min(Want.Left, Area.Right - W);
+    T := Min(Want.Top, Area.Bottom - H - Frame);
+  end
+  else
+  begin
+    L := Area.Left + (AreaW - W) div 2;
+    T := Area.Top + Max(0, (AreaH - H - Frame) div 2);
+  end;
+  Position := poDesigned;
+  SetBounds(Max(Area.Left, L), Max(Area.Top, T), W, H);
+  if FSavedMaximized then
+    WindowState := wsMaximized;
+end;
+
 { ---- settings ---- }
 
 { 設定の置き場所。記録・録音・交信記録もこの隣に置きます。
@@ -4754,6 +4912,23 @@ begin
     Exit;
   Ini := TIniFile.Create(ConfigFileName);
   try
+    { 窓の位置と大きさ（版 2.86 から。付録 CH）。**無い・壊れていれば使いません**
+      ——前の版の設定ファイルには無く、そのときは既定の大きさで中央に出ます。
+      The window's bounds (from version 2.86; appendix CH). **Absent or broken,
+      they are not used**: older settings files lack them, and the window then
+      opens centred at the default size. }
+    Index := Ini.ReadInteger('window', 'width', 0);
+    if (Index >= 200) and (Index <= 20000) and
+       (Ini.ReadInteger('window', 'height', 0) >= 200) and
+       (Ini.ReadInteger('window', 'height', 0) <= 20000) then
+    begin
+      FSavedBounds.Left := Ini.ReadInteger('window', 'left', 0);
+      FSavedBounds.Top := Ini.ReadInteger('window', 'top', 0);
+      FSavedBounds.Right := FSavedBounds.Left + Index;
+      FSavedBounds.Bottom := FSavedBounds.Top + Ini.ReadInteger('window', 'height', 0);
+      FSavedPpi := ClampInt(Ini.ReadInteger('window', 'ppi', 0), 0, 1000);
+      FSavedMaximized := Ini.ReadBool('window', 'maximized', False);
+    end;
     FSetModel.Text := Ini.ReadString('engine', 'model', FSetModel.Text);
     FSetMetadata.Text := Ini.ReadString('engine', 'metadata', FSetMetadata.Text);
     FSetRuntime.Text := Ini.ReadString('engine', 'onnxruntime', '');
@@ -4929,6 +5104,29 @@ begin
     ForceDirectories(ExtractFilePath(ConfigFileName));
     Ini := TIniFile.Create(ConfigFileName);
     try
+      { 窓を一度も出していなければ書きません（大きさが決まっていない）。
+        最大化していたら、戻したときの大きさを書きます。
+        Not written if the window was never shown (its size is not settled);
+        when maximized, the restored size is what is written. }
+      if FWindowFitted then
+      begin
+        if WindowState = wsMaximized then
+        begin
+          Ini.WriteInteger('window', 'left', RestoredLeft);
+          Ini.WriteInteger('window', 'top', RestoredTop);
+          Ini.WriteInteger('window', 'width', RestoredWidth);
+          Ini.WriteInteger('window', 'height', RestoredHeight);
+        end
+        else
+        begin
+          Ini.WriteInteger('window', 'left', Left);
+          Ini.WriteInteger('window', 'top', Top);
+          Ini.WriteInteger('window', 'width', Width);
+          Ini.WriteInteger('window', 'height', Height);
+        end;
+        Ini.WriteInteger('window', 'ppi', Screen.PixelsPerInch);
+        Ini.WriteBool('window', 'maximized', WindowState = wsMaximized);
+      end;
       Ini.WriteString('engine', 'model', FSetModel.Text);
       Ini.WriteString('engine', 'metadata', FSetMetadata.Text);
       Ini.WriteString('engine', 'onnxruntime', FSetRuntime.Text);
@@ -9513,9 +9711,30 @@ begin
       tightest case (the "decoding" row showing, the window at its lowest) the
       set height must be there. }
     CheckTranscriptHeight(Result);
+    CheckWindowFits(Result);
   finally
     FPages.ActivePageIndex := Was;
   end;
+end;
+
+{ 窓が画面の作業領域に収まっているか（付録 CH）。**収まらない窓は、下端の
+  送信欄と波形が画面の外に出ます。**画素密度と画面の大きさを変えて回帰試験が
+  走らせます。/ Whether the window fits the screen's work area (appendix CH):
+  **one that does not puts the send panel and the waterfall at its bottom off
+  the screen.** The regression runs it at several densities and screen sizes. }
+procedure TMainForm.CheckWindowFits(Problems: TStringList);
+var
+  Area: TRect;
+begin
+  if Monitor <> nil then
+    Area := Monitor.WorkareaRect
+  else
+    Area := Screen.WorkAreaRect;
+  if (Left < Area.Left) or (Top < Area.Top) or
+     (Left + Width > Area.Right) or (Top + Height > Area.Bottom) then
+    Problems.Add(Format('窓が作業領域に収まらない: 窓 %0:d,%1:d %2:dx%3:d / 作業領域 %4:d,%5:d %6:dx%7:d',
+      [Left, Top, Width, Height, Area.Left, Area.Top,
+       Area.Right - Area.Left, Area.Bottom - Area.Top]));
 end;
 
 { 受信テキストに高さを残します（付録 BV.4）。**狭くなったらウォーターフォールが

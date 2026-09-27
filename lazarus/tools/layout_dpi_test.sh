@@ -2,28 +2,14 @@
 # 画素密度の違う画面で、窓の組み方が破綻しないことを確かめます（要件 NFR-5.1）。
 #
 # **目で見て気づけるのは、たまたま開いたタブの、たまたま見えている場所だけ**
-# です。ここでは画面を作り、アプリケーション自身に全タブを数えさせます。
-# 96 dpi（等倍）・100 dpi・120 dpi（125%）・192 dpi（200%）を、日本語と英語の
-# 2 言語で。150% は付録 AW.5。
-#
-# **等倍と 2 倍だけでは足りません**（付録 CH）。整数倍では、位置も高さも文字も
-# 同じ割合で伸びるので、ぴったり付けた部品もぴったりのままです。割り切れない
-# 倍率では、位置と高さが別々に丸められ、文字の高さと幅は書体の都合で割合より
-# 多く伸びます。100 dpi（Xvfb の既定）と 120 dpi で、2 倍では出ない破綻が
-# 13 件出ました。
+# です。ここでは画面を 2 つ作り、アプリケーション自身に全タブを数えさせます。
+# 96 dpi（等倍）と 192 dpi（200%）を、日本語と英語の 2 言語で。150% は付録 AW.5。
 #
 # Checks that the window's layout does not break on screens of different pixel
 # density (requirement NFR-5.1). **The eye only catches this on the tab that
-# happens to be open**, so screens are made and the application counts the
-# breakages on every tab itself: 96, 100, 120 (125%) and 192 dpi (200%), in
-# Japanese and English. 144 dpi is measured separately in appendix AW.5.
-#
-# **Unit and double scale are not enough** (appendix CH). At a whole multiple,
-# positions, heights and text all grow by the same factor, so controls butted
-# together stay butted. At a fractional one, position and height are rounded
-# separately, and text grows by more than the factor, as the font dictates. At
-# 100 dpi (Xvfb's default) and 120 dpi, 13 breakages appeared that double scale
-# never shows.
+# happens to be open**, so two screens are made and the application counts the
+# breakages on every tab itself: 96 dpi and 192 dpi. 144 dpi is measured
+# separately in appendix AW.5.
 set -e
 cd "$(dirname "$0")/.."
 
@@ -80,10 +66,6 @@ run_at() {
 
 echo "  96 dpi（日本語）:"
 run_at 96 1600x1200x24 121 ja
-echo "  100 dpi（日本語）:"
-run_at 100 1600x1200x24 125 ja
-echo "  120 dpi（日本語）:"
-run_at 120 1600x1200x24 126 ja
 echo "  192 dpi（日本語）:"
 run_at 192 2600x2000x24 122 ja
 
@@ -97,14 +79,38 @@ run_at 192 2600x2000x24 122 ja
 if [ -f app/languages/deepcw_station.en.po ]; then
   echo "  96 dpi（English）:"
   run_at 96 1600x1200x24 123 en
-  echo "  100 dpi（English）:"
-  run_at 100 1600x1200x24 127 en
-  echo "  120 dpi（English）:"
-  run_at 120 1600x1200x24 128 en
   echo "  192 dpi（English）:"
   run_at 192 2600x2000x24 124 en
 else
   echo "  英語の .po がありません（訳を入れたら軸が増えます）"
+fi
+
+# 小さい画面と、整数でない拡大率（付録 CH）。**窓が画面の作業領域に収まる
+# こと**も同じ検査が見る。125% の 1366×768 では、見かけの高さが約 614 で、
+# 前の最小の窓（660）は画面の外へはみ出していた。100 dpi・125% では、拡大の
+# 丸めで 1〜4 画素の重なり・はみ出しが出ていた（96・192 dpi では出ない）。
+# Small screens and non-integer scaling (appendix CH). **The window must fit
+# the screen's work area** too -- the same check looks. At 1366 x 768 with
+# 125% the apparent height is about 614, and the former minimum window (660)
+# ran off the screen. At 100 dpi and 125% the scaling's rounding produced
+# overlaps and overruns of 1 to 4 pixels that 96 and 192 dpi never show.
+echo "  1366x768・120 dpi（125%、日本語）:"
+run_at 120 1366x768x24 125 ja
+echo "  1280x720・96 dpi（日本語）:"
+run_at 96 1280x720x24 126 ja
+echo "  1400x950・100 dpi（日本語）:"
+run_at 100 1400x950x24 127 ja
+if [ -f app/languages/deepcw_station.en.po ]; then
+  echo "  1366x768・120 dpi（125%、English）:"
+  run_at 120 1366x768x24 128 en
+  # 100 dpi は英語でも見ます。訳の幅は日本語と違うので、日本語で 0 件でも
+  # 英語で破綻することがあります（付録 CI）。
+  # 100 dpi is checked in English too: the translation's widths differ, so 0
+  # in Japanese does not mean 0 in English (appendix CI).
+  echo "  1400x950・100 dpi（English）:"
+  run_at 100 1400x950x24 130 en
+  echo "  1920x1080・144 dpi（150%、English）:"
+  run_at 144 1920x1080x24 129 en
 fi
 
 if [ $FAILED -ne 0 ]; then
