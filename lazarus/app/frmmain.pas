@@ -111,6 +111,13 @@ type
     HalfWidthHz: Double;
     AutoWidth: Boolean;
     AntiAlias: Boolean;
+    { 自動の幅を渡された音から決めないとき（`AutoWidth` が偽）の、隣の局
+      （Hz）。受信やファイルの復号が見つけたもので、クリックの置き換えを
+      同じにするためです（付録 CI）。
+      The neighbours (Hz) when the automatic width is not worked out from the
+      audio (`AutoWidth` false): those reception or the file decode found, so
+      that click replacement is the same (appendix CI). }
+    Neighbours: TDoubleArray;
   end;
 
   TDecodeThread = class(TThread)
@@ -130,6 +137,14 @@ type
     FHistory: TAudioHistory;
     FShaping: TDecoderShaping;
     FAppliedHalf: Double;
+    { 整形で見つけた（か渡された）隣の局と、帯域制限前の音。クリックの置き
+      換えに使います（付録 CI）。
+      The neighbours found by (or handed to) the preparation, and the audio
+      before the band limit, for click replacement (appendix CI). }
+    FNeighbours: TDoubleArray;
+    FUnfiltered: TSingleArray;
+    FClickTune: Double;
+    FClickHalf: Double;
     FLoadError: string;
     FOnLoaded: TNotifyEvent;
     FOnShaped: TNotifyEvent;
@@ -145,6 +160,10 @@ type
     procedure FeedMulti;
     procedure ReportLoaded;
     procedure ReportShaped;
+    { 隣の局のクリックを置き換えて復号します（無ければそのまま。付録 CI）。
+      Decodes with the neighbours' clicks replaced (as is with none;
+      appendix CI). }
+    function DecodeReplacingClicks: TDecodedChars;
   protected
     procedure Execute; override;
   public
@@ -171,6 +190,15 @@ type
     constructor CreateRecheck(ADecoder: TDeepCWDecoder;
       const ASamples: TSingleArray; ASampleRate: Integer;
       AOnDone: TNotifyEvent);
+    { 読み直しで、受信と同じくクリックを置き換えます（付録 CI）。`AUnfiltered`
+      は帯域制限前の音、`ANeighbours` は受信が見つけた隣の局です。
+      A re-reading that replaces clicks as reception does (appendix CI).
+      `AUnfiltered` is the audio before the band limit and `ANeighbours` the
+      neighbours reception found. }
+    constructor CreateRecheckClicks(ADecoder: TDeepCWDecoder;
+      const ASamples, AUnfiltered: TSingleArray; ASampleRate: Integer;
+      ATuneHz, AHalfWidthHz: Double; const ANeighbours: TDoubleArray;
+      AOnDone: TNotifyEvent);
     { 送信訓練の音を、採点のために 1 度だけ読みます（要件 FR-H.6 の
       「写しやすさ」）。**読み取れた文字は画面の受信テキストには出しません。**
       Reads the send-practice audio once, for the copyability score (FR-H.6).
@@ -196,6 +224,7 @@ type
     property SampleRate: Integer read FSampleRate;
     property Shaping: TDecoderShaping read FShaping write FShaping;
     property AppliedHalfWidthHz: Double read FAppliedHalf;
+    property Neighbours: TDoubleArray read FNeighbours;
     property LoadError: string read FLoadError;
     property Chars: TDecodedChars read FChars;
     property Recheck: Boolean read FRecheck;
@@ -559,6 +588,7 @@ type
       for, and the width on screen (appendix CC). }
     FFileAutoHalf: Double;
     FFileAutoTune: Double;
+    FFileAutoNeighbours: TDoubleArray;
     FShownHalf: Double;
     FWatchChime: TSingleArray;
     { コンテストモードでだけ現れる行（要件 FR-I.5）。
@@ -1720,6 +1750,19 @@ begin
   Create(ADecoder, ASamples, ASampleRate, AOnDone);
 end;
 
+constructor TDecodeThread.CreateRecheckClicks(ADecoder: TDeepCWDecoder;
+  const ASamples, AUnfiltered: TSingleArray; ASampleRate: Integer;
+  ATuneHz, AHalfWidthHz: Double; const ANeighbours: TDoubleArray;
+  AOnDone: TNotifyEvent);
+begin
+  FRecheck := True;
+  FUnfiltered := Copy(AUnfiltered, 0, Length(AUnfiltered));
+  FNeighbours := Copy(ANeighbours);
+  FClickTune := ATuneHz;
+  FClickHalf := AHalfWidthHz;
+  Create(ADecoder, ASamples, ASampleRate, AOnDone);
+end;
+
 constructor TDecodeThread.CreateFist(ADecoder: TDeepCWDecoder;
   const ASamples: TSingleArray; ASampleRate: Integer; AOnDone: TNotifyEvent);
 begin
@@ -1768,8 +1811,8 @@ end;
   hears" all come through here** (one place for it; lesson 10.11). Callable
   from any thread: it does not touch the form. }
 function ShapeForDecoder(const Shaping: TDecoderShaping;
-  const Samples: TSingleArray; SampleRate: Integer;
-  out HalfWidthHz: Double): TSingleArray;
+  const Samples: TSingleArray; SampleRate: Integer; out HalfWidthHz: Double;
+  out Neighbours: TDoubleArray; out Unfiltered: TSingleArray): TSingleArray;
 const
   { 自動の帯域を決めるために見る長さの上限（秒）。付録 CC。
     The most audio looked at to work out the automatic width (seconds);
@@ -1777,11 +1820,26 @@ const
   AUTO_LOOK_SECONDS = 60;
 begin
   HalfWidthHz := Shaping.HalfWidthHz;
+  Neighbours := Shaping.Neighbours;
   if Shaping.AutoWidth then
     HalfWidthHz := AutoHalfWidth(Copy(Samples, 0, AUTO_LOOK_SECONDS * SampleRate),
-      SampleRate, Shaping.TuneHz, Shaping.Meta);
+      SampleRate, Shaping.TuneHz, Shaping.Meta, Neighbours);
+  if Shaping.TuneHz <= 0 then
+    Neighbours := nil;
   Result := DeepCW.Tuner.PrepareForModelWidth(Samples, SampleRate,
-    Shaping.Meta.SampleRate, Shaping.TuneHz, HalfWidthHz, Shaping.AntiAlias);
+    Shaping.Meta.SampleRate, Shaping.TuneHz, HalfWidthHz, Shaping.AntiAlias,
+    Unfiltered);
+end;
+
+function ShapeForDecoder(const Shaping: TDecoderShaping;
+  const Samples: TSingleArray; SampleRate: Integer;
+  out HalfWidthHz: Double): TSingleArray;
+var
+  Neighbours: TDoubleArray;
+  Unfiltered: TSingleArray;
+begin
+  Result := ShapeForDecoder(Shaping, Samples, SampleRate, HalfWidthHz,
+    Neighbours, Unfiltered);
 end;
 
 { 録音全体を、待機モードの経路で読み切ります。取り込みと同じように少しずつ
@@ -1845,12 +1903,37 @@ begin
     FeedMulti;
     Exit;
   end;
-  FSamples := ShapeForDecoder(FShaping, FSamples, FSampleRate, FAppliedHalf);
+  FSamples := ShapeForDecoder(FShaping, FSamples, FSampleRate, FAppliedHalf,
+    FNeighbours, FUnfiltered);
   FSampleRate := FShaping.Meta.SampleRate;
+  FClickTune := FShaping.TuneHz;
+  FClickHalf := FAppliedHalf;
   Queue(@ReportShaped);
   if Terminated then
     Exit;
-  FChars := FDecoder.DecodeLongSamplesTimed(FSamples, FSampleRate);
+  FChars := DecodeReplacingClicks;
+end;
+
+function TDecodeThread.DecodeReplacingClicks: TDecodedChars;
+var
+  Replacer: TTunedClickReplacer;
+begin
+  if (Length(FNeighbours) = 0) or (Length(FUnfiltered) = 0) then
+  begin
+    Result := FDecoder.DecodeLongSamplesTimed(FSamples, FSampleRate);
+    Exit;
+  end;
+  Replacer := TTunedClickReplacer.Create(FDecoder.Metadata);
+  try
+    Result := FDecoder.DecodeLongSamplesTimed(FSamples, FSampleRate,
+      Replacer.Prepare(FUnfiltered, 0, FClickTune, FClickHalf, FNeighbours));
+  finally
+    Replacer.Free;
+  end;
+  { 帯域制限前の音は、もう要りません（長いファイルでは大きい）。
+    The audio before the band limit is no longer needed (large for a long
+    file). }
+  FUnfiltered := nil;
 end;
 
 procedure TDecodeThread.ReportLoaded;
@@ -1875,7 +1958,7 @@ begin
     else if FStream <> nil then
       FStream.Step
     else
-      FChars := FDecoder.DecodeLongSamplesTimed(FSamples, FSampleRate);
+      FChars := DecodeReplacingClicks;
   except
     on E: Exception do
       FError := E.Message;
@@ -5850,6 +5933,7 @@ begin
   Result.AntiAlias := FRxAntiAlias.Checked;
   Result.HalfWidthHz := BandwidthHalfWidth(SelectedBandwidth);
   Result.AutoWidth := False;
+  Result.Neighbours := nil;
   { 自動なら、流し込み受信と同じく近くの局に合わせます（付録 CC）。読み直しと
     モニタは、**受信やファイルの復号が実際に掛けた幅**を使います。短い切れ端で
     決め直すと、読んだときとは別の音を聴くことになります。どちらも無ければ、
@@ -5862,9 +5946,15 @@ begin
   if (SelectedBandwidth = tbAuto) and (Result.TuneHz > 0) then
   begin
     if (FStream <> nil) and (FCapture <> nil) then
-      Result.HalfWidthHz := FStream.AppliedHalfWidthHz
+    begin
+      Result.HalfWidthHz := FStream.AppliedHalfWidthHz;
+      Result.Neighbours := FStream.AutoNeighbours;
+    end
     else if (FFileAutoHalf > 0) and (FFileAutoTune = Result.TuneHz) then
-      Result.HalfWidthHz := FFileAutoHalf
+    begin
+      Result.HalfWidthHz := FFileAutoHalf;
+      Result.Neighbours := FFileAutoNeighbours;
+    end
     else
       Result.AutoWidth := True;
   end;
@@ -7012,6 +7102,7 @@ begin
   begin
     FFileAutoHalf := Thread.AppliedHalfWidthHz;
     FFileAutoTune := Thread.Shaping.TuneHz;
+    FFileAutoNeighbours := Thread.Neighbours;
   end;
   UpdateTuneInfo;
   UpdateReplayInfo;
@@ -9139,7 +9230,10 @@ procedure TMainForm.TryStartRecheck;
 var
   First, Last: Integer;
   FromSeconds, ToSeconds, GotFrom, GotTo: Double;
-  Audio, Prepared: TSingleArray;
+  Audio, Prepared, Unfiltered: TSingleArray;
+  Shaping: TDecoderShaping;
+  Half: Double;
+  Neighbours: TDoubleArray;
   Rate: Integer;
 begin
   if not FRecheckPending then
@@ -9162,12 +9256,17 @@ begin
     呼ぶことはできません。**
     The same tuning and band limit are applied as reception uses: **reading a
     different sound and calling it a re-reading would not be one.** }
-  Prepared := PrepareForDecoder(ForDecoderAudio(Audio, Rate), Rate);
+  Shaping := DecoderShaping;
+  Prepared := ShapeForDecoder(Shaping, ForDecoderAudio(Audio, Rate), Rate, Half,
+    Neighbours, Unfiltered);
   FRecheckSent := FRecheckWord;
   FRecheckSentAt := FRecheckAt;
   FRxBusy.Caption := RsRecheckBusy;
-  FDecodeThread := TDecodeThread.CreateRecheck(FDecoder, Prepared,
-    FDecoder.Metadata.SampleRate, @DecodeFinished);
+  { 受信と同じく、隣の局のクリックも置き換えます（付録 CI）。
+    Neighbours' clicks are replaced as reception does (appendix CI). }
+  FDecodeThread := TDecodeThread.CreateRecheckClicks(FDecoder, Prepared,
+    Unfiltered, FDecoder.Metadata.SampleRate, Shaping.TuneHz, Half, Neighbours,
+    @DecodeFinished);
 end;
 
 { 読み直した結果を、画面の語と並べて出します。

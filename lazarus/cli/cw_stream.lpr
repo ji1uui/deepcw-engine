@@ -45,6 +45,10 @@ var
   ChunkSeconds: Double = STREAM_FEED_SECONDS;
   Quiet: Boolean = False;
   NoAntiAlias: Boolean = False;
+  { 隣の局のクリックを置き換えない（置き換えの費用を測るため。付録 CI）。
+    Neighbours' clicks are not replaced (to measure what replacing costs;
+    appendix CI). }
+  KeepClicks: Boolean = False;
   Check: Boolean = False;
   Failed: Boolean = False;
   SourceText: string = '';
@@ -115,6 +119,12 @@ begin
       Inc(Index);
       Continue;
     end;
+    if Key = '--keep-clicks' then
+    begin
+      KeepClicks := True;
+      Inc(Index);
+      Continue;
+    end;
     if Key = '--check' then
     begin
       Check := True;
@@ -161,7 +171,8 @@ begin
     WriteLn(StdErr, 'Usage: cw_stream (--wav <file> | --text <message>) ' +
       '[--chunk seconds] [--quiet] [--no-antialias] ' +
       '[--check] [--max-provisional s] [--max-confirmed s] ' +
-      '[--tune Hz] [--bandwidth auto|narrow|normal|wide] [--neighbour Hz]');
+      '[--tune Hz] [--bandwidth auto|narrow|normal|wide] [--neighbour Hz] ' +
+      '[--keep-clicks]');
     Halt(2);
   end;
   if (NeighbourHz > 0) and (SourceText = '') then
@@ -183,6 +194,7 @@ begin
         Stream.AntiAlias := not NoAntiAlias;
         Stream.Bandwidth := Bandwidth;
         Stream.TuneHz := TuneHz;
+        Stream.ReplaceClicks := not KeepClicks;
         if SourceText <> '' then
         begin
           { 本文から音を作れるようにしておくと、回帰試験が音声ファイルを

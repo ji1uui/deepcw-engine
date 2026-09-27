@@ -25,7 +25,8 @@ unit DeepCW.Stream;
 interface
 
 uses
-  SysUtils, Classes, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Tuner;
+  SysUtils, Classes, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Tuner,
+  DeepCW.Stations, DeepCW.Metadata;
 
 const
   { 解析にかける最大の長さ。これを超えたら語間を待たずに確定させます。
@@ -148,6 +149,53 @@ const
   STREAM_SQUELCH_LEVEL = 0.005;
 
 type
+  { 交信モード（1 局を聴く）で、隣の強い局のキークリックだけのコマを、復号器へ
+    渡す絵から除きます（付録 CI）。多局受信の `SuppressNeighbourClicks`
+    （付録 CB）と同じ判じ方で、列は `TClickColumnCache` で求めます。流し込み
+    受信・ファイルの復号・読み直しが同じものを使います（整形の場所は 1 か所）。
+    **1 つのスレッドから使います。**
+
+    In contact mode (listening to one station), removes the frames holding only
+    a strong neighbour's key clicks from the picture handed to the model
+    (appendix CI), judged as multi-station reception's
+    `SuppressNeighbourClicks` does (appendix CB), with the columns from
+    `TClickColumnCache`. Streaming, file decoding and re-reading all use it
+    (one place for the preparation). **Used from one thread.** }
+  TTunedClickReplacer = class
+  private
+    FMeta: TDeepCWMetadata;
+    FColumns: TClickColumnCache;
+    FTune: Double;
+    FAudio: TSingleArray;
+    FStart: Double;
+    FHalf: Double;
+    FReplaced: Int64;
+    procedure Apply(var Spectrogram: TSpectrogram; StartSeconds: Double);
+  public
+    constructor Create(Meta: TDeepCWMetadata);
+    destructor Destroy; override;
+    { 控えた列を捨てます（受信のやり直しなど）。/ Drops the columns kept
+      (reception restarted, say). }
+    procedure Clear;
+    { 1 回の復号の用意をして、`DecodeLongSamplesTimed` へ渡す口を返します。
+      置き換えるものが無ければ nil。`Unfiltered` は `PrepareForModelWidth` の
+      帯域制限前の音、`AudioStart` はその先頭の、受信を始めてからの秒数（控えた
+      列を使い回すため。1 回きりなら 0）、`Neighbours` は `AutoHalfWidth` が
+      見つけた隣の局（元の音での Hz）。
+      Readies one decode and returns the hook for `DecodeLongSamplesTimed`, or
+      nil when there is nothing to replace. `Unfiltered` is the audio before
+      the band limit from `PrepareForModelWidth`, `AudioStart` where it begins
+      in seconds since reception started (for reusing the columns kept; 0 for
+      a one-off), and `Neighbours` the neighbours `AutoHalfWidth` found (Hz in
+      the original audio). }
+    function Prepare(const Unfiltered: TSingleArray; AudioStart: Double;
+      TuneHz, HalfWidthHz: Double;
+      const Neighbours: array of Double): TSpectrogramFilter;
+    { 置き換えたコマの延べ数。/ Frames replaced so far. }
+    property Replaced: Int64 read FReplaced;
+    property Columns: TClickColumnCache read FColumns;
+  end;
+
   TStreamingDecoder = class
   private
     FDecoder: TDeepCWDecoder;
@@ -181,6 +229,23 @@ type
     FAutoAt: Double;
     FAutoTune: Double;
     FAutoHalf: Double;
+    { 自動の幅を決めたときに見つけた隣の局（Hz）。クリックの置き換えに使い
+      回します（付録 CI）。
+      The neighbours found when the automatic width was worked out (Hz),
+      reused for click replacement (appendix CI). }
+    FAutoNeighbours: TDoubleArray;
+    { 溜めている音の先頭が、受信を始めてから何標本目か（録音周波数が変われば
+      数え直し）。クリックの列を、受信の始めからの時刻で控えるためです
+      （付録 CI）。
+      Which sample since reception started the front of the buffer is
+      (counted afresh on a change of capture rate), so that click columns can
+      be kept by their time since reception began (appendix CI). }
+    FFrontSample: Int64;
+    { ここから下は解析のスレッドだけが触ります（排他なし）。
+      From here on only the analysis thread touches these (no lock). }
+    FClicks: TTunedClickReplacer;
+    FClickEpoch: Int64;
+    FReplaceClicks: Boolean;
     FConfirmed: TDecodedChars;
     FProvisional: TDecodedChars;
     FConfirmedSeconds: Double;
@@ -224,13 +289,22 @@ type
       single locked section; reading them separately leaves a gap in which the
       capture rate could change. }
     procedure BeginAnalysis(out Audio: TSingleArray; out Rate: Integer;
-      out Epoch: Int64);
+      out Epoch: Int64; out Front: Int64);
     function StillCurrent(Epoch: Int64): Boolean;
     { 解析にかける形へ整えます。同調・帯域制限・標本化周波数の変換を、途切れの
       ない 1 本の音声に対してまとめて行います。
       Prepares audio for analysis: tuning, band limiting and rate conversion,
       all applied to one unbroken buffer. }
-    function PrepareForModel(const Source: TSingleArray): TSingleArray;
+    function PrepareForModel(const Source: TSingleArray;
+      out Neighbours: TDoubleArray; out Half, Tuned: Double;
+      out Unfiltered: TSingleArray): TSingleArray;
+    { 隣の局があれば、クリックの置き換えの用意をして、復号器へ渡す口を
+      返します（無ければ nil。付録 CI）。
+      With neighbours present, readies click replacement and returns the hook
+      to hand the decoder (nil with none; appendix CI). }
+    function ClickFilter(const Unfiltered: TSingleArray; Rate: Integer;
+      Epoch, Front: Int64; const Neighbours: TDoubleArray;
+      Half, Tuned: Double): TSpectrogramFilter;
     procedure AppendConfirmed(const Chars: TDecodedChars);
     function StripSeamSpace(const Chars: TDecodedChars): TDecodedChars;
     function DropLeadArtifacts(const Chars: TDecodedChars): TDecodedChars;
@@ -331,6 +405,24 @@ type
       automatic setting it is the width worked out from the stations nearby
       (appendix CC), so the screen does not quietly claim +/-250 Hz. }
     function AppliedHalfWidthHz: Double;
+    { 隣の局のクリックとして置き換えたコマの延べ数（付録 CI。試験と診断用）。
+      解析のスレッドが数えるので、解析が止まっているときに読みます。
+      How many frames were replaced as a neighbour's clicks so far
+      (appendix CI; for tests and diagnostics). Counted by the analysis thread,
+      so read it while analysis is idle. }
+    function ClickFramesReplaced: Int64;
+    { 自動の幅を決めたときに見つけた隣の局（Hz。付録 CI）。読み直しが受信と
+      同じ置き換えを掛けるために使います。
+      The neighbours found when the automatic width was worked out (Hz;
+      appendix CI), so that re-reading applies the same replacement as
+      reception. }
+    function AutoNeighbours: TDoubleArray;
+    { 隣の局のクリックを置き換えるか（既定は置き換える）。置き換えない場合と
+      比べる試験と測りのためにあります。解析していないときに変えます。
+      Whether neighbours' clicks are replaced (by default they are). It is
+      there for tests and measurements comparing with no replacement; change
+      it while analysis is idle. }
+    property ReplaceClicks: Boolean read FReplaceClicks write FReplaceClicks;
 
     { これを下回る振幅の区間は解析しません。0 にすると常に解析します。
       Stretches quieter than this are not analysed; 0 analyses everything. }
@@ -385,6 +477,76 @@ function PaceInterval(CostSeconds, Budget: Double): Double;
 
 implementation
 
+{ TTunedClickReplacer }
+
+constructor TTunedClickReplacer.Create(Meta: TDeepCWMetadata);
+begin
+  inherited Create;
+  FMeta := Meta;
+  FColumns := TClickColumnCache.Create;
+end;
+
+destructor TTunedClickReplacer.Destroy;
+begin
+  FColumns.Free;
+  inherited Destroy;
+end;
+
+procedure TTunedClickReplacer.Clear;
+begin
+  FColumns.Clear;
+  FAudio := nil;
+end;
+
+function TTunedClickReplacer.Prepare(const Unfiltered: TSingleArray;
+  AudioStart: Double; TuneHz, HalfWidthHz: Double;
+  const Neighbours: array of Double): TSpectrogramFilter;
+var
+  Shifted: TDoubleArray;
+  I: Integer;
+begin
+  Result := nil;
+  FAudio := nil;
+  { 同調点が変われば、控えた列は別の音のものです。/ A new tuned pitch makes
+    the columns kept another sound's. }
+  if TuneHz <> FTune then
+  begin
+    FColumns.Clear;
+    FTune := TuneHz;
+  end;
+  if (TuneHz <= 0) or (Length(Neighbours) = 0) or (Length(Unfiltered) = 0) then
+    Exit;
+  { 列は、同調点を 800 Hz へ動かしたモデルの周波数の音で求めます。隣の局も
+    同じだけ動かします。
+    The columns come from the model-rate audio with the tuned pitch moved to
+    800 Hz; the neighbours are moved by as much. }
+  Shifted := nil;
+  SetLength(Shifted, Length(Neighbours));
+  for I := 0 to High(Neighbours) do
+    Shifted[I] := Neighbours[I] - TuneHz + TUNER_TARGET_TONE_HZ;
+  FColumns.Configure(FMeta.SampleRate, TUNER_TARGET_TONE_HZ, Shifted);
+  { 200 Hz より近い隣の局しかいなければ、置き換えるものはありません。
+    With only neighbours nearer than 200 Hz there is nothing to replace. }
+  if not FColumns.HasNeighbours then
+    Exit;
+  FAudio := Unfiltered;
+  FStart := AudioStart;
+  FHalf := HalfWidthHz;
+  Result := @Apply;
+end;
+
+procedure TTunedClickReplacer.Apply(var Spectrogram: TSpectrogram;
+  StartSeconds: Double);
+var
+  Found: TClickColumns;
+begin
+  Found := FColumns.Columns(FAudio, FStart, StartSeconds, Spectrogram.Frames);
+  Inc(FReplaced, SuppressClicksFromColumns(Spectrogram, Found, FHalf,
+    FMeta.SampleRate / FMeta.FFTLength));
+end;
+
+{ TStreamingDecoder }
+
 constructor TStreamingDecoder.Create(ADecoder: TDeepCWDecoder);
 begin
   inherited Create;
@@ -402,11 +564,15 @@ begin
   FSquelch := STREAM_SQUELCH_LEVEL;
   FCpuBudget := STREAM_CPU_BUDGET;
   FSourceRate := ADecoder.Metadata.SampleRate;
+  FClicks := TTunedClickReplacer.Create(ADecoder.Metadata);
+  FClickEpoch := -1;
+  FReplaceClicks := True;
   InitCriticalSection(FLock);
 end;
 
 destructor TStreamingDecoder.Destroy;
 begin
+  FClicks.Free;
   DoneCriticalSection(FLock);
   inherited Destroy;
 end;
@@ -422,6 +588,8 @@ begin
     FConfirmedSeconds := 0;
     FDroppedSeconds := 0;
     FAutoAt := -1;
+    FAutoNeighbours := nil;
+    FFrontSample := 0;
     Inc(FEpoch);
   finally
     LeaveCriticalSection(FLock);
@@ -451,6 +619,7 @@ begin
       FConfirmedSeconds := FConfirmedSeconds + FPendingCount / Max(1, FSourceRate);
       FDroppedSeconds := FDroppedSeconds + FPendingCount / Max(1, FSourceRate);
       FPendingCount := 0;
+      FFrontSample := 0;
       FProvisional := nil;
       { 解析中のものがあれば、その結果は既に無い音声のものになります。
         Any analysis in flight now describes audio that no longer exists. }
@@ -501,9 +670,11 @@ begin
   end;
 end;
 
-function TStreamingDecoder.PrepareForModel(const Source: TSingleArray): TSingleArray;
+function TStreamingDecoder.PrepareForModel(const Source: TSingleArray;
+  out Neighbours: TDoubleArray; out Half, Tuned: Double;
+  out Unfiltered: TSingleArray): TSingleArray;
 var
-  Tune, Half, Clock, AutoAt, AutoTune: Double;
+  Tune, Clock, AutoAt, AutoTune: Double;
   Width: TTunerBandwidth;
   Limit: Boolean;
   Rate, Span: Integer;
@@ -523,6 +694,7 @@ begin
     AutoAt := FAutoAt;
     AutoTune := FAutoTune;
     Half := FAutoHalf;
+    Neighbours := FAutoNeighbours;
   finally
     LeaveCriticalSection(FLock);
   end;
@@ -542,7 +714,7 @@ begin
     begin
       Span := Min(Length(Source), Round(TUNER_AUTO_SPAN_SECONDS * Max(1, Rate)));
       Half := AutoHalfWidth(Copy(Source, Length(Source) - Span, Span), Rate,
-        Tune, FDecoder.Metadata);
+        Tune, FDecoder.Metadata, Neighbours);
       EnterCriticalSection(FLock);
       try
         { 求めているあいだに同調先が変われば、この幅は前の同調先のものです。
@@ -555,6 +727,7 @@ begin
           FAutoAt := Clock;
           FAutoTune := Tune;
           FAutoHalf := Half;
+          FAutoNeighbours := Neighbours;
         end;
       finally
         LeaveCriticalSection(FLock);
@@ -562,13 +735,60 @@ begin
     end;
   end
   else
+  begin
     Half := BandwidthHalfWidth(Width);
+    { 手で選んだ幅では局を探さないので、クリックも置き換えません（付録 CI）。
+      A width chosen by hand detects no stations, so clicks are not replaced
+      either (appendix CI). }
+    Neighbours := nil;
+  end;
+  if Tune <= 0 then
+    Neighbours := nil;
+  Tuned := Tune;
   { 整形そのものは DeepCW.Tuner が持ちます。ファイルからの復号と同じ 1 か所を
     通すためです。
     The preparation itself lives in DeepCW.Tuner, so that file decoding goes
     through exactly the same place. }
   Result := DeepCW.Tuner.PrepareForModelWidth(Source, Rate,
-    FDecoder.Metadata.SampleRate, Tune, Half, Limit);
+    FDecoder.Metadata.SampleRate, Tune, Half, Limit, Unfiltered);
+end;
+
+function TStreamingDecoder.ClickFilter(const Unfiltered: TSingleArray;
+  Rate: Integer; Epoch, Front: Int64; const Neighbours: TDoubleArray;
+  Half, Tuned: Double): TSpectrogramFilter;
+begin
+  Result := nil;
+  { 世代が変われば（受信のやり直し・録音周波数の変更）、控えた列の時刻は別の
+    音のものです。
+    A new generation (reception restarted, capture rate changed) makes the
+    times of the columns kept refer to other audio. }
+  if Epoch <> FClickEpoch then
+  begin
+    FClicks.Clear;
+    FClickEpoch := Epoch;
+  end;
+  if not FReplaceClicks then
+    Exit;
+  Result := FClicks.Prepare(Unfiltered, Front / Max(1, Rate), Tuned, Half,
+    Neighbours);
+end;
+
+function TStreamingDecoder.ClickFramesReplaced: Int64;
+begin
+  Result := FClicks.Replaced;
+end;
+
+function TStreamingDecoder.AutoNeighbours: TDoubleArray;
+begin
+  EnterCriticalSection(FLock);
+  try
+    if (FTuneHz > 0) and (FBandwidth = tbAuto) then
+      Result := Copy(FAutoNeighbours)
+    else
+      Result := nil;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
 end;
 
 function TStreamingDecoder.AppliedHalfWidthHz: Double;
@@ -606,6 +826,7 @@ begin
     begin
       FAutoAt := -1;
       FAutoHalf := BandwidthHalfWidth(tbAuto);
+      FAutoNeighbours := nil;
     end;
   finally
     LeaveCriticalSection(FLock);
@@ -623,7 +844,7 @@ begin
 end;
 
 procedure TStreamingDecoder.BeginAnalysis(out Audio: TSingleArray;
-  out Rate: Integer; out Epoch: Int64);
+  out Rate: Integer; out Epoch: Int64; out Front: Int64);
 var
   Wanted: Integer;
 begin
@@ -631,6 +852,7 @@ begin
   try
     Rate := Max(1, FSourceRate);
     Epoch := FEpoch;
+    Front := FFrontSample;
     Wanted := Min(FPendingCount, Round(STREAM_MAX_SECONDS * Rate));
     Audio := Copy(FPending, 0, Wanted);
   finally
@@ -661,6 +883,7 @@ begin
       for I := 0 to Limit - 1 do
         FPending[I] := FPending[I + Excess];
       FPendingCount := Limit;
+      Inc(FFrontSample, Excess);
       { 捨てた分だけ時刻を進め、取りこぼしとして数えます。先頭を動かすのは
         この解析スレッドだけなので、以後の DropLeading と食い違いません。
         Advance the time base by what went and count it as a genuine loss.
@@ -706,6 +929,7 @@ begin
     Exit;
   EnterCriticalSection(FLock);
   try
+    Inc(FFrontSample, Min(Samples, FPendingCount));
     if Samples >= FPendingCount then
       FPendingCount := 0
     else
@@ -967,12 +1191,14 @@ end;
 
 function TStreamingDecoder.Step: Boolean;
 var
-  Audio, Prepared: TSingleArray;
+  Audio, Prepared, Unfiltered: TSingleArray;
   Chars, Committed: TDecodedChars;
   Rate, SplitIndex, I, Count: Integer;
-  AnalysisSeconds, SplitSeconds: Double;
+  AnalysisSeconds, SplitSeconds, Half, Tuned: Double;
   Forced: Boolean;
-  Epoch: Int64;
+  Epoch, Front: Int64;
+  Neighbours: TDoubleArray;
+  Filter: TSpectrogramFilter;
   DropSamples: Integer;
   Started: TDateTime;
 begin
@@ -988,7 +1214,7 @@ begin
   { 時間の計算はすべて録音された周波数で行い、モデルへ渡す直前にだけ変換します。
     All timing is computed at the capture rate; conversion happens only just
     before the audio reaches the model. }
-  BeginAnalysis(Audio, Rate, Epoch);
+  BeginAnalysis(Audio, Rate, Epoch, Front);
   if Length(Audio) = 0 then
     Exit;
 
@@ -1002,7 +1228,7 @@ begin
   if SquelchClosed(Audio, Rate) then
     Exit;
 
-  Prepared := PrepareForModel(Audio);
+  Prepared := PrepareForModel(Audio, Neighbours, Half, Tuned, Unfiltered);
   if Length(Prepared) = 0 then
     Exit;
   { **解析の費用は、ここで測ります**（要件 FR-G.4）。測った値は、次にいつ
@@ -1010,8 +1236,11 @@ begin
     **The cost of an analysis is measured here** (requirement FR-G.4); what it
     measures decides when the next one may run. }
   Started := Now;
+  Filter := ClickFilter(Unfiltered, Rate, Epoch, Front, Neighbours, Half,
+    Tuned);
   Chars := DropLeadArtifacts(
-    FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate));
+    FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate,
+      Filter));
   NotePace(AnalysisSeconds, (Now - Started) * SecsPerDay);
 
   { 上限まで溜まったら、末尾のガードを外してでも前へ進めます。
@@ -1107,21 +1336,24 @@ end;
 
 procedure TStreamingDecoder.Finish;
 var
-  Audio, Prepared: TSingleArray;
+  Audio, Prepared, Unfiltered: TSingleArray;
   Chars: TDecodedChars;
   Rate, I: Integer;
-  Epoch: Int64;
+  Epoch, Front: Int64;
+  Neighbours: TDoubleArray;
+  Half, Tuned: Double;
 begin
-  BeginAnalysis(Audio, Rate, Epoch);
+  BeginAnalysis(Audio, Rate, Epoch, Front);
   if Length(Audio) = 0 then
     Exit;
   if SquelchClosed(Audio, Rate) then
     Exit;
-  Prepared := PrepareForModel(Audio);
+  Prepared := PrepareForModel(Audio, Neighbours, Half, Tuned, Unfiltered);
   if Length(Prepared) = 0 then
     Exit;
   Chars := DropLeadArtifacts(
-    FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate));
+    FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate,
+      ClickFilter(Unfiltered, Rate, Epoch, Front, Neighbours, Half, Tuned)));
   for I := 0 to High(Chars) do
   begin
     Chars[I].Seconds := Chars[I].Seconds + FConfirmedSeconds;
@@ -1153,6 +1385,7 @@ begin
       FDroppedSeconds := FDroppedSeconds +
         (FPendingCount - Length(Audio)) / Rate;
     FConfirmedSeconds := FConfirmedSeconds + FPendingCount / Rate;
+    Inc(FFrontSample, FPendingCount);
     FPendingCount := 0;
   finally
     LeaveCriticalSection(FLock);
