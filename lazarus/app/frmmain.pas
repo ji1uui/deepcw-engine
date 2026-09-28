@@ -2407,12 +2407,12 @@ end;
 
 { 枠の高さを、中に置いた部品から決めます。**固定の高さは、画素密度が変わると
   足りなくなります。**枠の見出しと文字の高さは書体で決まり、画素密度に比例して
-  伸びないためです（付録 CJ）。部品は置いた場所に留め（`csAutoSizeKeepChild*`。
+  伸びないためです（付録 CK）。部品は置いた場所に留め（`csAutoSizeKeepChild*`。
   無いと LCL が左上へ寄せます）、最後の部品の下に `Margin` だけ空けます。
   Sizes a box's height from the controls put inside it. **A fixed height runs
   short when the pixel density changes**: the box's caption and the text take
   their height from the font, which does not grow in proportion to the density
-  (appendix CJ). The controls stay where they were put
+  (appendix CK). The controls stay where they were put
   (`csAutoSizeKeepChild*`; without it the LCL moves them to the top left), and
   `Margin` is left below the last one. }
 procedure FitToChildren(Group: TWinControl; Margin: Integer = 6);
@@ -4574,11 +4574,11 @@ begin
   RegisterCaption(RigGroup, @RsSetRigGroup);
   { 高さは中身から決めます（`FitToChildren`）。固定の 262 では 100 dpi の
     丸めで最後の行が 2 画素はみ出しました（付録 CH）。**固定の値を上げても、
-    行を足すたび・書体が変わるたびに同じことが起きます**（付録 CJ）。
+    行を足すたび・書体が変わるたびに同じことが起きます**（付録 CK）。
     The height comes from the contents (`FitToChildren`). At a fixed 262 the
     last row stuck out by two pixels after 100 dpi rounding (appendix CH).
     **Raising the fixed value only waits for the next added row or a different
-    font to do the same** (appendix CJ). }
+    font to do the same** (appendix CK). }
   FitToChildren(RigGroup);
   Stretch(RigGroup, alTop);
   AddLabel(RigGroup, @RsSetRigModel, 14, 10);
