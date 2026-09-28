@@ -245,6 +245,10 @@ type
       From here on only the analysis thread touches these (no lock). }
     FClicks: TTunedClickReplacer;
     FClickEpoch: Int64;
+    { 整形の控え（計画 6.1 の P4、付録 CJ）と、その世代。
+      The preparation kept (plan 6.1 P4, appendix CJ) and its generation. }
+    FShaper: TStreamShaper;
+    FShapeEpoch: Int64;
     FReplaceClicks: Boolean;
     FConfirmed: TDecodedChars;
     FProvisional: TDecodedChars;
@@ -295,15 +299,20 @@ type
       ない 1 本の音声に対してまとめて行います。
       Prepares audio for analysis: tuning, band limiting and rate conversion,
       all applied to one unbroken buffer. }
-    function PrepareForModel(const Source: TSingleArray;
+    function PrepareForModel(const Source: TSingleArray; Front, Epoch: Int64;
       out Neighbours: TDoubleArray; out Half, Tuned: Double;
-      out Unfiltered: TSingleArray): TSingleArray;
+      out Unfiltered: TSingleArray; out Lead: Double): TSingleArray;
+    { 復号した文字の時刻を、整形した音の先頭から溜めた音の先頭へ直します
+      （`Lead` は 1 標本未満。付録 CJ）。
+      Moves decoded character times from the start of the prepared audio to
+      the start of the buffer (`Lead`, under one sample; appendix CJ). }
+    function ShiftChars(const Chars: TDecodedChars; Lead: Double): TDecodedChars;
     { 隣の局があれば、クリックの置き換えの用意をして、復号器へ渡す口を
       返します（無ければ nil。付録 CI）。
       With neighbours present, readies click replacement and returns the hook
       to hand the decoder (nil with none; appendix CI). }
     function ClickFilter(const Unfiltered: TSingleArray; Rate: Integer;
-      Epoch, Front: Int64; const Neighbours: TDoubleArray;
+      Epoch, Front: Int64; Lead: Double; const Neighbours: TDoubleArray;
       Half, Tuned: Double): TSpectrogramFilter;
     procedure AppendConfirmed(const Chars: TDecodedChars);
     function StripSeamSpace(const Chars: TDecodedChars): TDecodedChars;
@@ -566,6 +575,8 @@ begin
   FSourceRate := ADecoder.Metadata.SampleRate;
   FClicks := TTunedClickReplacer.Create(ADecoder.Metadata);
   FClickEpoch := -1;
+  FShaper := TStreamShaper.Create;
+  FShapeEpoch := -1;
   FReplaceClicks := True;
   InitCriticalSection(FLock);
 end;
@@ -573,6 +584,7 @@ end;
 destructor TStreamingDecoder.Destroy;
 begin
   FClicks.Free;
+  FShaper.Free;
   DoneCriticalSection(FLock);
   inherited Destroy;
 end;
@@ -671,8 +683,8 @@ begin
 end;
 
 function TStreamingDecoder.PrepareForModel(const Source: TSingleArray;
-  out Neighbours: TDoubleArray; out Half, Tuned: Double;
-  out Unfiltered: TSingleArray): TSingleArray;
+  Front, Epoch: Int64; out Neighbours: TDoubleArray; out Half, Tuned: Double;
+  out Unfiltered: TSingleArray; out Lead: Double): TSingleArray;
 var
   Tune, Clock, AutoAt, AutoTune: Double;
   Width: TTunerBandwidth;
@@ -745,17 +757,43 @@ begin
   if Tune <= 0 then
     Neighbours := nil;
   Tuned := Tune;
-  { 整形そのものは DeepCW.Tuner が持ちます。ファイルからの復号と同じ 1 か所を
-    通すためです。
-    The preparation itself lives in DeepCW.Tuner, so that file decoding goes
-    through exactly the same place. }
-  Result := DeepCW.Tuner.PrepareForModelWidth(Source, Rate,
-    FDecoder.Metadata.SampleRate, Tune, Half, Limit, Unfiltered);
+  { 整形そのものは DeepCW.Tuner が持ちます。ファイルからの復号と同じ計算を、
+    新しく届いた音の分だけ行います（`TStreamShaper`。1 回だけなら
+    `PrepareForModelWidth` とビット単位で同じ。付録 CJ）。世代が変われば
+    （受信のやり直し・録音周波数の変更）控えは別の音のものです。
+    The preparation itself lives in DeepCW.Tuner: the same computation as file
+    decoding, done for newly arrived audio only (`TStreamShaper`; bit for bit
+    `PrepareForModelWidth` when called once; appendix CJ). A new generation
+    (reception restarted, capture rate changed) makes what is kept another
+    sound's. }
+  if Epoch <> FShapeEpoch then
+  begin
+    FShaper.Reset;
+    FShapeEpoch := Epoch;
+  end;
+  Result := FShaper.Shape(Source, Rate, FDecoder.Metadata.SampleRate, Front,
+    Tune, Half, Limit, Unfiltered, Lead);
+end;
+
+function TStreamingDecoder.ShiftChars(const Chars: TDecodedChars;
+  Lead: Double): TDecodedChars;
+var
+  I: Integer;
+begin
+  Result := Chars;
+  if Lead = 0 then
+    Exit;
+  Result := Copy(Chars);
+  for I := 0 to High(Result) do
+  begin
+    Result[I].Seconds := Result[I].Seconds + Lead;
+    Result[I].EndSeconds := Result[I].EndSeconds + Lead;
+  end;
 end;
 
 function TStreamingDecoder.ClickFilter(const Unfiltered: TSingleArray;
-  Rate: Integer; Epoch, Front: Int64; const Neighbours: TDoubleArray;
-  Half, Tuned: Double): TSpectrogramFilter;
+  Rate: Integer; Epoch, Front: Int64; Lead: Double;
+  const Neighbours: TDoubleArray; Half, Tuned: Double): TSpectrogramFilter;
 begin
   Result := nil;
   { 世代が変われば（受信のやり直し・録音周波数の変更）、控えた列の時刻は別の
@@ -769,8 +807,8 @@ begin
   end;
   if not FReplaceClicks then
     Exit;
-  Result := FClicks.Prepare(Unfiltered, Front / Max(1, Rate), Tuned, Half,
-    Neighbours);
+  Result := FClicks.Prepare(Unfiltered, Front / Max(1, Rate) + Lead, Tuned,
+    Half, Neighbours);
 end;
 
 function TStreamingDecoder.ClickFramesReplaced: Int64;
@@ -1194,7 +1232,7 @@ var
   Audio, Prepared, Unfiltered: TSingleArray;
   Chars, Committed: TDecodedChars;
   Rate, SplitIndex, I, Count: Integer;
-  AnalysisSeconds, SplitSeconds, Half, Tuned: Double;
+  AnalysisSeconds, SplitSeconds, Half, Tuned, Lead: Double;
   Forced: Boolean;
   Epoch, Front: Int64;
   Neighbours: TDoubleArray;
@@ -1228,7 +1266,8 @@ begin
   if SquelchClosed(Audio, Rate) then
     Exit;
 
-  Prepared := PrepareForModel(Audio, Neighbours, Half, Tuned, Unfiltered);
+  Prepared := PrepareForModel(Audio, Front, Epoch, Neighbours, Half, Tuned,
+    Unfiltered, Lead);
   if Length(Prepared) = 0 then
     Exit;
   { **解析の費用は、ここで測ります**（要件 FR-G.4）。測った値は、次にいつ
@@ -1236,11 +1275,11 @@ begin
     **The cost of an analysis is measured here** (requirement FR-G.4); what it
     measures decides when the next one may run. }
   Started := Now;
-  Filter := ClickFilter(Unfiltered, Rate, Epoch, Front, Neighbours, Half,
-    Tuned);
-  Chars := DropLeadArtifacts(
+  Filter := ClickFilter(Unfiltered, Rate, Epoch, Front, Lead, Neighbours,
+    Half, Tuned);
+  Chars := DropLeadArtifacts(ShiftChars(
     FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate,
-      Filter));
+      Filter), Lead));
   NotePace(AnalysisSeconds, (Now - Started) * SecsPerDay);
 
   { 上限まで溜まったら、末尾のガードを外してでも前へ進めます。
@@ -1341,19 +1380,21 @@ var
   Rate, I: Integer;
   Epoch, Front: Int64;
   Neighbours: TDoubleArray;
-  Half, Tuned: Double;
+  Half, Tuned, Lead: Double;
 begin
   BeginAnalysis(Audio, Rate, Epoch, Front);
   if Length(Audio) = 0 then
     Exit;
   if SquelchClosed(Audio, Rate) then
     Exit;
-  Prepared := PrepareForModel(Audio, Neighbours, Half, Tuned, Unfiltered);
+  Prepared := PrepareForModel(Audio, Front, Epoch, Neighbours, Half, Tuned,
+    Unfiltered, Lead);
   if Length(Prepared) = 0 then
     Exit;
-  Chars := DropLeadArtifacts(
+  Chars := DropLeadArtifacts(ShiftChars(
     FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate,
-      ClickFilter(Unfiltered, Rate, Epoch, Front, Neighbours, Half, Tuned)));
+      ClickFilter(Unfiltered, Rate, Epoch, Front, Lead, Neighbours, Half,
+        Tuned)), Lead));
   for I := 0 to High(Chars) do
   begin
     Chars[I].Seconds := Chars[I].Seconds + FConfirmedSeconds;

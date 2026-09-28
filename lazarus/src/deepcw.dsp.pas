@@ -136,6 +136,13 @@ function ReflectPad(const Samples: TSingleArray; Pad: Integer): TDoubleArray;
 function LowPassFilter(const Samples: TSingleArray; SampleRate: Integer;
   CutoffHz: Double; Taps: Integer = 63): TSingleArray;
 
+{ `LowPassFilter` の係数（奇数の長さ、総和 1）。流し込みの整形（`TStreamShaper`）
+  が同じ係数を使うために分けてあります。
+  The coefficients of `LowPassFilter` (odd length, summing to one), split out
+  so that streaming preparation (`TStreamShaper`) uses the very same ones. }
+function LowPassKernel(SampleRate: Integer; CutoffHz: Double;
+  Taps: Integer): TDoubleArray;
+
 implementation
 
 function IsPowerOfTwo(Value: Integer): Boolean;
@@ -269,7 +276,7 @@ function LowPassFilter(const Samples: TSingleArray; SampleRate: Integer;
 var
   Kernel: TDoubleArray;
   Half, I, J, Source: Integer;
-  Normalized, Sum, Accumulator, Argument: Double;
+  Accumulator: Double;
 begin
   Result := nil;
   if (Length(Samples) = 0) or (SampleRate <= 0) then
@@ -284,25 +291,7 @@ begin
   if Length(Samples) <= Taps then
     Exit(Samples);
 
-  Normalized := CutoffHz / SampleRate;
-  SetLength(Kernel, Taps);
-  Sum := 0;
-  for I := 0 to Taps - 1 do
-  begin
-    if I = Half then
-      Kernel[I] := 2 * Normalized
-    else
-    begin
-      Argument := 2 * Pi * Normalized * (I - Half);
-      Kernel[I] := Sin(Argument) / (Pi * (I - Half));
-    end;
-    { ハミング窓により阻止域を約 50 dB 下げます。
-       Hamming window keeps the stop band about 50 dB down. }
-    Kernel[I] := Kernel[I] * (0.54 - 0.46 * Cos(2 * Pi * I / (Taps - 1)));
-    Sum := Sum + Kernel[I];
-  end;
-  for I := 0 to Taps - 1 do
-    Kernel[I] := Kernel[I] / Sum;
+  Kernel := LowPassKernel(SampleRate, CutoffHz, Taps);
 
   SetLength(Result, Length(Samples));
   for I := 0 to High(Samples) do
@@ -317,6 +306,37 @@ begin
     end;
     Result[I] := Accumulator;
   end;
+end;
+
+function LowPassKernel(SampleRate: Integer; CutoffHz: Double;
+  Taps: Integer): TDoubleArray;
+var
+  Half, I: Integer;
+  Normalized, Sum, Argument: Double;
+begin
+  Result := nil;
+  if not Odd(Taps) then
+    Inc(Taps);
+  Half := Taps div 2;
+  Normalized := CutoffHz / SampleRate;
+  SetLength(Result, Taps);
+  Sum := 0;
+  for I := 0 to Taps - 1 do
+  begin
+    if I = Half then
+      Result[I] := 2 * Normalized
+    else
+    begin
+      Argument := 2 * Pi * Normalized * (I - Half);
+      Result[I] := Sin(Argument) / (Pi * (I - Half));
+    end;
+    { ハミング窓により阻止域を約 50 dB 下げます。
+       Hamming window keeps the stop band about 50 dB down. }
+    Result[I] := Result[I] * (0.54 - 0.46 * Cos(2 * Pi * I / (Taps - 1)));
+    Sum := Sum + Result[I];
+  end;
+  for I := 0 to Taps - 1 do
+    Result[I] := Result[I] / Sum;
 end;
 
 function WideBinFor(Hz: Double; SampleRate, FFTLength: Integer): Integer;

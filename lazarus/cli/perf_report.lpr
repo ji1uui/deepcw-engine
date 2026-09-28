@@ -532,6 +532,12 @@ begin
     MeasureStream('交信モード・同調・自動の幅・30 dB 強い隣が 250 Hz 横',
       CALLSIGN_TEXT, 7.0, ['--tune', '700', '--bandwidth', 'auto',
       '--neighbour', '950'], True);
+    { 整形は録音周波数で掛かるので、48000 Hz の録音で別に測ります（付録 CJ）。
+      Preparation runs at the capture rate, so a 48000 Hz capture is measured
+      on its own (appendix CJ). }
+    MeasureStream('交信モード・同調・自動の幅・録音 48000 Hz',
+      CALLSIGN_TEXT, 7.0, ['--tune', '700', '--bandwidth', 'auto',
+      '--rate', '48000'], True);
     MeasureScale;
     MeasureRecheckPace;
     MeasurePaint;

@@ -132,6 +132,17 @@ function FrequencyShift(const Samples: TSingleArray; SampleRate: Integer;
 function BandPassFilter(const Samples: TSingleArray; SampleRate: Integer;
   LowHz, HighHz: Double; Taps: Integer = TUNER_BANDPASS_TAPS): TSingleArray;
 
+{ `FrequencyShift` と `BandPassFilter` の係数（奇数の長さ）。流し込みの整形
+  （`TStreamShaper`）が同じ係数を使うために分けてあります。`BandPassKernel`
+  は、掛ける意味が無い（通過帯域が全体を覆う・利得が 0）とき空を返します。
+  The coefficients of `FrequencyShift` and `BandPassFilter` (odd length),
+  split out so that streaming preparation (`TStreamShaper`) uses the very same
+  ones. `BandPassKernel` returns empty when there is nothing to filter (the
+  passband covers everything, or the gain is zero). }
+function HilbertKernel(Taps: Integer): TDoubleArray;
+function BandPassKernel(SampleRate: Integer; LowHz, HighHz: Double;
+  Taps: Integer): TDoubleArray;
+
 { 選んだ帯域幅の片側の広さ（Hz）です。0 なら帯域制限を掛けません。
   Half-width in Hz for the chosen bandwidth; 0 means no extra filtering. }
 function BandwidthHalfWidth(Bandwidth: TTunerBandwidth): Double;
@@ -237,6 +248,82 @@ function PrepareForModelWidth(const Samples: TSingleArray;
   SourceRate, ModelRate: Integer; TuneHz, HalfWidthHz: Double;
   AntiAlias: Boolean; out Unfiltered: TSingleArray): TSingleArray; overload;
 
+
+type
+  { 流し込み受信の整形（`PrepareForModelWidth` と同じ計算）を、解析のたびに
+    溜めた音の全体でやり直さずに、**新しく届いた音の分だけ**行うものです
+    （計画 6.1 の P4、付録 CJ）。
+
+    解析は 0.2〜0.5 秒ごとに、未確定の音（最大 24 秒）全体を整形し直していた。
+    整形は録音周波数で掛かるので、48000 Hz では 20 秒ぶんで 600 ms を超え、
+    モデルの推論より重かった（付録 CJ.1）。
+
+    **同じ係数・同じ式**で、モデルの周波数の標本を**受信の始めからの番号**で
+    控えます。周波数変換の位相と標本化の格子も受信の始めから数えるので、先頭が
+    確定で動いても、控えた標本はそのまま使えます。値が決まるのは、フィルタの
+    右側の支えがそろった標本だけで、末尾の数十 ms は毎回求め直します
+    （付録 D.1 の「細切れに掛けない」: 継ぎ目に過渡を作らない）。
+
+    **`Front` を 0 にして 1 回だけ呼べば、`PrepareForModelWidth` とビット単位で
+    同じ結果になります**（`dsp_check` で確かめる）。整形の定義は 1 か所のまま
+    です。解析のスレッドだけから使います（排他なし）。
+
+    Streaming preparation (the same computation as `PrepareForModelWidth`)
+    done for **newly arrived audio only**, rather than over all the pending
+    audio at every analysis (plan 6.1 P4, appendix CJ). Analysis re-prepared up
+    to 24 s every 0.2-0.5 s; preparation runs at the capture rate, so at
+    48000 Hz 20 s of it took over 600 ms, more than the model's inference
+    (appendix CJ.1). With **the same coefficients and the same formulas**,
+    model-rate samples are kept **by their number since reception began**; the
+    frequency translation's phase and the resampling grid are counted from the
+    start of reception too, so the samples kept stay valid when the front moves
+    on a commit. Only samples whose filters have their full right-hand support
+    are final; the last few tens of ms are worked out again each time (the
+    "no piecemeal filtering" of appendix D.1: no transient at a seam). **Called
+    once with `Front` at 0 it gives bit for bit what `PrepareForModelWidth`
+    gives** (checked in `dsp_check`), so the preparation is still defined in
+    one place. Used from the analysis thread only (no lock). }
+  TStreamShaper = class
+  private
+    FRate, FModelRate: Integer;
+    FTune, FHalf: Double;
+    FAntiAlias, FConfigured: Boolean;
+    FHilbert, FLowPass, FBandPass: TDoubleArray;
+    FIncrement: Double;
+    { 控えたモデルの周波数の標本（受信の始めからの番号 `FUFirst` から）。
+      帯域制限の前（`FU`）と後（`FB`）。
+      Model-rate samples kept (from number `FUFirst` since reception began),
+      before (`FU`) and after (`FB`) the band limit. }
+    FUFirst, FBFirst: Int64;
+    FU, FB: TSingleArray;
+    FUCount, FBCount: Integer;
+    FComputed: Int64;
+    procedure Configure(Rate, ModelRate: Integer; TuneHz, HalfWidthHz: Double;
+      AntiAlias: Boolean);
+    procedure Keep(var Store: TSingleArray; var First: Int64; var Count: Integer;
+      From: Int64; const Values: TSingleArray; Offset, Taken: Integer);
+  public
+    { 控えを捨てます（受信のやり直し・録音周波数の変更）。/ Drops what is
+      kept (reception restarted, capture rate changed). }
+    procedure Reset;
+    { `Source` は、受信を始めてから `Front` 標本目から始まる音（録音周波数
+      `Rate`）。`PrepareForModelWidth` と同じものを返し、`Unfiltered` に帯域
+      制限前の音、`LeadSeconds` に返した音の先頭が `Source` の先頭より何秒
+      遅いか（標本化の格子を受信の始めから数えるため。1 標本未満）を入れます。
+      `Source` starts at sample `Front` since reception began (at `Rate`).
+      Returns what `PrepareForModelWidth` returns, with the audio before the
+      band limit in `Unfiltered` and in `LeadSeconds` how far (seconds) the
+      result starts after `Source` does (the resampling grid being counted
+      from the start of reception; under one sample). }
+    function Shape(const Source: TSingleArray; Rate, ModelRate: Integer;
+      Front: Int64; TuneHz, HalfWidthHz: Double; AntiAlias: Boolean;
+      out Unfiltered: TSingleArray; out LeadSeconds: Double): TSingleArray;
+    { 整形した（控えから出さなかった）モデルの周波数の標本の延べ数（試験と
+      測りのため）。/ Model-rate samples worked out (not taken from what was
+      kept) so far, for tests and measurement. }
+    property Computed: Int64 read FComputed;
+  end;
+
 { 交信モードの**自動の帯域**（片側、Hz。未解決の問いではなく付録 CC）。
 
   同じ音の中で局を検出し（`DetectStations`、多局受信と同じ）、同調先から
@@ -302,12 +389,85 @@ begin
   Result := (Hz >= LowestTunable(SampleRate)) and (Hz <= HighestTunable(SampleRate));
 end;
 
+function HilbertKernel(Taps: Integer): TDoubleArray;
+var
+  Half, I, M: Integer;
+  Window: Double;
+begin
+  Result := nil;
+  if not Odd(Taps) then
+    Inc(Taps);
+  Half := Taps div 2;
+  { ヒルベルト変換器の係数です。中心から奇数番目だけが値を持ちます。
+    Hilbert transformer coefficients; only odd offsets from the centre are
+    non-zero. }
+  SetLength(Result, Taps);
+  for I := 0 to Taps - 1 do
+  begin
+    M := I - Half;
+    if (M = 0) or (not Odd(M)) then
+      Result[I] := 0
+    else
+    begin
+      { ハミング窓で通過域のうねりを抑えます。
+        A Hamming window keeps the passband ripple down. }
+      Window := 0.54 - 0.46 * Cos(2 * Pi * I / (Taps - 1));
+      Result[I] := (2 / (Pi * M)) * Window;
+    end;
+  end;
+end;
+
+function BandPassKernel(SampleRate: Integer; LowHz, HighHz: Double;
+  Taps: Integer): TDoubleArray;
+var
+  Half, I: Integer;
+  EdgeLow, EdgeHigh, Centre, Gain, Window, Argument: Double;
+begin
+  Result := nil;
+  if SampleRate <= 0 then
+    Exit;
+  EdgeLow := Max(0, LowHz) / SampleRate;
+  EdgeHigh := Min(HighHz, SampleRate / 2) / SampleRate;
+  if (EdgeHigh <= EdgeLow) or ((EdgeLow <= 0) and (EdgeHigh >= 0.5)) then
+    Exit;
+  if not Odd(Taps) then
+    Inc(Taps);
+  Half := Taps div 2;
+
+  Centre := (EdgeLow + EdgeHigh) / 2;
+  SetLength(Result, Taps);
+  for I := 0 to Taps - 1 do
+  begin
+    if I = Half then
+      Result[I] := 2 * (EdgeHigh - EdgeLow)
+    else
+    begin
+      Argument := Pi * (I - Half);
+      Result[I] := (Sin(2 * EdgeHigh * Argument) - Sin(2 * EdgeLow * Argument)) / Argument;
+    end;
+    Window := 0.54 - 0.46 * Cos(2 * Pi * I / (Taps - 1));
+    Result[I] := Result[I] * Window;
+  end;
+
+  { 低域通過と違い係数の総和は 0 に近いため、通過帯域の中央での利得で
+    正規化します。
+    Unlike a low-pass the coefficients nearly sum to zero, so normalise by
+    the gain at the centre of the passband instead. }
+  Gain := 0;
+  for I := 0 to Taps - 1 do
+    Gain := Gain + Result[I] * Cos(2 * Pi * Centre * (I - Half));
+  if Abs(Gain) < 1E-12 then
+    Exit(nil);
+  for I := 0 to Taps - 1 do
+    Result[I] := Result[I] / Gain;
+end;
+
 function FrequencyShift(const Samples: TSingleArray; SampleRate: Integer;
   ShiftHz: Double; Taps: Integer): TSingleArray;
 var
   Kernel: TDoubleArray;
-  Half, I, J, Source, M, First: Integer;
-  Window, Quadrature, Angle, Increment, CosPart, SinPart: Double;
+  Half, I, J, Source, First: Integer;
+  Quadrature, Angle, Increment, CosPart, SinPart: Double;
 begin
   if (Length(Samples) = 0) or (SampleRate <= 0) then
     Exit(Samples);
@@ -321,23 +481,7 @@ begin
   if Length(Samples) <= Taps then
     Exit(Samples);
 
-  { ヒルベルト変換器の係数です。中心から奇数番目だけが値を持ちます。
-    Hilbert transformer coefficients; only odd offsets from the centre are
-    non-zero. }
-  SetLength(Kernel, Taps);
-  for I := 0 to Taps - 1 do
-  begin
-    M := I - Half;
-    if (M = 0) or (not Odd(M)) then
-      Kernel[I] := 0
-    else
-    begin
-      { ハミング窓で通過域のうねりを抑えます。
-        A Hamming window keeps the passband ripple down. }
-      Window := 0.54 - 0.46 * Cos(2 * Pi * I / (Taps - 1));
-      Kernel[I] := (2 / (Pi * M)) * Window;
-    end;
-  end;
+  Kernel := HilbertKernel(Taps);
 
   { 係数の半分は 0 なので、値のあるところだけを足します。畳み込みの手間が
     半分になります。
@@ -376,48 +520,18 @@ function BandPassFilter(const Samples: TSingleArray; SampleRate: Integer;
 var
   Kernel: TDoubleArray;
   Half, I, J, Source: Integer;
-  EdgeLow, EdgeHigh, Centre, Gain, Accumulator, Window, Argument: Double;
+  Accumulator: Double;
 begin
   if (Length(Samples) = 0) or (SampleRate <= 0) then
-    Exit(Samples);
-  EdgeLow := Max(0, LowHz) / SampleRate;
-  EdgeHigh := Min(HighHz, SampleRate / 2) / SampleRate;
-  { 通過帯域が録音全体を覆っているなら取り除くものはありません。
-    Nothing to remove once the passband covers everything. }
-  if (EdgeHigh <= EdgeLow) or ((EdgeLow <= 0) and (EdgeHigh >= 0.5)) then
     Exit(Samples);
   if not Odd(Taps) then
     Inc(Taps);
   Half := Taps div 2;
-  if Length(Samples) <= Taps then
+  Kernel := BandPassKernel(SampleRate, LowHz, HighHz, Taps);
+  { 通過帯域が録音全体を覆っているなら取り除くものはありません。
+    Nothing to remove once the passband covers everything. }
+  if (Length(Kernel) = 0) or (Length(Samples) <= Taps) then
     Exit(Samples);
-
-  Centre := (EdgeLow + EdgeHigh) / 2;
-  SetLength(Kernel, Taps);
-  for I := 0 to Taps - 1 do
-  begin
-    if I = Half then
-      Kernel[I] := 2 * (EdgeHigh - EdgeLow)
-    else
-    begin
-      Argument := Pi * (I - Half);
-      Kernel[I] := (Sin(2 * EdgeHigh * Argument) - Sin(2 * EdgeLow * Argument)) / Argument;
-    end;
-    Window := 0.54 - 0.46 * Cos(2 * Pi * I / (Taps - 1));
-    Kernel[I] := Kernel[I] * Window;
-  end;
-
-  { 低域通過と違い係数の総和は 0 に近いため、通過帯域の中央での利得で
-    正規化します。
-    Unlike a low-pass the coefficients nearly sum to zero, so normalise by
-    the gain at the centre of the passband instead. }
-  Gain := 0;
-  for I := 0 to Taps - 1 do
-    Gain := Gain + Kernel[I] * Cos(2 * Pi * Centre * (I - Half));
-  if Abs(Gain) < 1E-12 then
-    Exit(Samples);
-  for I := 0 to Taps - 1 do
-    Kernel[I] := Kernel[I] / Gain;
 
   SetLength(Result, Length(Samples));
   for I := 0 to High(Samples) do
@@ -521,6 +635,316 @@ begin
   Result := Abs(NewHz - CurrentHz) >= TUNER_STEP_HZ / 2;
   if not Result then
     NewHz := CurrentHz;
+end;
+
+
+{ TStreamShaper }
+
+procedure TStreamShaper.Reset;
+begin
+  FUFirst := 0;
+  FBFirst := 0;
+  FUCount := 0;
+  FBCount := 0;
+end;
+
+procedure TStreamShaper.Configure(Rate, ModelRate: Integer;
+  TuneHz, HalfWidthHz: Double; AntiAlias: Boolean);
+var
+  Shift, Half: Double;
+begin
+  if not FConfigured or (Rate <> FRate) or (ModelRate <> FModelRate) or
+     (TuneHz <> FTune) or (AntiAlias <> FAntiAlias) then
+  begin
+    FRate := Rate;
+    FModelRate := ModelRate;
+    FTune := TuneHz;
+    FAntiAlias := AntiAlias;
+    FHilbert := nil;
+    FLowPass := nil;
+    { `PrepareForModelWidth` と同じ条件で、同じ係数を用意します。
+      The same coefficients, under the same conditions, as
+      `PrepareForModelWidth`. }
+    Shift := TuneHz - TUNER_TARGET_TONE_HZ;
+    if (TuneHz > 0) and (Abs(Shift) >= TUNER_STEP_HZ / 2) then
+      FHilbert := HilbertKernel(TUNER_HILBERT_TAPS);
+    FIncrement := 2 * Pi * Shift / Rate;
+    if AntiAlias and (Rate > 2 * Round(TUNER_ANTI_ALIAS_CUTOFF_HZ)) and
+       (TUNER_ANTI_ALIAS_CUTOFF_HZ < Rate / 2) then
+      FLowPass := LowPassKernel(Rate, TUNER_ANTI_ALIAS_CUTOFF_HZ, 63);
+    FUCount := 0;
+    FBCount := 0;
+    FConfigured := True;
+    FHalf := -1;
+  end;
+  if HalfWidthHz <> FHalf then
+  begin
+    FHalf := HalfWidthHz;
+    FBandPass := nil;
+    Half := HalfWidthHz;
+    if (TuneHz > 0) and (Half > 0) then
+      FBandPass := BandPassKernel(ModelRate, TUNER_TARGET_TONE_HZ - Half,
+        TUNER_TARGET_TONE_HZ + Half, TUNER_BANDPASS_TAPS);
+    FBCount := 0;
+  end;
+end;
+
+procedure TStreamShaper.Keep(var Store: TSingleArray; var First: Int64;
+  var Count: Integer; From: Int64; const Values: TSingleArray;
+  Offset, Taken: Integer);
+var
+  I: Integer;
+begin
+  if Taken <= 0 then
+    Exit;
+  { 控えは連続していること。途切れたら捨てて始め直します。
+    What is kept must be contiguous; on a gap it is dropped and restarted. }
+  if (Count > 0) and (From <> First + Count) then
+    Count := 0;
+  if Count = 0 then
+    First := From;
+  if Count + Taken > Length(Store) then
+    SetLength(Store, Max(4096, Max(Count + Taken, Length(Store) * 2)));
+  for I := 0 to Taken - 1 do
+    Store[Count + I] := Values[Offset + I];
+  Inc(Count, Taken);
+end;
+
+function TStreamShaper.Shape(const Source: TSingleArray; Rate, ModelRate: Integer;
+  Front: Int64; TuneHz, HalfWidthHz: Double; AntiAlias: Boolean;
+  out Unfiltered: TSingleArray; out LeadSeconds: Double): TSingleArray;
+var
+  Len, Count, I, J, K, Left, Right, Top, HilbertHalf, LowHalf, BandHalf,
+    First_, KeepFrom, Needed, FinalU, FinalB, ZFrom, ZTo, S, Clamped: Integer;
+  MFront: Int64;
+  Position, Fraction, Quadrature, Accumulator, Angle: Double;
+  Z, Y: TSingleArray;
+  YDone: array of Boolean;
+  YFrom: Integer;
+
+  procedure AntiAliasAt(At: Integer);
+  var
+    Tap, From: Integer;
+    Sum: Double;
+  begin
+    if YDone[At - YFrom] then
+      Exit;
+    if LowHalf = 0 then
+      Y[At - YFrom] := Z[At - ZFrom]
+    else
+    begin
+      Sum := 0;
+      for Tap := 0 to Length(FLowPass) - 1 do
+      begin
+        From := At + Tap - LowHalf;
+        if From < 0 then
+          From := 0
+        else if From > Top then
+          From := Top;
+        Sum := Sum + FLowPass[Tap] * Z[From - ZFrom];
+      end;
+      Y[At - YFrom] := Sum;
+    end;
+    YDone[At - YFrom] := True;
+  end;
+
+begin
+  Unfiltered := nil;
+  Result := nil;
+  LeadSeconds := 0;
+  Len := Length(Source);
+  if (Len = 0) or (Rate <= 0) or (ModelRate <= 0) then
+  begin
+    Unfiltered := Source;
+    Exit(Source);
+  end;
+  Configure(Rate, ModelRate, TuneHz, HalfWidthHz, AntiAlias);
+
+  { 標本化の格子は受信の始めから数えます。`MFront` は `Front` 以後で最初の
+    格子の点。
+    The resampling grid counts from the start of reception; `MFront` is the
+    first grid point at or after `Front`. }
+  if Rate = ModelRate then
+    MFront := Front
+  else
+    MFront := (Front * ModelRate + Rate - 1) div Rate;
+  if Rate = ModelRate then
+    Count := Len
+  else
+    Count := Round(Int64(Len) * ModelRate / Rate);
+  LeadSeconds := (MFront * Rate / ModelRate - Front) / Rate;
+  if Count <= 0 then
+  begin
+    Unfiltered := nil;
+    Exit(nil);
+  end;
+
+  { 使えるのは、`PrepareForModelWidth` がそのフィルタを掛ける長さのときだけ。
+    短い音は控えずに 1 回ぶん求めます（流し込みでは起きない）。
+    Only lengths at which `PrepareForModelWidth` applies each filter; a
+    shorter clip is worked out once, without keeping (never in streaming). }
+  HilbertHalf := 0;
+  if (Length(FHilbert) > 0) and (Len > TUNER_HILBERT_TAPS) then
+    HilbertHalf := Length(FHilbert) div 2;
+  LowHalf := 0;
+  if (Length(FLowPass) > 0) and (Len > Length(FLowPass)) then
+    LowHalf := Length(FLowPass) div 2;
+  BandHalf := 0;
+  if (Length(FBandPass) > 0) and (Count > TUNER_BANDPASS_TAPS) then
+    BandHalf := Length(FBandPass) div 2;
+  Top := Len - 1;
+
+  { 控えの先頭を今の音の先頭にそろえます。/ The store is trimmed to the
+    start of the current audio. }
+  if (FUCount > 0) and (FUFirst < MFront) then
+  begin
+    K := Min(FUCount, Integer(MFront - FUFirst));
+    FU := Copy(FU, K, FUCount - K);
+    Dec(FUCount, K);
+    Inc(FUFirst, K);
+  end;
+  if (FBCount > 0) and (FBFirst < MFront) then
+  begin
+    K := Min(FBCount, Integer(MFront - FBFirst));
+    FB := Copy(FB, K, FBCount - K);
+    Dec(FBCount, K);
+    Inc(FBFirst, K);
+  end;
+  if (FUCount > 0) and (FUFirst > MFront) then
+    FUCount := 0;
+  if (FBCount > 0) and (FBFirst > MFront) then
+    FBCount := 0;
+
+  { 帯域制限の前（標本化の変換まで）。/ Up to the rate conversion. }
+  SetLength(Unfiltered, Count);
+  First_ := 0;
+  if FUCount > 0 then
+  begin
+    First_ := Min(Count, FUCount);
+    for I := 0 to First_ - 1 do
+      Unfiltered[I] := FU[I];
+  end;
+  if First_ < Count then
+  begin
+    { 必要な録音周波数の範囲。折り返し防止は `YFrom` から、周波数変換は
+      その左の支えの分だけ手前（`ZFrom`）から求めます。
+      The capture-rate span needed: the anti-alias from `YFrom`, the
+      frequency translation from its left-hand support earlier (`ZFrom`). }
+    if Rate = ModelRate then
+      YFrom := First_
+    else
+      YFrom := Min(Top, Trunc((MFront + First_) * Rate / ModelRate - Front));
+    ZFrom := Max(0, YFrom - LowHalf);
+    ZTo := Top;
+    SetLength(Z, ZTo - ZFrom + 1);
+    SetLength(Y, ZTo - YFrom + 1);
+    SetLength(YDone, ZTo - YFrom + 1);
+    for S := 0 to High(YDone) do
+      YDone[S] := False;
+    { 周波数変換（`FrequencyShift` と同じ式。位相は受信の始めから）。
+      Frequency translation (as `FrequencyShift`; phase from the start of
+      reception). }
+    for S := ZFrom to ZTo do
+    begin
+      if HilbertHalf = 0 then
+        Z[S - ZFrom] := Source[S]
+      else
+      begin
+        Quadrature := 0;
+        J := 0;
+        while not Odd(J - HilbertHalf) do
+          Inc(J);
+        while J < Length(FHilbert) do
+        begin
+          Clamped := S - (J - HilbertHalf);
+          if Clamped < 0 then
+            Clamped := 0
+          else if Clamped > Top then
+            Clamped := Top;
+          Quadrature := Quadrature + FHilbert[J] * Source[Clamped];
+          Inc(J, 2);
+        end;
+        Angle := FIncrement * (Front + S);
+        Z[S - ZFrom] := Source[S] * Cos(Angle) + Quadrature * Sin(Angle);
+      end;
+    end;
+    for I := First_ to Count - 1 do
+    begin
+      if Rate = ModelRate then
+      begin
+        Left := I;
+        Right := I;
+        Fraction := 0;
+      end
+      else
+      begin
+        Position := (MFront + I) * Rate / ModelRate - Front;
+        Left := Trunc(Position);
+        if Left > Top then
+          Left := Top;
+        Right := Min(Left + 1, Top);
+        Fraction := Position - Left;
+      end;
+      { 折り返し防止（`LowPassFilter` と同じ式）。要る標本だけ求めます。
+        Anti-alias (as `LowPassFilter`), only at the samples needed. }
+      AntiAliasAt(Left);
+      AntiAliasAt(Right);
+      if Rate = ModelRate then
+        Unfiltered[I] := Y[Left - YFrom]
+      else
+        Unfiltered[I] := Y[Left - YFrom] * (1 - Fraction) +
+          Y[Right - YFrom] * Fraction;
+      Inc(FComputed);
+    end;
+    { 右側の支えがそろった標本だけを控えます。/ Only samples with their full
+      right-hand support are kept. }
+    Needed := HilbertHalf + LowHalf + 1;
+    FinalU := First_;
+    while FinalU < Count do
+    begin
+      Position := (MFront + FinalU) * Rate / ModelRate - Front;
+      if Trunc(Position) + 1 + Needed > Top then
+        Break;
+      Inc(FinalU);
+    end;
+    KeepFrom := First_;
+    Keep(FU, FUFirst, FUCount, MFront + KeepFrom, Unfiltered, KeepFrom,
+      FinalU - KeepFrom);
+  end;
+
+  { 帯域制限（`BandPassFilter` と同じ式）。/ The band limit (as
+    `BandPassFilter`). }
+  if BandHalf = 0 then
+    Exit(Unfiltered);
+  SetLength(Result, Count);
+  First_ := 0;
+  if FBCount > 0 then
+  begin
+    First_ := Min(Count, FBCount);
+    for I := 0 to First_ - 1 do
+      Result[I] := FB[I];
+  end;
+  for I := First_ to Count - 1 do
+  begin
+    Accumulator := 0;
+    for J := 0 to Length(FBandPass) - 1 do
+    begin
+      Clamped := I + J - BandHalf;
+      if Clamped < 0 then
+        Clamped := 0
+      else if Clamped > Count - 1 then
+        Clamped := Count - 1;
+      Accumulator := Accumulator + FBandPass[J] * Unfiltered[Clamped];
+    end;
+    Result[I] := Accumulator;
+  end;
+  { 使った帯域制限前の標本がすべて決まっていて、右端で折り返していないもの
+    だけを控えます。/ Only samples whose inputs are all final, with no
+    clamping at the right end, are kept. }
+  FinalB := Min(Count, FUCount - BandHalf);
+  if FinalB > First_ then
+    Keep(FB, FBFirst, FBCount, MFront + First_, Result, First_,
+      FinalB - First_);
 end;
 
 function PrepareForModel(const Samples: TSingleArray; SourceRate, ModelRate: Integer;

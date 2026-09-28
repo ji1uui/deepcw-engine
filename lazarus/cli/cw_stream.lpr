@@ -49,6 +49,12 @@ var
     Neighbours' clicks are not replaced (to measure what replacing costs;
     appendix CI). }
   KeepClicks: Boolean = False;
+  { 本文から作る音の録音周波数（`--rate`）。整形の費用は録音周波数で変わる
+    （48000 Hz で重い。付録 CJ.1）ので測れるようにしてあります。
+    The capture rate of audio synthesised from text (`--rate`). The cost of
+    preparation depends on it (heavy at 48000 Hz; appendix CJ.1), so it can
+    be measured. }
+  SynthRate: Integer = 8000;
   Check: Boolean = False;
   Failed: Boolean = False;
   SourceText: string = '';
@@ -144,6 +150,7 @@ begin
       '--max-provisional': MaxPending := StrToFloatDef(Value, TARGET_PENDING_SECONDS);
       '--max-confirmed': MaxConfirm := StrToFloatDef(Value, TARGET_CONFIRM_SECONDS);
       '--tune': TuneHz := StrToFloatDef(Value, 0);
+      '--rate': SynthRate := StrToIntDef(Value, 8000);
       '--neighbour': NeighbourHz := StrToFloatDef(Value, 0);
       '--bandwidth':
         case Value of
@@ -172,7 +179,7 @@ begin
       '[--chunk seconds] [--quiet] [--no-antialias] ' +
       '[--check] [--max-provisional s] [--max-confirmed s] ' +
       '[--tune Hz] [--bandwidth auto|narrow|normal|wide] [--neighbour Hz] ' +
-      '[--keep-clicks]');
+      '[--keep-clicks] [--rate Hz]');
     Halt(2);
   end;
   if (NeighbourHz > 0) and (SourceText = '') then
@@ -203,7 +210,7 @@ begin
             Synthesising from text lets the regression run carry no audio
             fixtures. **Latency depends on how long the words are**
             (appendix C.5), so a test has to name the text it measures. }
-          SampleRate := 8000;
+          SampleRate := SynthRate;
           Timing := DefaultTiming;
           Timing.CharWpm := 22;
           Timing.TextWpm := 22;

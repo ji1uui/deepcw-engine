@@ -1756,6 +1756,131 @@ begin
     Format('(%d 局)', [Length(Neighbours)]));
 end;
 
+
+{ 流し込みの整形を、新しく届いた音の分だけ行うこと（計画 6.1 の P4、付録 CJ）。
+
+  **1 回だけ呼べば `PrepareForModelWidth` とビット単位で同じ**（整形の定義が
+  2 つにならない）。少しずつ届く音で、先頭が確定で動いても、**音の端から離れた
+  標本は、受信全体をまとめて整形したものと同じ値**で、整形した標本の延べ数は
+  全体の数とほぼ同じ（毎回全体をやり直していたときは 10 倍を超えた）。
+
+  Streaming preparation is done for newly arrived audio only (plan 6.1 P4,
+  appendix CJ). **Called once it equals `PrepareForModelWidth` bit for bit**
+  (so preparation is not defined twice). Fed a little at a time with the
+  front moving on commits, **samples away from the ends of the audio equal
+  those of preparing the whole reception at once**, and the samples prepared
+  add up to about the whole count (over ten times that when all was redone
+  every time). }
+procedure TestStreamShaper;
+const
+  RATES: array[0..2] of Integer = (8000, 44100, 48000);
+  TUNES: array[0..2] of Double = (0, 700, 1250);
+  HALVES: array[0..1] of Double = (0, 125);
+var
+  Audio, Whole, WholeU, Got, GotU: TSingleArray;
+  Shaper: TStreamShaper;
+  RI, TI, HI, I, Rate, Cases, Differ, Len, Step, K, Compared, Mismatch: Integer;
+  Front, First: Int64;
+  Lead: Double;
+  Ratio: Double;
+
+  function Signal(Rate, Samples: Integer; Hz: Double; Seed: Integer): TSingleArray;
+  var
+    J: Integer;
+  begin
+    Result := nil;
+    SetLength(Result, Samples);
+    RandSeed := Seed;
+    for J := 0 to Samples - 1 do
+      Result[J] := 0.4 * Sin(2 * Pi * Hz * J / Rate) + 0.1 * (Random - 0.5);
+  end;
+
+begin
+  WriteLn;
+  WriteLn('流し込みの整形は新しい音の分だけ（計画 6.1 の P4、付録 CJ）');
+  Cases := 0;
+  Differ := 0;
+  for RI := 0 to High(RATES) do
+    for TI := 0 to High(TUNES) do
+      for HI := 0 to High(HALVES) do
+      begin
+        Rate := RATES[RI];
+        Audio := Signal(Rate, Rate * 2, TUNES[TI] + 3, 7600 + RI * 10 + TI);
+        Whole := PrepareForModelWidth(Audio, Rate, Meta.SampleRate, TUNES[TI],
+          HALVES[HI], True, WholeU);
+        Shaper := TStreamShaper.Create;
+        try
+          Got := Shaper.Shape(Audio, Rate, Meta.SampleRate, 0, TUNES[TI],
+            HALVES[HI], True, GotU, Lead);
+        finally
+          Shaper.Free;
+        end;
+        Inc(Cases);
+        if (Length(Got) <> Length(Whole)) or (Length(GotU) <> Length(WholeU)) or
+           (Lead <> 0) or
+           ((Length(Got) > 0) and not CompareMem(@Got[0], @Whole[0], Length(Got) * 4)) or
+           ((Length(GotU) > 0) and not CompareMem(@GotU[0], @WholeU[0], Length(GotU) * 4)) then
+          Inc(Differ);
+      end;
+  Check('1 回だけなら PrepareForModelWidth とビット単位で同じ', Differ = 0,
+    Format('(%d 通りのうち %d 通り違う)', [Cases, Differ]));
+
+  { 少しずつ届く音。0.2 秒ずつ足し、3 秒を超えたら先頭の約 1.37 秒を確定として
+    捨てる。/ Audio arriving 0.2 s at a time; past 3 s, about the first 1.37 s
+    goes as a commit. }
+  for RI := 0 to High(RATES) do
+  begin
+    Rate := RATES[RI];
+    Audio := Signal(Rate, Rate * 20, 703, 7700 + RI);
+    Whole := PrepareForModelWidth(Audio, Rate, Meta.SampleRate, 700, 125, True,
+      WholeU);
+    Shaper := TStreamShaper.Create;
+    try
+      Front := 0;
+      Len := 0;
+      Step := Rate div 5;
+      Compared := 0;
+      Mismatch := 0;
+      while Front + Len < Length(Audio) do
+      begin
+        Len := Min(Length(Audio) - Integer(Front), Len + Step);
+        Got := Shaper.Shape(Copy(Audio, Front, Len), Rate, Meta.SampleRate,
+          Front, 700, 125, True, GotU, Lead);
+        First := Round((Front / Rate + Lead) * Meta.SampleRate);
+        { 両端 0.1 秒と受信の始めの 0.1 秒は比べない（端は折り返しで違う）。
+          The 0.1 s at either end, and at the start of reception, are not
+          compared (the ends differ by clamping). }
+        for K := Meta.SampleRate div 10 to High(Got) - Meta.SampleRate div 10 do
+          if First + K >= Meta.SampleRate div 10 then
+          begin
+            Inc(Compared);
+            if Got[K] <> Whole[First + K] then
+              Inc(Mismatch);
+          end;
+        if Len > 3 * Rate then
+        begin
+          { 周波数変換の周期（8000 Hz で 80 標本）の倍数にならない長さ。倍数だと
+            位相の数え方を誤っても一致してしまう（確かめた）。
+            A length that is no multiple of the translation's period (80
+            samples at 8000 Hz); on a multiple, a wrong phase origin still
+            matches (checked). }
+          K := Round(1.37 * Rate) + RI + 7;
+          Inc(Front, K);
+          Dec(Len, K);
+        end;
+      end;
+      Ratio := Shaper.Computed / Max(1, Length(WholeU));
+      Check(Format('%d Hz: 少しずつ整形しても、まとめて整形した値と同じ', [Rate]),
+        (Compared > 0) and (Mismatch = 0),
+        Format('(%d 標本のうち %d 違う)', [Compared, Mismatch]));
+      Check(Format('%d Hz: 整形した標本の延べ数は全体の 1.2 倍以内', [Rate]),
+        Ratio <= 1.2, Format('(%.2f 倍)', [Ratio]));
+    finally
+      Shaper.Free;
+    end;
+  end;
+end;
+
 { 交信モードのクリックの列を、1 コマ 1 度だけ求めて控えること（付録 CI）。
 
   解析のたびに未確定の音全体の列を求め直すと重いので、コマを受信の始めからの
@@ -5851,6 +5976,7 @@ begin
     TestMonitorAudio;
     TestAutoHalfWidth;
     TestClickColumnCache;
+    TestStreamShaper;
     TestPacing;
     TestHistogram;
     TestReferences;
