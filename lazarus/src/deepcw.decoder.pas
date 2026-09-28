@@ -64,6 +64,16 @@ type
   end;
   TDecodedChars = array of TDecodedChar;
 
+  { 復号器へ渡す直前の絵に手を入れる口です（付録 CI）。`StartSeconds` はその絵の
+    先頭が、渡した音のどこに当たるか（秒）。変えるのは復号器へ渡す写しだけで、
+    `LastSpectrogram` は元の絵のままです（Raw Observation を残す）。
+    A hook on the picture just before it reaches the model (appendix CI).
+    `StartSeconds` is where the picture begins in the audio passed (seconds).
+    Only the copy for the model changes; `LastSpectrogram` stays the picture as
+    computed (the raw observation stays). }
+  TSpectrogramFilter = procedure(var Spectrogram: TSpectrogram;
+    StartSeconds: Double) of object;
+
   TDeepCWDecoder = class
   private
     FMetadata: TDeepCWMetadata;
@@ -72,7 +82,8 @@ type
     FLastSeconds: Double;
     function GreedyCtcDecode(const LogProbs: TOnnxFloatTensor;
       DurationSeconds: Double): TDecodedChars;
-    function RunWindow(const Audio: TSingleArray): TDecodedChars;
+    function RunWindow(const Audio: TSingleArray; StartSeconds: Double = 0;
+      Filter: TSpectrogramFilter = nil): TDecodedChars;
   public
     constructor Create(const ModelPath, MetadataPath: string; IntraOpThreads: Integer = 1);
     destructor Destroy; override;
@@ -100,9 +111,13 @@ type
       録音全体の先頭からの秒数です。
 
       As DecodeLongSamples, but also returns each character's time and
-      confidence. Times are seconds from the start of the whole recording. }
+      confidence. Times are seconds from the start of the whole recording.
+
+      `Filter` があれば、窓ごとの絵をモデルへ渡す前に呼びます（付録 CI）。
+      With `Filter`, it is called on each window's picture before the model
+      sees it (appendix CI). }
     function DecodeLongSamplesTimed(const Samples: TSingleArray;
-      SourceRate: Integer): TDecodedChars;
+      SourceRate: Integer; Filter: TSpectrogramFilter = nil): TDecodedChars;
 
     { 用意済みのスペクトログラムを復号します。広帯域の変換から切り出した 1 局分
       を、音声へ戻さずにそのまま渡すための入口です（要件 FR-I）。
@@ -289,10 +304,12 @@ begin
   Result := GreedyCtcDecode(Output, DurationSeconds);
 end;
 
-function TDeepCWDecoder.RunWindow(const Audio: TSingleArray): TDecodedChars;
+function TDeepCWDecoder.RunWindow(const Audio: TSingleArray;
+  StartSeconds: Double; Filter: TSpectrogramFilter): TDecodedChars;
 var
   Seconds: Double;
   Output: TOnnxFloatTensor;
+  Picture: TSpectrogram;
 begin
   Seconds := Length(Audio) / FMetadata.SampleRate;
   FLastSeconds := Seconds;
@@ -302,9 +319,17 @@ begin
       [DEEPCW_MIN_SECONDS, DEEPCW_MAX_SECONDS, FMetadata.SampleRate, Seconds]);
 
   FLastSpectrogram := ComputeSpectrogram(Audio, FMetadata);
-  Output := FSession.RunFloat(FMetadata.InputName, FLastSpectrogram.Data,
-    [Int64(1), Int64(FMetadata.ChannelCount), Int64(FLastSpectrogram.Frames),
-     Int64(FLastSpectrogram.Bins)], FMetadata.OutputName);
+  Picture := FLastSpectrogram;
+  if Assigned(Filter) then
+  begin
+    { 動的配列は代入では写されないので、明示して写します。
+      A dynamic array is shared on assignment, so it is copied explicitly. }
+    Picture.Data := Copy(FLastSpectrogram.Data);
+    Filter(Picture, StartSeconds);
+  end;
+  Output := FSession.RunFloat(FMetadata.InputName, Picture.Data,
+    [Int64(1), Int64(FMetadata.ChannelCount), Int64(Picture.Frames),
+     Int64(Picture.Bins)], FMetadata.OutputName);
   Result := GreedyCtcDecode(Output, Seconds);
 end;
 
@@ -326,7 +351,7 @@ begin
 end;
 
 function TDeepCWDecoder.DecodeLongSamplesTimed(const Samples: TSingleArray;
-  SourceRate: Integer): TDecodedChars;
+  SourceRate: Integer; Filter: TSpectrogramFilter): TDecodedChars;
 var
   Audio, Window: TSingleArray;
   Chars: TDecodedChars;
@@ -358,7 +383,7 @@ begin
 
   if Total <= Round(DEEPCW_MAX_SECONDS * Rate) then
   begin
-    Result := RunWindow(Audio);
+    Result := RunWindow(Audio, 0, Filter);
     FLastSeconds := TotalSeconds;
     Exit;
   end;
@@ -378,7 +403,7 @@ begin
     StopSeconds := Stop / Rate;
 
     Window := Copy(Audio, Start, Stop - Start);
-    Chars := RunWindow(Window);
+    Chars := RunWindow(Window, StartSeconds, Filter);
 
     { 端に生じる誤りを取り除きます。ただし録音全体の先頭と末尾は、補う窓が
       存在しないためそのまま残します。

@@ -223,7 +223,19 @@ const
   pass the automatic width (`AutoHalfWidth`) (appendix CC). }
 function PrepareForModelWidth(const Samples: TSingleArray;
   SourceRate, ModelRate: Integer; TuneHz, HalfWidthHz: Double;
-  AntiAlias: Boolean): TSingleArray;
+  AntiAlias: Boolean): TSingleArray; overload;
+
+{ 同じ整形で、帯域制限を掛ける**前**の音（同調点を 800 Hz へ動かし、モデルの
+  周波数へ変換したもの）も返します。隣の局のクリックを見るのに使います
+  （絞ったあとの音には隣の局が写らないため。付録 CI）。同調していなければ
+  `Unfiltered` は戻り値と同じです。
+  The same preparation, also returning the audio **before** the band limit
+  (the tuned pitch moved to 800 Hz, at the model's rate), used to look at the
+  neighbours' clicks (the narrowed audio no longer shows them; appendix CI).
+  Untuned, `Unfiltered` is the same as the result. }
+function PrepareForModelWidth(const Samples: TSingleArray;
+  SourceRate, ModelRate: Integer; TuneHz, HalfWidthHz: Double;
+  AntiAlias: Boolean; out Unfiltered: TSingleArray): TSingleArray; overload;
 
 { 交信モードの**自動の帯域**（片側、Hz。未解決の問いではなく付録 CC）。
 
@@ -248,7 +260,25 @@ function PrepareForModelWidth(const Samples: TSingleArray;
   +/-125 Hz, read the tuned one), and 400 Hz away its key clicks were read as
   dots after the tuned station stopped. }
 function AutoHalfWidth(const Samples: TSingleArray; SampleRate: Integer;
-  TuneHz: Double; Meta: TDeepCWMetadata): Double;
+  TuneHz: Double; Meta: TDeepCWMetadata): Double; overload;
+
+const
+  { 隣の局として返す数の上限（近い順）。クリックの置き換え（付録 CI）で
+    1 局ごとに列を 1 本求めるので、混んだ帯域で費用が膨らまないように。
+    The most neighbours returned (nearest first). Click replacement
+    (appendix CI) works out one column per neighbour, so a crowded band must
+    not make it grow without bound. }
+  TUNER_MAX_NEIGHBOURS = 8;
+
+{ 同じものに、見つけた隣の局の音程（Hz、近い順、`TUNER_MAX_NEIGHBOURS` まで）を
+  添えます。交信モードでクリックを置き換えるときに、解析のたびに局を探さずに
+  使い回すためです（付録 CI）。
+  The same, adding the pitches of the neighbours found (Hz, nearest first, at
+  most `TUNER_MAX_NEIGHBOURS`), so that contact mode's click replacement can
+  reuse them instead of detecting at every analysis (appendix CI). }
+function AutoHalfWidth(const Samples: TSingleArray; SampleRate: Integer;
+  TuneHz: Double; Meta: TDeepCWMetadata;
+  out Neighbours: TDoubleArray): Double; overload;
 
 implementation
 
@@ -503,11 +533,20 @@ end;
 function AutoHalfWidth(const Samples: TSingleArray; SampleRate: Integer;
   TuneHz: Double; Meta: TDeepCWMetadata): Double;
 var
-  WideRate, I: Integer;
+  Neighbours: TDoubleArray;
+begin
+  Result := AutoHalfWidth(Samples, SampleRate, TuneHz, Meta, Neighbours);
+end;
+
+function AutoHalfWidth(const Samples: TSingleArray; SampleRate: Integer;
+  TuneHz: Double; Meta: TDeepCWMetadata; out Neighbours: TDoubleArray): Double;
+var
+  WideRate, I, J, Count: Integer;
   Wide: TSpectrogram;
   Found: TStations;
   Distance, Nearest: Double;
 begin
+  Neighbours := nil;
   Result := BandwidthHalfWidth(tbAuto);
   if (TuneHz <= 0) or (SampleRate <= 0) or (Meta = nil) or
      (Length(Samples) = 0) then
@@ -536,7 +575,19 @@ begin
       Continue;
     if Distance < Nearest then
       Nearest := Distance;
+    { 近い順に差し込みます（数は小さい）。/ Inserted nearest first (few). }
+    Count := Length(Neighbours);
+    SetLength(Neighbours, Count + 1);
+    J := Count;
+    while (J > 0) and (Abs(Neighbours[J - 1] - TuneHz) > Distance) do
+    begin
+      Neighbours[J] := Neighbours[J - 1];
+      Dec(J);
+    end;
+    Neighbours[J] := Found[I].Hz;
   end;
+  if Length(Neighbours) > TUNER_MAX_NEIGHBOURS then
+    SetLength(Neighbours, TUNER_MAX_NEIGHBOURS);
   if Nearest / 2 < Result then
     Result := Max(DETECT_MIN_HALF_WIDTH_HZ, Nearest / 2);
 end;
@@ -545,9 +596,20 @@ function PrepareForModelWidth(const Samples: TSingleArray;
   SourceRate, ModelRate: Integer; TuneHz, HalfWidthHz: Double;
   AntiAlias: Boolean): TSingleArray;
 var
+  Unfiltered: TSingleArray;
+begin
+  Result := PrepareForModelWidth(Samples, SourceRate, ModelRate, TuneHz,
+    HalfWidthHz, AntiAlias, Unfiltered);
+end;
+
+function PrepareForModelWidth(const Samples: TSingleArray;
+  SourceRate, ModelRate: Integer; TuneHz, HalfWidthHz: Double;
+  AntiAlias: Boolean; out Unfiltered: TSingleArray): TSingleArray;
+var
   Half: Double;
 begin
   Result := Samples;
+  Unfiltered := Result;
   if (Length(Result) = 0) or (SourceRate <= 0) or (ModelRate <= 0) then
     Exit;
 
@@ -564,6 +626,7 @@ begin
   if AntiAlias and (SourceRate > 2 * Round(TUNER_ANTI_ALIAS_CUTOFF_HZ)) then
     Result := LowPassFilter(Result, SourceRate, TUNER_ANTI_ALIAS_CUTOFF_HZ);
   Result := ResampleLinear(Result, SourceRate, ModelRate);
+  Unfiltered := Result;
 
   { 同調している音程の周りだけを残します。運用者がどの信号を読みたいのかを
     告げてくれた場合にだけ掛けられる絞り込みです（要件 FR-D.3）。

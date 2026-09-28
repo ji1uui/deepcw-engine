@@ -299,6 +299,147 @@ function SuppressNeighbourClicks(var Slice: TSpectrogram;
   const Wide: TSpectrogram; WideRate: Integer; const Stations: array of Double;
   Own: Integer; HalfWidthHz: Double): Integer;
 
+type
+  { `SuppressNeighbourClicks` が見る列（コマごとの振幅、窓 80 ms・15 ms おき）。
+    `Own` はその局の音程、`Side` はその両脇 ±4〜8 ビン（±50〜100 Hz）の平均、
+    `Neighbours` は隣の局それぞれの音程。どれも同じコマ数で、絵（`Slice`）の
+    コマと時刻が揃っていること。
+    The columns `SuppressNeighbourClicks` looks at (magnitude per frame, 80 ms
+    window every 15 ms): `Own` at the station's pitch, `Side` the mean of the
+    bins 4-8 either side (+/-50-100 Hz), `Neighbours` one per neighbour. All
+    have the same number of frames, lined up in time with the picture
+    (`Slice`). }
+  TClickColumns = record
+    Own: TDoubleArray;
+    Side: TDoubleArray;
+    Neighbours: array of TDoubleArray;
+  end;
+
+{ `SuppressNeighbourClicks` の中身を、列で受け取る形です。交信モード（1 局を
+  聴く）は広い絵を作らないので、列を音から直に求めて渡します（付録 CI）。
+  `BinHz` は `Slice` の 1 ビンの幅。
+  The body of `SuppressNeighbourClicks`, taking the columns: contact mode
+  (listening to one station) builds no wide picture, so it works the columns
+  out from the audio directly and passes them (appendix CI). `BinHz` is the
+  width of one bin of `Slice`. }
+function SuppressClicksFromColumns(var Slice: TSpectrogram;
+  const Columns: TClickColumns; HalfWidthHz, BinHz: Double): Integer;
+
+const
+  { 交信モードで「その局の音」のビンを探す幅（同調点の両側のビン数、1 ビン
+    12.5 Hz。±50 Hz は信号追跡の探す幅 `TUNER_TRACK_WINDOW_HZ` と同じ）。
+    利用者が合わせた点は局の音程からずれうるので、窓ごとに、この中で最も
+    尖り続けるビンを選びます（同調点を優先。付録 CI.2）。
+    How many bins either side of the tuned pitch contact mode searches for the
+    station's tone (12.5 Hz a bin; +/-50 Hz, the tracking search
+    `TUNER_TRACK_WINDOW_HZ`). The pitch the operator set can be off the
+    station's, so per window the bin that stays most peaked in this range is
+    chosen (the tuned one preferred; appendix CI.2). }
+  CLICK_OWN_SPAN_BINS = 4;
+  { これより近い隣の局は、クリックの置き換えに使いません。強い局の定常の漏れ
+    （窓の側波）が両脇のビン（±50〜100 Hz）に届き、その局の音があっても
+    「音が無い」と判じて、その局の符号を消したため（150 Hz 横で 0.00 → 0.11、
+    付録 CI.2）。
+    Neighbours nearer than this are not used for click replacement: a strong
+    station's steady leakage (window sidelobes) reaches the side bins
+    (+/-50-100 Hz), so the station's own tone was judged absent and its code
+    was erased (0.00 -> 0.11 at 150 Hz, appendix CI.2). }
+  CLICK_MIN_NEIGHBOUR_HZ = 200.0;
+
+type
+  { 交信モードの `TClickColumns` を、音から直に、1 コマ 1 度だけ求めて控える
+    ものです（付録 CI）。
+
+    多局受信は帯域全体の絵を作るので列はそこから取れますが、交信モードの解析は
+    同調した音だけを整形するので、その絵がありません。解析のたびに未確定の音
+    （2〜24 秒）全体の列を求め直すと 1 回 100 ms を超えるため、**コマを受信の
+    始めからの時刻で控え、新しく届いた音のコマだけを求めます**。窓（80 ms）が
+    音の端に近いコマは、あとで音が届くと値が変わるので控えません。
+
+    列は、窓 80 ms（ハン窓）・15 ms おきの、同調点・両脇・隣の局の音程それぞれ
+    1 本ずつの DFT です（モデルの絵と同じ窓と刻み。周波数は任意）。交信モードは
+    帯域制限の前の、モデルの周波数の音（`PrepareForModelWidth` の
+    `Unfiltered`）を渡します（録音周波数によらず安い）。**解析のスレッドだけ
+    から使います**（排他を持ちません）。
+
+    Works out contact mode's `TClickColumns` from the audio directly, each frame
+    once, and keeps them (appendix CI). Multi-station reception builds a
+    picture of the whole band to take the columns from; contact mode prepares
+    only the tuned audio and has none. Working the columns out again over all
+    the pending audio (2-24 s) at every analysis costs over 100 ms, so **frames
+    are kept by their time since reception began and only frames of newly
+    arrived audio are computed**. A frame whose window (80 ms) comes near either
+    end of the audio is not kept, its value changing once more audio arrives.
+    Each column is a single-frequency DFT (Hann window of 80 ms every 15 ms --
+    the model picture's window and step -- at any frequency) at the tuned
+    pitch, its sides and each neighbour. Contact mode passes the audio before
+    the band limit, at the model's rate (`Unfiltered` of
+    `PrepareForModelWidth`), which is cheap whatever the capture rate. **Used
+    from the analysis thread only** (no lock). }
+  TClickColumnCache = class
+  private
+    FRate: Integer;
+    FTuneHz: Double;
+    FNeighbourHz: TDoubleArray;
+    FWindow: Integer;
+    { 確かめる周波数ごとの、窓を掛けた余弦・正弦。並びは、同調点から
+      ±(CLICK_OWN_SPAN_BINS + 8) ビンの連続した並び（`FBandProbes` 本）の
+      あとに隣の局。
+      The windowed cosine and sine per probed frequency: a run of bins
+      +/-(CLICK_OWN_SPAN_BINS + 8) around the tuned pitch (`FBandProbes` of
+      them), then the neighbours. }
+    FCos, FSin: array of TDoubleArray;
+    FBandProbes: Integer;
+    { 控えたコマ。`FFirst` が先頭のコマの番号（受信の始めから 15 ms おき）、
+      `FCount` が数。`FBand` はコマごとに `FBandProbes` 個の値を並べたもの。
+      The frames kept: `FFirst` is the number of the first (15 ms steps from
+      the start of reception), `FCount` how many. `FBand` holds
+      `FBandProbes` values per frame. }
+    FFirst: Int64;
+    FCount: Integer;
+    FBand: TDoubleArray;
+    FNeighbours: array of TDoubleArray;
+    FNeighboursStale: Boolean;
+    FComputed: Int64;
+    FOwnBin: Integer;
+    procedure BuildProbes(First, Last: Integer);
+    function LeftOf(Frame: Int64; AudioStart: Double): Int64;
+    procedure Probe(const Audio: TSingleArray; AudioStart: Double; Frame: Int64;
+      First, Last: Integer; var Values: TDoubleArray);
+    function FrameInside(Frame: Int64; AudioStart: Double;
+      Length_: Integer): Boolean;
+    procedure Store(Frame: Int64; const Values: TDoubleArray);
+    procedure Trim(AudioStart: Double);
+  public
+    { 条件を合わせます。周波数か同調点が変われば控えを捨て、隣の局だけが
+      変われば、隣の局の列だけを次に求め直します。同調点から
+      `CLICK_MIN_NEIGHBOUR_HZ` より近い隣の局は使いません。
+      Sets the conditions. A new rate or tuned pitch drops everything kept; new
+      neighbours alone have only their columns worked out again at the next
+      request. Neighbours nearer the tuned pitch than
+      `CLICK_MIN_NEIGHBOUR_HZ` are not used. }
+    procedure Configure(Rate: Integer; TuneHz: Double;
+      const Neighbours: array of Double);
+    procedure Clear;
+    { `Audio` は、受信を始めてから `AudioStart` 秒目から始まる音（`Configure`
+      で渡した周波数）。その `StartSeconds` 秒目から始まる `Frames` コマの列を
+      返します。隣の局が無ければ `Neighbours` は空です。
+      `Audio` starts `AudioStart` seconds after reception began (at the rate
+      given to `Configure`). Returns the columns of `Frames` frames from
+      `StartSeconds` into it; with no neighbours, `Neighbours` is empty. }
+    function Columns(const Audio: TSingleArray; AudioStart: Double;
+      StartSeconds: Double; Frames: Integer): TClickColumns;
+    function HasNeighbours: Boolean;
+    { 求めたコマの延べ数（試験と測りのため）。/ Frames computed so far, for
+      tests and measurement. }
+    property Computed: Int64 read FComputed;
+    property Kept: Integer read FCount;
+    { 直近の `Columns` が局の音としたビン（同調点からのビン数）。
+      The bin the last `Columns` took as the station's tone (bins from the
+      tuned pitch). }
+    property OwnBin: Integer read FOwnBin;
+  end;
+
 { 局ごとに、いちばん近い隣までの距離から残す幅を決めます（要件 FR-I.3）。
 
   **渡す一覧には、解析する局だけでなく、そこにいる局をすべて入れてください。**
@@ -1216,11 +1357,9 @@ function SuppressNeighbourClicks(var Slice: TSpectrogram;
   const Wide: TSpectrogram; WideRate: Integer; const Stations: array of Double;
   Own: Integer; HalfWidthHz: Double): Integer;
 var
-  BinHz, OwnUpper, RefUpper, Side, Magnitude: Double;
-  OwnBin, RefBin, Frames, Frame, J, K, Bin, Centre, HalfBins: Integer;
-  Column, Floors, LogFloors: TDoubleArray;
-  Present, Edge, Near, Visible: array of Boolean;
-  AnyEdge, AllOn, AllOff: Boolean;
+  BinHz: Double;
+  OwnBin, RefBin, Frame, J, K, Count: Integer;
+  Columns: TClickColumns;
 begin
   Result := 0;
   if (Own < 0) or (Own > High(Stations)) or (Wide.Frames <= 0) or
@@ -1229,25 +1368,27 @@ begin
   BinHz := WideRate / ((Wide.Bins - 1) * 2);
   if BinHz <= 0 then
     Exit;
-  Frames := Min(Slice.Frames, Wide.Frames);
   OwnBin := Round(Stations[Own] / BinHz);
   if (OwnBin < 8) or (OwnBin > Wide.Bins - 9) then
     Exit;
 
-  Column := nil;
-  SetLength(Column, Wide.Frames);
+  { 絵から、その局・両脇・隣の局の列を取り出します（付録 CB と同じ見方）。
+    The station's, its sides' and the neighbours' columns, taken from the
+    picture (as in appendix CB). }
+  SetLength(Columns.Own, Wide.Frames);
+  SetLength(Columns.Side, Wide.Frames);
   for Frame := 0 to Wide.Frames - 1 do
-    Column[Frame] := MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin]);
-  OwnUpper := QuantileOfCopy(Column, DETECT_TIME_QUANTILE);
-  if OwnUpper <= 0 then
-    Exit;
-
-  { より強い隣の局の、切り替えの最中のコマ。/ Frames where a stronger
-    neighbour is in mid-edge. }
-  SetLength(Edge, Wide.Frames);
-  for Frame := 0 to Wide.Frames - 1 do
-    Edge[Frame] := False;
-  AnyEdge := False;
+  begin
+    Columns.Own[Frame] := MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin]);
+    Columns.Side[Frame] := 0;
+    for K := 4 to 8 do
+      Columns.Side[Frame] := Columns.Side[Frame] +
+        MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin - K]) +
+        MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin + K]);
+    Columns.Side[Frame] := Columns.Side[Frame] / 10;
+  end;
+  Count := 0;
+  SetLength(Columns.Neighbours, Length(Stations));
   for J := 0 to High(Stations) do
   begin
     if J = Own then
@@ -1255,21 +1396,58 @@ begin
     RefBin := Round(Stations[J] / BinHz);
     if (RefBin < 0) or (RefBin >= Wide.Bins) then
       Continue;
+    SetLength(Columns.Neighbours[Count], Wide.Frames);
     for Frame := 0 to Wide.Frames - 1 do
-      Column[Frame] := MagnitudeOf(Wide.Data[Frame * Wide.Bins + RefBin]);
-    RefUpper := QuantileOfCopy(Column, DETECT_TIME_QUANTILE);
+      Columns.Neighbours[Count][Frame] :=
+        MagnitudeOf(Wide.Data[Frame * Wide.Bins + RefBin]);
+    Inc(Count);
+  end;
+  SetLength(Columns.Neighbours, Count);
+  Result := SuppressClicksFromColumns(Slice, Columns, HalfWidthHz, BinHz);
+end;
+
+function SuppressClicksFromColumns(var Slice: TSpectrogram;
+  const Columns: TClickColumns; HalfWidthHz, BinHz: Double): Integer;
+var
+  OwnUpper, RefUpper: Double;
+  ColumnFrames, Frames, Frame, J, K, Bin, Centre, HalfBins: Integer;
+  Column, Floors, LogFloors: TDoubleArray;
+  Present, Edge, Near, Visible: array of Boolean;
+  AnyEdge, AllOn, AllOff: Boolean;
+begin
+  Result := 0;
+  ColumnFrames := Length(Columns.Own);
+  if (ColumnFrames <= 0) or (Length(Columns.Side) <> ColumnFrames) or
+     (Slice.Bins <= 0) or (Slice.Frames <= 0) or (BinHz <= 0) then
+    Exit;
+  Frames := Min(Slice.Frames, ColumnFrames);
+  OwnUpper := QuantileOfCopy(Columns.Own, DETECT_TIME_QUANTILE);
+  if OwnUpper <= 0 then
+    Exit;
+
+  { より強い隣の局の、切り替えの最中のコマ。/ Frames where a stronger
+    neighbour is in mid-edge. }
+  SetLength(Edge, ColumnFrames);
+  for Frame := 0 to ColumnFrames - 1 do
+    Edge[Frame] := False;
+  AnyEdge := False;
+  for J := 0 to High(Columns.Neighbours) do
+  begin
+    if Length(Columns.Neighbours[J]) <> ColumnFrames then
+      Continue;
+    RefUpper := QuantileOfCopy(Columns.Neighbours[J], DETECT_TIME_QUANTILE);
     if RefUpper < NEIGHBOUR_STRONGER_RATIO * OwnUpper then
       Continue;
-    for Frame := 0 to Wide.Frames - 1 do
+    for Frame := 0 to ColumnFrames - 1 do
     begin
       AllOn := True;
       AllOff := True;
       for K := Max(0, Frame - DETECT_CLICK_STEADY_FRAMES) to
-        Min(Wide.Frames - 1, Frame + DETECT_CLICK_STEADY_FRAMES) do
+        Min(ColumnFrames - 1, Frame + DETECT_CLICK_STEADY_FRAMES) do
       begin
-        if Column[K] < DETECT_CLICK_ON_RATIO * RefUpper then
+        if Columns.Neighbours[J][K] < DETECT_CLICK_ON_RATIO * RefUpper then
           AllOn := False;
-        if Column[K] > DETECT_CLICK_OFF_RATIO * RefUpper then
+        if Columns.Neighbours[J][K] > DETECT_CLICK_OFF_RATIO * RefUpper then
           AllOff := False;
       end;
       if not (AllOn or AllOff) then
@@ -1284,25 +1462,17 @@ begin
 
   { その局の音があるコマと、その前後。/ Frames with the station's own tone,
     and those near them. }
-  SetLength(Present, Wide.Frames);
-  for Frame := 0 to Wide.Frames - 1 do
-  begin
-    Magnitude := MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin]);
-    Side := 0;
-    for K := 4 to 8 do
-      Side := Side +
-        MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin - K]) +
-        MagnitudeOf(Wide.Data[Frame * Wide.Bins + OwnBin + K]);
-    Side := Side / 10;
-    Present[Frame] := (Magnitude >= NEIGHBOUR_PRESENT_LEVEL * OwnUpper) and
-      (Magnitude >= NEIGHBOUR_PEAK_RATIO * Side);
-  end;
-  SetLength(Near, Wide.Frames);
-  for Frame := 0 to Wide.Frames - 1 do
+  SetLength(Present, ColumnFrames);
+  for Frame := 0 to ColumnFrames - 1 do
+    Present[Frame] :=
+      (Columns.Own[Frame] >= NEIGHBOUR_PRESENT_LEVEL * OwnUpper) and
+      (Columns.Own[Frame] >= NEIGHBOUR_PEAK_RATIO * Columns.Side[Frame]);
+  SetLength(Near, ColumnFrames);
+  for Frame := 0 to ColumnFrames - 1 do
   begin
     Near[Frame] := False;
     for K := Max(0, Frame - NEIGHBOUR_GUARD_FRAMES) to
-      Min(Wide.Frames - 1, Frame + NEIGHBOUR_GUARD_FRAMES) do
+      Min(ColumnFrames - 1, Frame + NEIGHBOUR_GUARD_FRAMES) do
       if Present[K] then
       begin
         Near[Frame] := True;
@@ -1310,9 +1480,23 @@ begin
       end;
   end;
 
+  { 置き換えうるコマが無ければ、ビンごとの分位は求めません（結果は同じ）。
+    With no frame that could be replaced, the per-bin quantiles are skipped
+    (the result is the same). }
+  AnyEdge := False;
+  for Frame := 0 to Frames - 1 do
+    if Edge[Frame] and not Near[Frame] then
+    begin
+      AnyEdge := True;
+      Break;
+    end;
+  if not AnyEdge then
+    Exit;
+
   { 残す幅の中で何かが見えているコマ。ビンごとの 25% 分位を基準にし、置き換える
     値にも使います。/ Frames with something visible inside the width kept,
     against each bin's 25% quantile, which is also the value replaced in. }
+  Column := nil;
   SetLength(Floors, Slice.Bins);
   SetLength(LogFloors, Slice.Bins);
   SetLength(Column, Slice.Frames);
@@ -1345,6 +1529,386 @@ begin
         Slice.Data[Frame * Slice.Bins + Bin] := LogFloors[Bin];
       Inc(Result);
     end;
+end;
+
+
+{ TClickColumnCache }
+
+const
+  { 両脇として見るビン（同調点から 4〜8 ビン、付録 CB と同じ）。
+    The bins taken as the sides (4 to 8 from the tuned pitch, as in
+    appendix CB). }
+  CLICK_SIDE_NEAR_BINS = 4;
+  CLICK_SIDE_FAR_BINS = 8;
+  CLICK_SIDE_PROBES = CLICK_SIDE_FAR_BINS - CLICK_SIDE_NEAR_BINS + 1;
+  { モデルの絵と同じ窓と刻み（3200 Hz で 256 点・48 点）。
+    The model picture's window and step (256 and 48 points at 3200 Hz). }
+  CLICK_WINDOW_SECONDS = 0.08;
+  CLICK_HOP_SECONDS = 0.015;
+  CLICK_BIN_HZ = 12.5;
+  { 音の端からこれだけ内側のコマだけを控えます。整形（周波数の変換・標本化の
+    変換）は音の端で値が揺れ、あとで音が届くと変わるためです。
+    Only frames at least this far inside the audio are kept: the preparation
+    (frequency translation, rate conversion) wobbles at the ends of the audio
+    and changes once more audio arrives. }
+  CLICK_EDGE_SECONDS = 0.1;
+  { 同調点以外のビンを局の音とするのは、尖り具合（上位分位）が同調点の
+    これ倍を超えるときだけ（付録 CI.2）。
+    Another bin than the tuned one is taken as the station's tone only when
+    its peakedness (upper quantile) is more than this times the tuned bin's
+    (appendix CI.2). }
+  CLICK_OWN_SWITCH_RATIO = 1.5;
+
+procedure TClickColumnCache.Clear;
+begin
+  FFirst := 0;
+  FCount := 0;
+  FBand := nil;
+  FNeighbours := nil;
+  FNeighboursStale := False;
+end;
+
+function TClickColumnCache.HasNeighbours: Boolean;
+begin
+  Result := Length(FNeighbourHz) > 0;
+end;
+
+procedure TClickColumnCache.BuildProbes(First, Last: Integer);
+var
+  P, I: Integer;
+  Hz, W, Phase: Double;
+begin
+  for P := First to Last do
+  begin
+    if P < FBandProbes then
+      Hz := FTuneHz + (P - CLICK_OWN_SPAN_BINS - CLICK_SIDE_FAR_BINS) *
+        CLICK_BIN_HZ
+    else
+      Hz := FNeighbourHz[P - FBandProbes];
+    SetLength(FCos[P], FWindow);
+    SetLength(FSin[P], FWindow);
+    for I := 0 to FWindow - 1 do
+    begin
+      { 周期型のハン窓（`HannWindow` と同じ）。/ Periodic Hann, as `HannWindow`. }
+      W := 0.5 - 0.5 * Cos(2 * Pi * I / FWindow);
+      Phase := 2 * Pi * Hz * I / FRate;
+      if (Hz <= 0) or (Hz >= FRate / 2) then
+        W := 0;
+      FCos[P][I] := W * Cos(Phase);
+      FSin[P][I] := W * Sin(Phase);
+    end;
+  end;
+end;
+
+procedure TClickColumnCache.Configure(Rate: Integer; TuneHz: Double;
+  const Neighbours: array of Double);
+var
+  I, Count: Integer;
+  Same: Boolean;
+  Chosen: TDoubleArray;
+begin
+  if (Rate <> FRate) or (TuneHz <> FTuneHz) then
+  begin
+    FRate := Rate;
+    FTuneHz := TuneHz;
+    FNeighbourHz := nil;
+    FWindow := Max(1, Round(Rate * CLICK_WINDOW_SECONDS));
+    FBandProbes := 2 * (CLICK_OWN_SPAN_BINS + CLICK_SIDE_FAR_BINS) + 1;
+    SetLength(FCos, FBandProbes);
+    SetLength(FSin, FBandProbes);
+    if Rate > 0 then
+      BuildProbes(0, FBandProbes - 1);
+    Clear;
+  end;
+  Chosen := nil;
+  SetLength(Chosen, Length(Neighbours));
+  Count := 0;
+  for I := 0 to High(Neighbours) do
+    if Abs(Neighbours[I] - TuneHz) >= CLICK_MIN_NEIGHBOUR_HZ then
+    begin
+      Chosen[Count] := Neighbours[I];
+      Inc(Count);
+    end;
+  SetLength(Chosen, Count);
+  Same := Count = Length(FNeighbourHz);
+  if Same then
+    for I := 0 to Count - 1 do
+      if Chosen[I] <> FNeighbourHz[I] then
+        Same := False;
+  if Same then
+    Exit;
+  FNeighbourHz := Chosen;
+  SetLength(FCos, FBandProbes + Count);
+  SetLength(FSin, FBandProbes + Count);
+  if FRate > 0 then
+    BuildProbes(FBandProbes, High(FCos));
+  SetLength(FNeighbours, Count);
+  for I := 0 to High(FNeighbours) do
+    SetLength(FNeighbours[I], Length(FBand) div Max(1, FBandProbes));
+  FNeighboursStale := FCount > 0;
+end;
+
+function TClickColumnCache.LeftOf(Frame: Int64; AudioStart: Double): Int64;
+begin
+  Result := Round((Frame * CLICK_HOP_SECONDS - AudioStart) * FRate) -
+    FWindow div 2;
+end;
+
+function TClickColumnCache.FrameInside(Frame: Int64; AudioStart: Double;
+  Length_: Integer): Boolean;
+var
+  Left, Edge: Int64;
+begin
+  Left := LeftOf(Frame, AudioStart);
+  Edge := Round(CLICK_EDGE_SECONDS * FRate);
+  Result := (Left >= Edge) and (Left + FWindow <= Length_ - Edge);
+end;
+
+procedure TClickColumnCache.Probe(const Audio: TSingleArray; AudioStart: Double;
+  Frame: Int64; First, Last: Integer; var Values: TDoubleArray);
+var
+  Left, Index, Top: Int64;
+  I, P: Integer;
+  Re, Im, X: Double;
+  Segment: TDoubleArray;
+begin
+  Segment := nil;
+  SetLength(Segment, FWindow);
+  Left := LeftOf(Frame, AudioStart);
+  Top := High(Audio);
+  for I := 0 to FWindow - 1 do
+  begin
+    { 音の端の外は折り返します（モデルの絵の `ReflectPad` と同じ）。
+      Beyond either end the audio is reflected (as the model picture's
+      `ReflectPad`). }
+    Index := Left + I;
+    if Index < 0 then
+      Index := -Index;
+    if Index > Top then
+      Index := 2 * Top - Index;
+    if (Index < 0) or (Index > Top) then
+      Segment[I] := 0
+    else
+      Segment[I] := Audio[Index];
+  end;
+  for P := First to Last do
+  begin
+    Re := 0;
+    Im := 0;
+    for I := 0 to FWindow - 1 do
+    begin
+      X := Segment[I];
+      Re := Re + X * FCos[P][I];
+      Im := Im + X * FSin[P][I];
+    end;
+    Values[P] := Sqrt(Re * Re + Im * Im);
+  end;
+  Inc(FComputed);
+end;
+
+procedure TClickColumnCache.Store(Frame: Int64; const Values: TDoubleArray);
+var
+  J, P, Capacity: Integer;
+begin
+  if (FCount > 0) and (Frame <> FFirst + FCount) then
+    Clear;
+  if FCount = 0 then
+  begin
+    FFirst := Frame;
+    SetLength(FNeighbours, Length(FNeighbourHz));
+  end;
+  Capacity := Length(FBand) div Max(1, FBandProbes);
+  if FCount >= Capacity then
+  begin
+    Capacity := Max(256, Capacity * 2);
+    SetLength(FBand, Capacity * FBandProbes);
+    for J := 0 to High(FNeighbours) do
+      SetLength(FNeighbours[J], Capacity);
+  end;
+  for P := 0 to FBandProbes - 1 do
+    FBand[FCount * FBandProbes + P] := Values[P];
+  for J := 0 to High(FNeighbours) do
+    FNeighbours[J][FCount] := Values[FBandProbes + J];
+  Inc(FCount);
+end;
+
+procedure TClickColumnCache.Trim(AudioStart: Double);
+var
+  Drop, J: Integer;
+begin
+  { 音の先頭より前のコマは、もう求められません。/ Frames before the start
+    of the audio will not be asked for again. }
+  Drop := 0;
+  while (Drop < FCount) and (LeftOf(FFirst + Drop, AudioStart) < 0) do
+    Inc(Drop);
+  if Drop = 0 then
+    Exit;
+  if Drop >= FCount then
+  begin
+    Clear;
+    Exit;
+  end;
+  FBand := Copy(FBand, Drop * FBandProbes, (FCount - Drop) * FBandProbes);
+  for J := 0 to High(FNeighbours) do
+    FNeighbours[J] := Copy(FNeighbours[J], Drop, FCount - Drop);
+  Inc(FFirst, Drop);
+  Dec(FCount, Drop);
+end;
+
+function TClickColumnCache.Columns(const Audio: TSingleArray; AudioStart: Double;
+  StartSeconds: Double; Frames: Integer): TClickColumns;
+var
+  Values, Band, Ratios, Prefix: TDoubleArray;
+  First, Frame: Int64;
+  K, J, P, Probes, Centre, Candidate, Best: Integer;
+  Score, BestScore, CentreScore: Double;
+
+  { 両脇（±4〜8 ビン）の平均。/ The mean of the sides (bins 4-8 away). }
+  function SideMean(Row, Bin: Integer): Double;
+  var
+    Base: Integer;
+  begin
+    Base := Row * (FBandProbes + 1);
+    Result := (Prefix[Base + Bin - CLICK_SIDE_NEAR_BINS + 1] -
+      Prefix[Base + Bin - CLICK_SIDE_FAR_BINS] +
+      Prefix[Base + Bin + CLICK_SIDE_FAR_BINS + 1] -
+      Prefix[Base + Bin + CLICK_SIDE_NEAR_BINS]) / (2 * CLICK_SIDE_PROBES);
+  end;
+
+begin
+  Result.Own := nil;
+  Result.Side := nil;
+  Result.Neighbours := nil;
+  if (FRate <= 0) or (Frames <= 0) or (Length(Audio) = 0) then
+    Exit;
+  Probes := Length(FCos);
+  Values := nil;
+  SetLength(Values, Probes);
+  Trim(AudioStart);
+
+  { 隣の局が変わったなら、控えたコマの隣の局の列だけを求め直します。
+    With new neighbours, only their columns of the kept frames are redone. }
+  if FNeighboursStale then
+  begin
+    FNeighboursStale := False;
+    for K := 0 to FCount - 1 do
+      if FrameInside(FFirst + K, AudioStart, Length(Audio)) then
+      begin
+        Probe(Audio, AudioStart, FFirst + K, FBandProbes, Probes - 1, Values);
+        for J := 0 to High(FNeighbours) do
+          FNeighbours[J][K] := Values[FBandProbes + J];
+      end
+      else
+      begin
+        Clear;
+        Break;
+      end;
+  end;
+
+  Band := nil;
+  SetLength(Band, Frames * FBandProbes);
+  SetLength(Result.Neighbours, Length(FNeighbourHz));
+  for J := 0 to High(Result.Neighbours) do
+    SetLength(Result.Neighbours[J], Frames);
+  First := Round((AudioStart + StartSeconds) / CLICK_HOP_SECONDS);
+  for K := 0 to Frames - 1 do
+  begin
+    Frame := First + K;
+    if (FCount > 0) and (Frame >= FFirst) and (Frame < FFirst + FCount) then
+    begin
+      for P := 0 to FBandProbes - 1 do
+        Band[K * FBandProbes + P] := FBand[(Frame - FFirst) * FBandProbes + P];
+      for J := 0 to High(Result.Neighbours) do
+        Result.Neighbours[J][K] := FNeighbours[J][Frame - FFirst];
+      Continue;
+    end;
+    { 窓がまるごと音の外（復号器が短い音に足す無音）なら 0 です。
+      A window wholly outside the audio (the silence the decoder pads a short
+      clip with) reads 0. }
+    if (LeftOf(Frame, AudioStart) >= Length(Audio)) or
+       (LeftOf(Frame, AudioStart) + FWindow <= 0) then
+    begin
+      for P := 0 to FBandProbes - 1 do
+        Band[K * FBandProbes + P] := 0;
+      for J := 0 to High(Result.Neighbours) do
+        Result.Neighbours[J][K] := 0;
+      Continue;
+    end;
+    Probe(Audio, AudioStart, Frame, 0, Probes - 1, Values);
+    for P := 0 to FBandProbes - 1 do
+      Band[K * FBandProbes + P] := Values[P];
+    for J := 0 to High(Result.Neighbours) do
+      Result.Neighbours[J][K] := Values[FBandProbes + J];
+    if FrameInside(Frame, AudioStart, Length(Audio)) then
+      Store(Frame, Values);
+  end;
+
+  { 局の音のビンを、この窓で 1 つ選びます。同調点の周り（±
+    `CLICK_OWN_SPAN_BINS`）で、両脇（±4〜8 ビンの平均。付録 CB と同じ）に
+    比べて尖っている度合いの上位分位がいちばん高いビン。トーンは同じビンで
+    尖り続け、クリックは平らです。**コマごとに選ぶと、雑音だけのときにどこかの
+    ビンが偶然尖り、ほとんどのコマを「局の音がある」としてしまった**
+    （付録 CI.2）。
+    One bin is chosen as the station's tone for this window: around the tuned
+    pitch (+/-`CLICK_OWN_SPAN_BINS`), the bin whose upper quantile of
+    peakedness against its sides (the mean of the bins 4-8 either side, as in
+    appendix CB) is highest. A tone stays peaked in the same bin; a click is
+    flat. **Chosen frame by frame, some bin was peaked by chance in noise
+    alone, and nearly every frame counted as "the station's tone present"**
+    (appendix CI.2). }
+  Centre := CLICK_OWN_SPAN_BINS + CLICK_SIDE_FAR_BINS;
+  { 両脇の和は、コマごとの累積和から 4 回の引き算で求めます（候補ごとに
+    10 回足すより安い）。/ The side sums come from per-frame running sums,
+    four subtractions each (cheaper than ten additions per candidate). }
+  Prefix := nil;
+  SetLength(Prefix, Frames * (FBandProbes + 1));
+  for K := 0 to Frames - 1 do
+  begin
+    Prefix[K * (FBandProbes + 1)] := 0;
+    for P := 0 to FBandProbes - 1 do
+      Prefix[K * (FBandProbes + 1) + P + 1] :=
+        Prefix[K * (FBandProbes + 1) + P] + Band[K * FBandProbes + P];
+  end;
+  Ratios := nil;
+  SetLength(Ratios, Frames);
+  Best := Centre;
+  BestScore := -1;
+  CentreScore := -1;
+  for Candidate := Centre - CLICK_OWN_SPAN_BINS to Centre + CLICK_OWN_SPAN_BINS do
+  begin
+    for K := 0 to Frames - 1 do
+      Ratios[K] := Band[K * FBandProbes + Candidate] /
+        Max(SideMean(K, Candidate), 1e-12);
+    Score := QuantileOf(Ratios, DETECT_TIME_QUANTILE);
+    if Candidate = Centre then
+      CentreScore := Score;
+    { 同じなら同調点に近いほう。/ On a tie, the one nearer the tuned pitch. }
+    if (Score > BestScore) or
+       ((Score = BestScore) and
+        (Abs(Candidate - Centre) < Abs(Best - Centre))) then
+    begin
+      BestScore := Score;
+      Best := Candidate;
+    end;
+  end;
+  { 同調点のビンを優先します。ほかのビンは、はっきり尖っているときだけ選び
+    ます。**局が窓の一部でしか鳴っていないと（送り終える前後）、どのビンの
+    上位分位も雑音と変わらず、選び方が偶然に左右されて、その局の最後の字を
+    消した**（付録 CI.2）。
+    The tuned bin is preferred; another is chosen only when clearly more
+    peaked. **When the station sounds in only part of the window (around when
+    it stops), every bin's upper quantile looks like noise and the choice fell
+    to chance, erasing the station's last character** (appendix CI.2). }
+  if BestScore < CLICK_OWN_SWITCH_RATIO * CentreScore then
+    Best := Centre;
+  FOwnBin := Best - Centre;
+  SetLength(Result.Own, Frames);
+  SetLength(Result.Side, Frames);
+  for K := 0 to Frames - 1 do
+  begin
+    Result.Own[K] := Band[K * FBandProbes + Best];
+    Result.Side[K] := SideMean(K, Best);
+  end;
 end;
 
 end.

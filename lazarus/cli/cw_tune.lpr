@@ -76,6 +76,27 @@ begin
   Result := TextToPCM(Text, Timing, Options);
 end;
 
+{ `Synthesise` の、速さを決めて雑音を乗せない形です。
+  `Synthesise` at a given speed and without noise. }
+function SynthesiseAt(const Text: string; SampleRate: Integer;
+  ToneHz: Double; Speed: Integer): TSingleArray;
+var
+  Timing: TCWTiming;
+  Options: TCWToneOptions;
+begin
+  Timing := DefaultTiming;
+  Timing.CharWpm := Speed;
+  Timing.TextWpm := Speed;
+  Options := DefaultToneOptions;
+  Options.SampleRate := SampleRate;
+  Options.ToneHz := ToneHz;
+  Options.Amplitude := 0.5;
+  Options.NoiseAmplitude := 0;
+  Options.LeadInSeconds := 0.4;
+  Options.LeadOutSeconds := 0.4;
+  Result := TextToPCM(Text, Timing, Options);
+end;
+
 { 単純な実数乗算による周波数変換です。解析信号を使わない場合との比較用で、
   ライブラリには置きません。
 
@@ -523,11 +544,12 @@ var
     end;
   end;
 
-  function RunOnce(TuneHz: Double): string;
+  function RunOnce(TuneHz: Double; Replace: Boolean = True): string;
   begin
     Stream := TStreamingDecoder.Create(Decoder);
     try
       Stream.TuneHz := TuneHz;
+      Stream.ReplaceClicks := Replace;
       Position := 0;
       while Position < Length(Audio) do
       begin
@@ -672,6 +694,39 @@ begin
   finally
     Stream.Free;
   end;
+
+  { 同調した局が送り終えたあと、隣の強い局のキークリックを点として読まない
+    （付録 CI）。自動の幅で狭めても、35 WPM の局の横では「K1ABCKIIE 5EEHIEEI5
+    …」と点ばかりの文字が続いた（付録 CC.3 の「悪くなった 2」）。**置き換え
+    なければ崩れることも確かめます**（崩れない場面では、この試験は何も確かめて
+    いないことになる）。
+    After the tuned station stops, a strong neighbour's key clicks are not read
+    as dots (appendix CI). Even narrowed by the automatic width, next to a
+    35 WPM station, dots-only text such as "K1ABCKIIE 5EEHIEEI5 ..." followed
+    (the "worse 2" of appendix CC.3). **That it breaks without the replacement
+    is checked too** (in a case where it does not break, this test would check
+    nothing). }
+  Reference := NormalizeText('CQ DE K1ABC K1ABC K');
+  Audio := Synthesise(NormalizeText('JA1ABC DE JH2XYZ UR 599 599 K'), Rate,
+    1000, 0, 7400);
+  Chunk := SynthesiseAt(Reference, Rate, 1250, 35);
+  RandSeed := 7403;
+  for I := 0 to High(Audio) do
+  begin
+    Audio[I] := 0.5 * Audio[I] + 0.005 * 0.25 * (Random + Random - 1);
+    if I <= High(Chunk) then
+      Audio[I] := Audio[I] + 0.5 * 0.0316 * Chunk[I];
+  end;
+  Tuned := RunOnce(1250);
+  Untuned := RunOnce(1250, False);
+  WriteLn(Format('  35 WPM の局（強い局の 250 Hz 横）: 置き換える "%s"', [Tuned]));
+  WriteLn(Format('                                   置き換えない "%s"', [Untuned]));
+  Verdict('送り終えたあとにクリックの点を読まない',
+    CharErrorRate(Reference, Tuned) <= 0.1,
+    Format('(誤り率 %.2f: "%s")', [CharErrorRate(Reference, Tuned), Tuned]));
+  Verdict('置き換えなければ点ばかりの文字が続く（この試験が意味を持つ）',
+    CharErrorRate(Reference, Untuned) > 0.5,
+    Format('(誤り率 %.2f: "%s")', [CharErrorRate(Reference, Untuned), Untuned]));
   Summary(Failures);
 end;
 

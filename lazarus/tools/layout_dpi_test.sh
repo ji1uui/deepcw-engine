@@ -104,9 +104,9 @@ if [ -f app/languages/deepcw_station.en.po ]; then
   echo "  1366x768・120 dpi（125%、English）:"
   run_at 120 1366x768x24 128 en
   # 100 dpi は英語でも見ます。訳の幅は日本語と違うので、日本語で 0 件でも
-  # 英語で破綻することがあります（付録 CI）。
+  # 英語で破綻することがあります（付録 CJ）。
   # 100 dpi is checked in English too: the translation's widths differ, so 0
-  # in Japanese does not mean 0 in English (appendix CI).
+  # in Japanese does not mean 0 in English (appendix CJ).
   echo "  1400x950・100 dpi（English）:"
   run_at 100 1400x950x24 130 en
   echo "  1920x1080・144 dpi（150%、English）:"

@@ -22,7 +22,7 @@ uses
     unit that uses one, or the program dies the moment one starts.** }
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes, SysUtils, DateUtils, Math, DeepCW.Types, DeepCW.Metadata, DeepCW.Dsp, DeepCW.Wave,
-  DeepCW.Tuner, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder, DeepCW.Stream,
+  DeepCW.Tuner, DeepCW.Stations, DeepCW.Review, DeepCW.Journal, DeepCW.Decoder, DeepCW.Stream,
   DeepCW.Multi, DeepCW.BandMap, DeepCW.Log, DeepCW.Exchange, DeepCW.Watch,
   DeepCW.Audio, DeepCW.Recorder, DeepCW.Practice, DeepCW.CopyLog, DeepCW.Callsign,
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
@@ -1676,6 +1676,8 @@ const
   TUNED_HZ = 1000;
 var
   Default_, Half: Double;
+  Neighbours: TDoubleArray;
+  Nearest: string;
 
   function Keyed(Hz, Level: Double): TSingleArray;
   var
@@ -1737,6 +1739,149 @@ begin
   Half := AutoHalfWidth(Mixed(TUNED_HZ + 250, 5.0), RATE, 0, Meta);
   Check('同調していなければ既定のまま', SameValue(Half, Default_, 1),
     Format('(±%.0f Hz)', [Half]));
+
+  { 見つけた隣の局も返す（クリックの置き換えが使い回す。付録 CI）。
+    The neighbours found are returned too (reused by click replacement,
+    appendix CI). }
+  Half := AutoHalfWidth(Mixed(TUNED_HZ + 250, 5.0), RATE, TUNED_HZ, Meta,
+    Neighbours);
+  Nearest := '';
+  if Length(Neighbours) > 0 then
+    Nearest := Format('、最も近い %.0f Hz', [Neighbours[0]]);
+  Check('250 Hz 横の局を隣として返す',
+    (Length(Neighbours) >= 1) and (Abs(Neighbours[0] - (TUNED_HZ + 250)) <= 25),
+    Format('(%d 局%s)', [Length(Neighbours), Nearest]));
+  Half := AutoHalfWidth(Mixed(0, 0), RATE, TUNED_HZ, Meta, Neighbours);
+  Check('隣が無ければ隣の局も無い', Length(Neighbours) = 0,
+    Format('(%d 局)', [Length(Neighbours)]));
+end;
+
+{ 交信モードのクリックの列を、1 コマ 1 度だけ求めて控えること（付録 CI）。
+
+  解析のたびに未確定の音全体の列を求め直すと重いので、コマを受信の始めからの
+  時刻で控えます。**少しずつ届いた音で求めた列が、まとめて求めた列と同じ**で
+  なければ、控えたことで判じ方が変わります。先頭を捨てたあと（`AudioStart` が
+  進む）も同じ時刻のコマは同じ値で、求めたコマの延べ数は、まとめて求めた
+  場合の数倍に収まること。
+
+  Contact mode's click columns are computed once per frame and kept
+  (appendix CI). Working them out over all the pending audio at every analysis
+  is heavy, so frames are kept by time since reception began. **Columns built
+  from audio arriving a little at a time must equal those built in one go**,
+  or keeping them would change the judgement; after the front is dropped
+  (`AudioStart` advancing) a frame at the same time keeps its value, and the
+  frames computed stay within a few times the one-go count. }
+procedure TestClickColumnCache;
+const
+  RATE = 3200;
+  STEP_SECONDS = 0.2;
+  DROP_SECONDS = 3.0;
+var
+  Audio, Other: TSingleArray;
+  Whole, Piece: TClickColumns;
+  Once, Growing: TClickColumnCache;
+  Timing: TCWTiming;
+  Options: TCWToneOptions;
+  I, Frames, Length_, Offset, Compared, Mismatch: Integer;
+  Worst: Double;
+
+  function FramesOf(Samples: Integer): Integer;
+  begin
+    Result := 1 + Samples div Round(RATE * 0.015);
+  end;
+
+  procedure Compare(const A: TDoubleArray; AFrom: Integer;
+    const B: TDoubleArray; BFrom, Count: Integer);
+  var
+    K: Integer;
+    Scale: Double;
+  begin
+    for K := 0 to Count - 1 do
+    begin
+      Scale := Max(1e-9, Abs(A[AFrom + K]));
+      Worst := Max(Worst, Abs(A[AFrom + K] - B[BFrom + K]) / Scale);
+      if Abs(A[AFrom + K] - B[BFrom + K]) > 1e-6 * Scale then
+        Inc(Mismatch);
+      Inc(Compared);
+    end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('交信モードのクリックの列は 1 コマ 1 度だけ求める（付録 CI）');
+  Timing := DefaultTiming;
+  Timing.CharWpm := 30;
+  Timing.TextWpm := 30;
+  Options := DefaultToneOptions;
+  Options.SampleRate := RATE;
+  Options.ToneHz := 800;
+  Audio := TextToPCM('CQ DE K1ABC K1ABC K', Timing, Options);
+  Options.ToneHz := 1050;
+  Other := TextToPCM('JA1ABC DE JH2XYZ UR 599 599 K', Timing, Options);
+  if Length(Other) > Length(Audio) then
+    SetLength(Audio, Length(Other));
+  for I := 0 to High(Other) do
+    Audio[I] := Audio[I] * 0.03 + Other[I];
+  Frames := FramesOf(Length(Audio));
+
+  Once := TClickColumnCache.Create;
+  Growing := TClickColumnCache.Create;
+  try
+    Once.Configure(RATE, 800, [1050]);
+    Whole := Once.Columns(Audio, 0, 0, Frames);
+
+    { 0.2 秒ずつ届いた音で、毎回全体を求める（解析と同じ）。
+      Audio arriving 0.2 s at a time, asked for in full each time (as
+      analysis does). }
+    Growing.Configure(RATE, 800, [1050]);
+    Length_ := 0;
+    repeat
+      Length_ := Min(Length(Audio), Length_ + Round(STEP_SECONDS * RATE));
+      Piece := Growing.Columns(Copy(Audio, 0, Length_), 0, 0,
+        FramesOf(Length_));
+    until Length_ >= Length(Audio);
+    Compared := 0;
+    Mismatch := 0;
+    Worst := 0;
+    Compare(Whole.Own, 0, Piece.Own, 0, Frames);
+    Compare(Whole.Side, 0, Piece.Side, 0, Frames);
+    Compare(Whole.Neighbours[0], 0, Piece.Neighbours[0], 0, Frames);
+    Check('少しずつ届いた音の列が、まとめて求めた列と同じ', Mismatch = 0,
+      Format('(%d 値のうち %d 違う、最大の差 %.1e)', [Compared, Mismatch, Worst]));
+    Check('求めたコマの延べ数は、まとめて求めた数の 3 倍以内',
+      Growing.Computed <= 3 * Frames,
+      Format('(%d コマ、まとめて %d コマ、解析 %d 回)',
+        [Growing.Computed, Frames,
+         Ceil(Length(Audio) / (STEP_SECONDS * RATE))]));
+
+    { 先頭 3 秒を捨てたあと。/ After the first 3 seconds are dropped. }
+    Offset := Round(DROP_SECONDS * RATE);
+    Piece := Growing.Columns(Copy(Audio, Offset, Length(Audio) - Offset),
+      DROP_SECONDS, 0, FramesOf(Length(Audio) - Offset));
+    Compared := 0;
+    Mismatch := 0;
+    Worst := 0;
+    { 両端は折り返しで値が違うので、内側だけを比べます。/ The ends differ by
+      reflection, so only the inside is compared. }
+    Compare(Whole.Own, Round(DROP_SECONDS / 0.015) + 10, Piece.Own, 10,
+      Length(Piece.Own) - 20);
+    Compare(Whole.Neighbours[0], Round(DROP_SECONDS / 0.015) + 10,
+      Piece.Neighbours[0], 10, Length(Piece.Own) - 20);
+    Check('先頭を捨てたあとも、同じ時刻のコマは同じ値', Mismatch = 0,
+      Format('(%d 値のうち %d 違う)', [Compared, Mismatch]));
+    Check('捨てた先頭の控えは消える',
+      Growing.Kept <= FramesOf(Length(Audio) - Offset),
+      Format('(控え %d コマ)', [Growing.Kept]));
+
+    { 200 Hz より近い隣の局は使わない（その局の音を消したため）。
+      A neighbour nearer than 200 Hz is not used (it erased the station's own
+      tone). }
+    Growing.Configure(RATE, 800, [950]);
+    Check('150 Hz 横の隣の局は使わない', not Growing.HasNeighbours);
+  finally
+    Growing.Free;
+    Once.Free;
+  end;
 end;
 
 
@@ -5705,6 +5850,7 @@ begin
     TestDiagnostics;
     TestMonitorAudio;
     TestAutoHalfWidth;
+    TestClickColumnCache;
     TestPacing;
     TestHistogram;
     TestReferences;
