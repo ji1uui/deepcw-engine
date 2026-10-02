@@ -359,8 +359,8 @@ type
     列は、窓 80 ms（ハン窓）・15 ms おきの、同調点・両脇・隣の局の音程それぞれ
     1 本ずつの DFT です（モデルの絵と同じ窓と刻み。周波数は任意）。交信モードは
     帯域制限の前の、モデルの周波数の音（`PrepareForModelWidth` の
-    `Unfiltered`）を渡します（録音周波数によらず安い）。**解析のスレッドだけ
-    から使います**（排他を持ちません）。
+    `Unfiltered`）を渡します（録音周波数によらず安い）。**一度に 1 つの
+    スレッドから使います**（排他を持ちません）。
 
     Works out contact mode's `TClickColumns` from the audio directly, each frame
     once, and keeps them (appendix CI). Multi-station reception builds a
@@ -375,7 +375,7 @@ type
     pitch, its sides and each neighbour. Contact mode passes the audio before
     the band limit, at the model's rate (`Unfiltered` of
     `PrepareForModelWidth`), which is cheap whatever the capture rate. **Used
-    from the analysis thread only** (no lock). }
+    from one thread at a time** (no lock). }
   TClickColumnCache = class
   private
     FRate: Integer;

@@ -241,8 +241,10 @@ type
       (counted afresh on a change of capture rate), so that click columns can
       be kept by their time since reception began (appendix CI). }
     FFrontSample: Int64;
-    { ここから下は解析のスレッドだけが触ります（排他なし）。
-      From here on only the analysis thread touches these (no lock). }
+    { ここから下は解析（`Step`・`Finish`）だけが触ります。`Finish` は解析が
+      止まっているときに呼ばれるので、同時には触られません（排他なし）。
+      From here on only analysis (`Step`, `Finish`) touches these; `Finish` is
+      called while no analysis runs, so never at the same time (no lock). }
     FClicks: TTunedClickReplacer;
     FClickEpoch: Int64;
     { 整形の控え（計画 6.1 の P4、付録 CJ）と、その世代。

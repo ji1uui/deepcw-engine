@@ -266,7 +266,8 @@ type
 
     **`Front` を 0 にして 1 回だけ呼べば、`PrepareForModelWidth` とビット単位で
     同じ結果になります**（`dsp_check` で確かめる）。整形の定義は 1 か所のまま
-    です。解析のスレッドだけから使います（排他なし）。
+    です。一度に 1 つのスレッドから使います（解析のスレッド、または解析が
+    止まっているときの `Finish`。排他なし）。
 
     Streaming preparation (the same computation as `PrepareForModelWidth`)
     done for **newly arrived audio only**, rather than over all the pending
@@ -282,7 +283,8 @@ type
     "no piecemeal filtering" of appendix D.1: no transient at a seam). **Called
     once with `Front` at 0 it gives bit for bit what `PrepareForModelWidth`
     gives** (checked in `dsp_check`), so the preparation is still defined in
-    one place. Used from the analysis thread only (no lock). }
+    one place. Used from one thread at a time -- the analysis thread, or
+    `Finish` while no analysis runs (no lock). }
   TStreamShaper = class
   private
     FRate, FModelRate: Integer;
