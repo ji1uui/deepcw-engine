@@ -2405,6 +2405,24 @@ begin
   Control.BorderSpacing.Around := Margin;
 end;
 
+{ 枠の高さを、中に置いた部品から決めます。**固定の高さは、画素密度が変わると
+  足りなくなります。**枠の見出しと文字の高さは書体で決まり、画素密度に比例して
+  伸びないためです（付録 CK）。部品は置いた場所に留め（`csAutoSizeKeepChild*`。
+  無いと LCL が左上へ寄せます）、最後の部品の下に `Margin` だけ空けます。
+  Sizes a box's height from the controls put inside it. **A fixed height runs
+  short when the pixel density changes**: the box's caption and the text take
+  their height from the font, which does not grow in proportion to the density
+  (appendix CK). The controls stay where they were put
+  (`csAutoSizeKeepChild*`; without it the LCL moves them to the top left), and
+  `Margin` is left below the last one. }
+procedure FitToChildren(Group: TWinControl; Margin: Integer = 6);
+begin
+  Group.ControlStyle := Group.ControlStyle +
+    [csAutoSizeKeepChildLeft, csAutoSizeKeepChildTop];
+  Group.ChildSizing.TopBottomSpacing := Margin;
+  Group.AutoSize := True;
+end;
+
 { 送受信画面の送信欄（要件 FR-T）。受信テキストのすぐ下に置きます。**読んだ
   文の真下で返事を作り、そのまま送る**——交信が 1 つの画面で終わるためです。
   版 2.84 までは別のタブで、1 回の交信のたびに行き来していました（付録 CG）。
@@ -4554,11 +4572,14 @@ begin
   RigGroup := TGroupBox.Create(Scroller);
   RigGroup.Parent := Scroller;
   RegisterCaption(RigGroup, @RsSetRigGroup);
-  { 最後の行（上端 222、高さ 22）が枠の中に収まる高さ。262 では 100 dpi の
-    丸めで 2 画素はみ出していました（付録 CH）。
-    Tall enough for the last row (top 222, 22 high): at 262 it stuck out by
-    two pixels after 100 dpi rounding (appendix CH). }
-  RigGroup.Height := 274;
+  { 高さは中身から決めます（`FitToChildren`）。固定の 262 では 100 dpi の
+    丸めで最後の行が 2 画素はみ出しました（付録 CH）。**固定の値を上げても、
+    行を足すたび・書体が変わるたびに同じことが起きます**（付録 CK）。
+    The height comes from the contents (`FitToChildren`). At a fixed 262 the
+    last row stuck out by two pixels after 100 dpi rounding (appendix CH).
+    **Raising the fixed value only waits for the next added row or a different
+    font to do the same** (appendix CK). }
+  FitToChildren(RigGroup);
   Stretch(RigGroup, alTop);
   AddLabel(RigGroup, @RsSetRigModel, 14, 10);
   FSetRigModel := AddSpin(RigGroup, 100, 6, 0, 99999, 0, @SettingChanged);
