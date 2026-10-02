@@ -36,6 +36,26 @@ const
   STREAM_TAIL_GUARD_SECONDS = 1.25;
   { これより短い先頭部分は確定させません。/ Nothing shorter than this commits. }
   STREAM_MIN_CONFIRMED_SECONDS = 2.0;
+  { 語の途中（字間）で確定させる条件（計画 6.1 の P6、付録 CK）。同じ読みが
+    これだけの解析で続いた文字のあいだで、末尾からこれだけ離れていれば切る。
+    0 回なら語間でだけ確定します。
+    When a character gap may be a split (plan 6.1 P6, appendix CK): between
+    characters read the same over this many analyses in a row, this far from
+    the tail. Zero runs split at word gaps only. }
+  STREAM_CHAR_SPLIT_RUNS = 0;
+  STREAM_CHAR_SPLIT_GUARD_SECONDS = 0.6;
+  { 字間で切る位置: 前の字を出した時刻からこれだけ後（付録 CK.2）。
+    Where a character gap is cut: this long after the previous character was
+    emitted (appendix CK.2). }
+  STREAM_CHAR_SPLIT_AFTER_SECONDS = 0.14;
+  { 語の途中で確定したあと、次の解析の前に付ける、確定した側の音の長さ。
+    語間と字間を見分けるには送りの速さが要り、切ったあとの短い音だけでは
+    分からない（「PSE K」が「PSEK」になった。付録 CK.3）。
+    After confirming inside a word, how much of the confirmed audio goes in
+    front of the next analysis. Telling a word gap from a character gap needs
+    the sending speed, which a short clip after the cut does not show ("PSE K"
+    came out as "PSEK"; appendix CK.3). }
+  STREAM_CHAR_SPLIT_CONTEXT_SECONDS = 3.0;
   { 解析にどれだけの機械の力を使ってよいか。1 コアに対する割合です
     （要件 FR-G.4・NFR-1.4・NFR-1.5）。
 
@@ -196,6 +216,21 @@ type
     property Columns: TClickColumnCache read FColumns;
   end;
 
+  { 文字ごとの、同じ読みが続いた解析の回数。/ Per character, how many analyses
+    in a row gave the same reading. }
+  TRunCounts = array of Integer;
+  { 前の解析で読んだ文字（受信の始めからの時刻）と、その読みが続いた回数。
+    A character read by the previous analysis (time since reception began)
+    and how many analyses in a row gave that reading. }
+  TSeenChar = record
+    Text: string;
+    At: Double;
+    Runs: Integer;
+    { すぐ前が空白だったか。/ Whether a space came right before it. }
+    AfterSpace: Boolean;
+  end;
+  TSeenChars = array of TSeenChar;
+
   TStreamingDecoder = class
   private
     FDecoder: TDeepCWDecoder;
@@ -286,7 +321,36 @@ type
     FCpuBudget: Double;
     FTailGuard: Double;
     FMinConfirmed: Double;
+    { 語の途中での確定（計画 6.1 の P6、付録 CK）。前の解析で読んだ文字
+      （`FSeen`）、何回同じ読みが続けば字間で確定してよいか（0 なら語の途中
+      では確定しない）、字間で確定するときの末尾のガード、直前の確定が語の
+      途中だったか。解析だけが触ります。
+      Confirming inside a word (plan 6.1 P6, appendix CK): the characters the
+      previous analysis read (`FSeen`), how many analyses in a row must agree
+      before a character gap may be a split (0: never inside a word), the tail
+      guard for such a split, and whether the last commit fell inside a word.
+      Only analysis touches these. }
+    FSeen: TSeenChars;
+    FCharRuns: Integer;
+    FCharGuard: Double;
+    FSplitInWord: Boolean;
+    FSeenEpoch: Int64;
+    { 語の途中で確定したときに残す、確定した側の音（録音周波数）。次の解析の
+      前に付けて読み、そこから出た文字は捨てます。排他の中で読み書きします。
+      The confirmed audio kept after a split inside a word (capture rate),
+      read in front of the next analysis with its characters discarded.
+      Read and written under the lock. }
+    FContext: TSingleArray;
     FSquelch: Double;
+    { 世代が変われば（受信のやり直し・録音周波数の変更）、読みの続き具合と
+      「直前の確定が語の途中だった」を捨てます。
+      A new generation (reception restarted, capture rate changed) drops the
+      run counts and "the last commit fell inside a word". }
+    procedure SyncSeen(Epoch: Int64);
+    function CountRuns(const Chars: TDecodedChars; Base: Double): TRunCounts;
+    function FindCharSplit(const Chars: TDecodedChars;
+      const Runs: TRunCounts; AnalysisSeconds: Double;
+      out SplitSeconds: Double): Integer;
     procedure SetTuneHz(Value: Double);
     procedure SetBandwidth(Value: TTunerBandwidth);
     { 解析にかける音声・その録音周波数・世代を、ひと繋がりの排他区間で取り出
@@ -320,7 +384,15 @@ type
     function StripSeamSpace(const Chars: TDecodedChars): TDecodedChars;
     function DropLeadArtifacts(const Chars: TDecodedChars): TDecodedChars;
     procedure SetProvisional(const Chars: TDecodedChars);
-    procedure DropLeading(Samples: Integer);
+    procedure DropLeading(Samples: Integer; KeepContext: Integer = 0);
+    { 語の途中で確定したあとに残した音の写し。/ A copy of the audio kept
+      after a split inside a word. }
+    function TakeContext: TSingleArray;
+    { 手前に付けた音（`ContextSeconds` 秒）から出た文字を捨て、時刻を溜めた音の
+      先頭からに直します。/ Drops the characters from the audio put in front
+      (`ContextSeconds`) and moves times to the start of the buffer. }
+    function WithoutContext(const Chars: TDecodedChars;
+      ContextSeconds: Double): TDecodedChars;
     { 溜め込みの上限を掛けます。Step の先頭から、すなわち解析スレッドから
       呼びます。入力が解析に追いつかないとき、古いほうから捨てて上限に収めます。
       Applies the buffer cap. Called at the start of Step, i.e. from the
@@ -445,6 +517,14 @@ type
     { 先頭からこの時間より短い範囲は確定させません。
       Nothing shorter than this from the start is committed. }
     property MinConfirmedSeconds: Double read FMinConfirmed write FMinConfirmed;
+    { 語の途中（字間）で確定させるのに要る、同じ読みが続いた解析の回数。0 なら
+      語間でだけ確定します（付録 CK）。/ How many analyses in a row must give
+      the same reading before a character gap may be a split; 0 splits at word
+      gaps only (appendix CK). }
+    property CharSplitRuns: Integer read FCharRuns write FCharRuns;
+    { 字間で確定するときに、末尾から空けておく時間。/ The tail kept clear
+      when splitting at a character gap. }
+    property CharSplitGuardSeconds: Double read FCharGuard write FCharGuard;
 
     { 解析にどれだけの機械の力を使ってよいか（要件 FR-G.4）。1 コアに対する
       割合です。0 にすると間隔を緩めません。
@@ -572,6 +652,9 @@ begin
   FAutoHalf := BandwidthHalfWidth(tbAuto);
   FTailGuard := STREAM_TAIL_GUARD_SECONDS;
   FMinConfirmed := STREAM_MIN_CONFIRMED_SECONDS;
+  FCharRuns := STREAM_CHAR_SPLIT_RUNS;
+  FCharGuard := STREAM_CHAR_SPLIT_GUARD_SECONDS;
+  FSeenEpoch := -1;
   FSquelch := STREAM_SQUELCH_LEVEL;
   FCpuBudget := STREAM_CPU_BUDGET;
   FSourceRate := ADecoder.Metadata.SampleRate;
@@ -604,6 +687,7 @@ begin
     FAutoAt := -1;
     FAutoNeighbours := nil;
     FFrontSample := 0;
+    FContext := nil;
     Inc(FEpoch);
   finally
     LeaveCriticalSection(FLock);
@@ -634,6 +718,7 @@ begin
       FDroppedSeconds := FDroppedSeconds + FPendingCount / Max(1, FSourceRate);
       FPendingCount := 0;
       FFrontSample := 0;
+      FContext := nil;
       FProvisional := nil;
       { 解析中のものがあれば、その結果は既に無い音声のものになります。
         Any analysis in flight now describes audio that no longer exists. }
@@ -924,6 +1009,7 @@ begin
         FPending[I] := FPending[I + Excess];
       FPendingCount := Limit;
       Inc(FFrontSample, Excess);
+      FContext := nil;
       { 捨てた分だけ時刻を進め、取りこぼしとして数えます。先頭を動かすのは
         この解析スレッドだけなので、以後の DropLeading と食い違いません。
         Advance the time base by what went and count it as a genuine loss.
@@ -961,14 +1047,53 @@ begin
   Result := Samples / Rate;
 end;
 
-procedure TStreamingDecoder.DropLeading(Samples: Integer);
+function TStreamingDecoder.TakeContext: TSingleArray;
+begin
+  EnterCriticalSection(FLock);
+  try
+    Result := Copy(FContext);
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+end;
+
+function TStreamingDecoder.WithoutContext(const Chars: TDecodedChars;
+  ContextSeconds: Double): TDecodedChars;
 var
-  I: Integer;
+  I, Count: Integer;
+begin
+  if ContextSeconds <= 0 then
+    Exit(Chars);
+  Result := nil;
+  SetLength(Result, Length(Chars));
+  Count := 0;
+  for I := 0 to High(Chars) do
+    if Chars[I].Seconds >= ContextSeconds then
+    begin
+      Result[Count] := Chars[I];
+      Result[Count].Seconds := Result[Count].Seconds - ContextSeconds;
+      Result[Count].EndSeconds := Result[Count].EndSeconds - ContextSeconds;
+      Inc(Count);
+    end;
+  SetLength(Result, Count);
+end;
+
+procedure TStreamingDecoder.DropLeading(Samples: Integer; KeepContext: Integer);
+var
+  I, Kept: Integer;
 begin
   if Samples <= 0 then
     Exit;
   EnterCriticalSection(FLock);
   try
+    { 捨てる音の末尾を、次の解析の手がかりとして残すか（付録 CK.3）。
+      Whether the end of what is dropped stays as context for the next
+      analysis (appendix CK.3). }
+    Kept := Min(KeepContext, Min(Samples, FPendingCount));
+    if Kept > 0 then
+      FContext := Copy(FPending, Min(Samples, FPendingCount) - Kept, Kept)
+    else
+      FContext := nil;
     Inc(FFrontSample, Min(Samples, FPendingCount));
     if Samples >= FPendingCount then
       FPendingCount := 0
@@ -1172,17 +1297,29 @@ end;
 function TStreamingDecoder.DropLeadArtifacts(const Chars: TDecodedChars): TDecodedChars;
 var
   I, Count: Integer;
+  Leading: Boolean;
 begin
   if FConfirmedSeconds <= 0 then
     Exit(Chars);
   SetLength(Result, Length(Chars));
   Count := 0;
+  { 直前の確定が語の途中なら、先頭の空白は偽物です。切った字間の両側は、
+    空白を挟まずに読めることが続いていました（付録 CK）。
+    After a split inside a word, leading spaces are false: the characters
+    either side of the gap kept being read with no space between them
+    (appendix CK). }
+  Leading := FSplitInWord;
   for I := 0 to High(Chars) do
+  begin
+    if Leading and (Chars[I].Text = ' ') then
+      Continue;
+    Leading := False;
     if (Chars[I].Text = ' ') or (Chars[I].EndSeconds >= STREAM_LEAD_GUARD_SECONDS) then
     begin
       Result[Count] := Chars[I];
       Inc(Count);
     end;
+  end;
   SetLength(Result, Count);
 end;
 
@@ -1229,16 +1366,119 @@ begin
   end;
 end;
 
+procedure TStreamingDecoder.SyncSeen(Epoch: Int64);
+begin
+  if Epoch = FSeenEpoch then
+    Exit;
+  FSeen := nil;
+  FSeenEpoch := Epoch;
+  FSplitInWord := False;
+end;
+
+{ 文字ごとに、前の解析でも同じ時刻（±80 ms）に同じ文字を、同じく空白の後か
+  どうかまで含めて読んでいたかを数えます。`Base` は、この解析の音の先頭が
+  受信の始めから何秒か。
+  Per character, counts whether the previous analysis read the same character
+  at the same time (+/-80 ms), including whether a space came right before it.
+  `Base` is where this analysis's audio begins, in seconds since reception
+  began. }
+function TStreamingDecoder.CountRuns(const Chars: TDecodedChars;
+  Base: Double): TRunCounts;
+const
+  SAME_TIME_SECONDS = 0.08;
+var
+  I, J: Integer;
+  At: Double;
+  AfterSpace: Boolean;
+  Next: TSeenChars;
+begin
+  Result := nil;
+  SetLength(Result, Length(Chars));
+  Next := nil;
+  SetLength(Next, Length(Chars));
+  for I := 0 to High(Chars) do
+  begin
+    At := Base + Chars[I].Seconds;
+    AfterSpace := (I > 0) and (Chars[I - 1].Text = ' ');
+    Result[I] := 1;
+    for J := 0 to High(FSeen) do
+      if (FSeen[J].Text = Chars[I].Text) and
+         (FSeen[J].AfterSpace = AfterSpace) and
+         (Abs(FSeen[J].At - At) <= SAME_TIME_SECONDS) then
+      begin
+        Result[I] := FSeen[J].Runs + 1;
+        Break;
+      end;
+    Next[I].Text := Chars[I].Text;
+    Next[I].At := At;
+    Next[I].Runs := Result[I];
+    Next[I].AfterSpace := AfterSpace;
+  end;
+  FSeen := Next;
+end;
+
+{ 語の途中の確定点を探します（付録 CK）。隣り合う 2 文字（どちらも空白でない）
+  のあいだで、そこまでの文字がすべて `FCharRuns` 回以上同じに読めていて、
+  切る点が末尾から `FCharGuard` 以上離れているもののうち、最も後ろ。
+  Finds a split inside a word (appendix CK): between two adjacent characters
+  (neither a space), with every character up to them read the same for at
+  least `FCharRuns` analyses, and the cut at least `FCharGuard` from the tail
+  -- the latest such. }
+function TStreamingDecoder.FindCharSplit(const Chars: TDecodedChars;
+  const Runs: TRunCounts; AnalysisSeconds: Double;
+  out SplitSeconds: Double): Integer;
+var
+  K, Stable: Integer;
+  Cut: Double;
+begin
+  Result := -1;
+  SplitSeconds := 0;
+  if FCharRuns <= 0 then
+    Exit;
+  { 先頭から続けて安定している文字の数。/ How many characters from the start
+    are stable in a row. }
+  Stable := 0;
+  while (Stable <= High(Chars)) and (Runs[Stable] >= FCharRuns) do
+    Inc(Stable);
+  for K := Min(Stable, High(Chars)) - 1 downto 0 do
+  begin
+    if (Chars[K].Text = ' ') or (Chars[K + 1].Text = ' ') then
+      Continue;
+    if Runs[K + 1] < FCharRuns then
+      Continue;
+    { 字の音は、その字を出した時刻より後に終わります（12〜40 WPM の実測で
+      47〜113 ms 後）。次の字の音は 168 ms より後に始まります。**2 つの字を
+      出した時刻の中央で切ると、次の字の頭を削った**（付録 CK.2）。
+      A character's sound ends after the time it was emitted (47-113 ms after,
+      measured at 12-40 WPM) and the next one's starts more than 168 ms after.
+      **Cutting midway between the two emissions clipped the head of the next
+      character** (appendix CK.2). }
+    Cut := Chars[K].EndSeconds + STREAM_CHAR_SPLIT_AFTER_SECONDS;
+    if Cut >= Chars[K + 1].Seconds - STREAM_CHAR_SPLIT_AFTER_SECONDS then
+      Continue;
+    if (Cut >= FMinConfirmed) and (Cut <= AnalysisSeconds - FCharGuard) then
+    begin
+      Result := K;
+      SplitSeconds := Cut;
+      Exit;
+    end;
+  end;
+end;
+
 function TStreamingDecoder.Step: Boolean;
 var
   Audio, Prepared, Unfiltered: TSingleArray;
   Chars, Committed: TDecodedChars;
   Rate, SplitIndex, I, Count: Integer;
-  AnalysisSeconds, SplitSeconds, Half, Tuned, Lead: Double;
-  Forced: Boolean;
+  AnalysisSeconds, SplitSeconds, Half, Tuned, Lead, CharSeconds: Double;
+  Forced, InWord: Boolean;
   Epoch, Front: Int64;
   Neighbours: TDoubleArray;
   Filter: TSpectrogramFilter;
+  Runs: TRunCounts;
+  CharIndex: Integer;
+  Context, Whole: TSingleArray;
+  ContextSeconds: Double;
   DropSamples: Integer;
   Started: TDateTime;
 begin
@@ -1255,6 +1495,7 @@ begin
     All timing is computed at the capture rate; conversion happens only just
     before the audio reaches the model. }
   BeginAnalysis(Audio, Rate, Epoch, Front);
+  SyncSeen(Epoch);
   if Length(Audio) = 0 then
     Exit;
 
@@ -1268,8 +1509,17 @@ begin
   if SquelchClosed(Audio, Rate) then
     Exit;
 
-  Prepared := PrepareForModel(Audio, Front, Epoch, Neighbours, Half, Tuned,
-    Unfiltered, Lead);
+  { 語の途中で確定したあとなら、確定した側の音を手前に付けて読みます
+    （付録 CK.3）。/ After a split inside a word, the confirmed audio goes in
+    front (appendix CK.3). }
+  Context := TakeContext;
+  ContextSeconds := Length(Context) / Rate;
+  if Length(Context) > 0 then
+    Whole := Concat(Context, Audio)
+  else
+    Whole := Audio;
+  Prepared := PrepareForModel(Whole, Front - Length(Context), Epoch,
+    Neighbours, Half, Tuned, Unfiltered, Lead);
   if Length(Prepared) = 0 then
     Exit;
   { **解析の費用は、ここで測ります**（要件 FR-G.4）。測った値は、次にいつ
@@ -1277,17 +1527,34 @@ begin
     **The cost of an analysis is measured here** (requirement FR-G.4); what it
     measures decides when the next one may run. }
   Started := Now;
-  Filter := ClickFilter(Unfiltered, Rate, Epoch, Front, Lead, Neighbours,
-    Half, Tuned);
-  Chars := DropLeadArtifacts(ShiftChars(
+  Filter := ClickFilter(Unfiltered, Rate, Epoch, Front - Length(Context), Lead,
+    Neighbours, Half, Tuned);
+  Chars := DropLeadArtifacts(WithoutContext(ShiftChars(
     FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate,
-      Filter), Lead));
+      Filter), Lead), ContextSeconds));
   NotePace(AnalysisSeconds, (Now - Started) * SecsPerDay);
 
   { 上限まで溜まったら、末尾のガードを外してでも前へ進めます。
     Once the buffer is full, commit even without the tail guard. }
   Forced := AnalysisSeconds >= STREAM_MAX_SECONDS - 0.01;
   SplitIndex := FindSplit(Chars, AnalysisSeconds, Forced, SplitSeconds);
+
+  { 語の途中（字間）でも確定できるなら、語間より後ろのときに使います
+    （付録 CK）。
+    When a character gap may be a split, it is used if later than the word
+    gap (appendix CK). }
+  Runs := CountRuns(Chars, FConfirmedSeconds);
+  InWord := False;
+  if not Forced then
+  begin
+    CharIndex := FindCharSplit(Chars, Runs, AnalysisSeconds, CharSeconds);
+    if (CharIndex >= 0) and ((SplitIndex < 0) or (CharSeconds > SplitSeconds)) then
+    begin
+      SplitIndex := CharIndex;
+      SplitSeconds := CharSeconds;
+      InWord := True;
+    end;
+  end;
 
   if SplitIndex < 0 then
   begin
@@ -1370,8 +1637,12 @@ begin
   finally
     LeaveCriticalSection(FLock);
   end;
+  FSplitInWord := InWord;
 
-  DropLeading(DropSamples);
+  if InWord then
+    DropLeading(DropSamples, Round(STREAM_CHAR_SPLIT_CONTEXT_SECONDS * Rate))
+  else
+    DropLeading(DropSamples);
   Result := Count > 0;
 end;
 
@@ -1382,21 +1653,29 @@ var
   Rate, I: Integer;
   Epoch, Front: Int64;
   Neighbours: TDoubleArray;
-  Half, Tuned, Lead: Double;
+  Half, Tuned, Lead, ContextSeconds: Double;
+  Context, Whole: TSingleArray;
 begin
   BeginAnalysis(Audio, Rate, Epoch, Front);
+  SyncSeen(Epoch);
   if Length(Audio) = 0 then
     Exit;
   if SquelchClosed(Audio, Rate) then
     Exit;
-  Prepared := PrepareForModel(Audio, Front, Epoch, Neighbours, Half, Tuned,
-    Unfiltered, Lead);
+  Context := TakeContext;
+  ContextSeconds := Length(Context) / Rate;
+  if Length(Context) > 0 then
+    Whole := Concat(Context, Audio)
+  else
+    Whole := Audio;
+  Prepared := PrepareForModel(Whole, Front - Length(Context), Epoch,
+    Neighbours, Half, Tuned, Unfiltered, Lead);
   if Length(Prepared) = 0 then
     Exit;
-  Chars := DropLeadArtifacts(ShiftChars(
+  Chars := DropLeadArtifacts(WithoutContext(ShiftChars(
     FDecoder.DecodeLongSamplesTimed(Prepared, FDecoder.Metadata.SampleRate,
-      ClickFilter(Unfiltered, Rate, Epoch, Front, Lead, Neighbours, Half,
-        Tuned)), Lead));
+      ClickFilter(Unfiltered, Rate, Epoch, Front - Length(Context), Lead,
+        Neighbours, Half, Tuned)), Lead), ContextSeconds));
   for I := 0 to High(Chars) do
   begin
     Chars[I].Seconds := Chars[I].Seconds + FConfirmedSeconds;
@@ -1430,6 +1709,7 @@ begin
     FConfirmedSeconds := FConfirmedSeconds + FPendingCount / Rate;
     Inc(FFrontSample, FPendingCount);
     FPendingCount := 0;
+    FContext := nil;
   finally
     LeaveCriticalSection(FLock);
   end;

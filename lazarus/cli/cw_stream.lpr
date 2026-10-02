@@ -55,6 +55,11 @@ var
     preparation depends on it (heavy at 48000 Hz; appendix CJ.1), so it can
     be measured. }
   SynthRate: Integer = 8000;
+  { 語の途中で確定させる条件（`--char-split`・`--char-guard`、付録 CK）。
+    When to confirm inside a word (`--char-split`, `--char-guard`;
+    appendix CK). }
+  CharRuns: Integer = STREAM_CHAR_SPLIT_RUNS;
+  CharGuard: Double = STREAM_CHAR_SPLIT_GUARD_SECONDS;
   Check: Boolean = False;
   Failed: Boolean = False;
   SourceText: string = '';
@@ -151,6 +156,8 @@ begin
       '--max-confirmed': MaxConfirm := StrToFloatDef(Value, TARGET_CONFIRM_SECONDS);
       '--tune': TuneHz := StrToFloatDef(Value, 0);
       '--rate': SynthRate := StrToIntDef(Value, 8000);
+      '--char-split': CharRuns := StrToIntDef(Value, 0);
+      '--char-guard': CharGuard := StrToFloatDef(Value, STREAM_CHAR_SPLIT_GUARD_SECONDS);
       '--neighbour': NeighbourHz := StrToFloatDef(Value, 0);
       '--bandwidth':
         case Value of
@@ -179,7 +186,7 @@ begin
       '[--chunk seconds] [--quiet] [--no-antialias] ' +
       '[--check] [--max-provisional s] [--max-confirmed s] ' +
       '[--tune Hz] [--bandwidth auto|narrow|normal|wide] [--neighbour Hz] ' +
-      '[--keep-clicks] [--rate Hz]');
+      '[--keep-clicks] [--rate Hz] [--char-split runs] [--char-guard s]');
     Halt(2);
   end;
   if (NeighbourHz > 0) and (SourceText = '') then
@@ -202,6 +209,8 @@ begin
         Stream.Bandwidth := Bandwidth;
         Stream.TuneHz := TuneHz;
         Stream.ReplaceClicks := not KeepClicks;
+        Stream.CharSplitRuns := CharRuns;
+        Stream.CharSplitGuardSeconds := CharGuard;
         if SourceText <> '' then
         begin
           { 本文から音を作れるようにしておくと、回帰試験が音声ファイルを

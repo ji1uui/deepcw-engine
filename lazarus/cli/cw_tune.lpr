@@ -531,7 +531,62 @@ var
   Audio, Chunk: TSingleArray;
   Reference, Tuned, Untuned: string;
   Started: TDateTime;
-  PlainMs, TunedMs, Steps: Double;
+  PlainMs, TunedMs, Steps, WordOnly, InWord: Double;
+
+  { 0.2 秒ずつ流し込み、確定した文と確定 95% の遅延を返します（`cw_stream` と
+    同じ測り方）。`Runs` は語の途中で確定するのに要る回数（0 なら語間だけ）。
+    Feeds 0.2 s at a time and returns the confirmed text and the 95th
+    percentile confirm delay (measured as `cw_stream` does). `Runs` is how
+    many analyses must agree to confirm inside a word (0: word gaps only). }
+  function ConfirmRun(Runs: Integer; out Text: string): Double;
+  var
+    Delays: array of Double;
+    Chars: TDecodedChars;
+    Seen, J, K: Integer;
+    Swap: Double;
+  begin
+    Delays := nil;
+    Seen := 0;
+    Stream := TStreamingDecoder.Create(Decoder);
+    try
+      Stream.CharSplitRuns := Runs;
+      Position := 0;
+      while Position < Length(Audio) do
+      begin
+        Count := Min(Round(0.2 * Rate), Length(Audio) - Position);
+        Stream.Append(Copy(Audio, Position, Count), Rate);
+        Inc(Position, Count);
+        if Stream.Ready then
+          Stream.Step;
+        Chars := Stream.ConfirmedChars;
+        for J := Seen to High(Chars) do
+          if Chars[J].Text <> ' ' then
+          begin
+            SetLength(Delays, Length(Delays) + 1);
+            Delays[High(Delays)] := Position / Rate - Chars[J].EndSeconds;
+          end;
+        Seen := Length(Chars);
+      end;
+      Stream.Finish;
+      Text := Trim(DecodedText(Stream.ConfirmedChars));
+    finally
+      Stream.Free;
+    end;
+    for J := 1 to High(Delays) do
+    begin
+      K := J;
+      while (K > 0) and (Delays[K - 1] > Delays[K]) do
+      begin
+        Swap := Delays[K];
+        Delays[K] := Delays[K - 1];
+        Delays[K - 1] := Swap;
+        Dec(K);
+      end;
+    end;
+    Result := 0;
+    if Length(Delays) > 0 then
+      Result := Delays[Min(High(Delays), Trunc(0.95 * Length(Delays)))];
+  end;
 
   procedure Verdict(const What: string; Passed: Boolean; const Detail: string);
   begin
@@ -727,6 +782,36 @@ begin
   Verdict('置き換えなければ点ばかりの文字が続く（この試験が意味を持つ）',
     CharErrorRate(Reference, Untuned) > 0.5,
     Format('(誤り率 %.2f: "%s")', [CharErrorRate(Reference, Untuned), Untuned]));
+
+  { 語の途中（字間）での確定（計画 6.1 の P6、付録 CK）。**既定では使わない**
+    （手送りの揺れが大きいと確定した文の誤りが増えたため）。使えば、コール
+    サインの多い本文で確定 95% が 5 秒を切り、文は同じ。語の途中で切ったあとに
+    手前の音を付けないと「JA1ABC K」が「JA1ABCK」になった。
+    Confirming inside a word (plan 6.1 P6, appendix CK). **Off by default**
+    (with very irregular keying the confirmed text had more errors). When on,
+    callsign-heavy text confirms within 5 s at the 95th percentile with the
+    same text; without the audio put back in front after such a split,
+    "JA1ABC K" came out as "JA1ABCK". }
+  Verdict('語の途中では、既定では確定しない', STREAM_CHAR_SPLIT_RUNS = 0,
+    Format('(%d)', [STREAM_CHAR_SPLIT_RUNS]));
+  Reference := NormalizeText(
+    'CQ CQ DE JH2XYZ JH2XYZ K JA1ABC DE JH2XYZ UR 599 599 QTH NAGOYA');
+  Audio := SynthesiseAt(Reference, Rate, 700, 22);
+  WordOnly := ConfirmRun(0, Untuned);
+  InWord := ConfirmRun(3, Tuned);
+  WriteLn(Format('  コールサインの多い本文の確定 95%%: 語間だけ %.2f 秒、語の途中でも %.2f 秒',
+    [WordOnly, InWord]));
+  Verdict('語の途中でも確定すると、文は同じ', Tuned = Reference,
+    Format('("%s")', [Tuned]));
+  Verdict('語の途中でも確定すると、確定 95% が 5 秒以下', InWord <= 5.0,
+    Format('(%.2f 秒)', [InWord]));
+  Verdict('語間だけでは 5 秒を超える（この試験が意味を持つ）', WordOnly > 5.0,
+    Format('(%.2f 秒)', [WordOnly]));
+  Reference := NormalizeText('CQ CQ DE JA1ABC K');
+  Audio := SynthesiseAt(Reference, Rate, 700, 22);
+  InWord := ConfirmRun(3, Tuned);
+  Verdict('語の途中で切ったあとも語間を読む（「JA1ABC K」）', Tuned = Reference,
+    Format('("%s")', [Tuned]));
   Summary(Failures);
 end;
 
