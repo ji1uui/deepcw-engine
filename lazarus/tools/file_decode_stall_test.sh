@@ -10,6 +10,7 @@
 # 5 分・8 kHz の録音（700 Hz の局と、300 Hz 横の強い局）を同調・自動の幅で
 # 読みます。**確かめること**: 止まりが 200 ms 以下、700 Hz の局の文が読める、
 # 幅が隣の局に合わせて ±150 Hz に狭まる（作業スレッドで決めた幅が画面へ届く）。
+# 続けて 48 kHz・10 秒の録音を、上限 150 ms で同じく読みます（付録 CL）。
 #
 # 受け入れの基準は 100 ms で、実測は 30 分の録音で 34 ms（付録 CE）。ここで
 # 200 ms（画面の更新間隔。`gui_probe` が「止まったと感じる」とする値）とするのは、
@@ -30,6 +31,8 @@
 # tuned, with the automatic width. **Checked**: a stall of at most 200 ms, the
 # 700 Hz station's text is read, and the width narrows to +/-150 Hz for the
 # neighbour (the width decided on the worker reaches the screen).
+# Then a 48 kHz, ten-second recording is read the same way with a 150 ms
+# limit (appendix CL).
 #
 # The acceptance is 100 ms, measured at 34 ms on thirty minutes (appendix CE).
 # 200 ms here -- the display's refresh interval, what `gui_probe` treats as
@@ -53,12 +56,15 @@ HOME="$WORK/home"
 XDG_CONFIG_HOME="$WORK/config"
 export HOME XDG_CONFIG_HOME
 
-python3 - "$WORK/five.wav" <<'PY'
+# 録音を作ります（引数: 書き出し先・録音周波数・秒）。
+# Makes a recording (arguments: where to, capture rate, seconds).
+make_wav() {
+python3 - "$1" "$2" "$3" <<'PY'
 import math, struct, sys, wave, random
 M = {'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'H': '....',
      'J': '.---', 'K': '-.-', 'Q': '--.-', 'S': '...', 'T': '-', 'X': '-..-',
      'Y': '-.--', 'Z': '--..', '1': '.----', '2': '..---'}
-RATE, SECONDS = 8000, 300
+RATE, SECONDS = int(sys.argv[2]), int(sys.argv[3])
 
 def keying(text, wpm):
     unit = int(round(1.2 / wpm * RATE))
@@ -96,23 +102,41 @@ with wave.open(sys.argv[1], 'wb') as f:
     f.setframerate(RATE)
     f.writeframes(bytes(frames))
 PY
+}
 
-set +e
-OUT=$(env DEEPCW_FILE_CHECK="$WORK/five.wav" DEEPCW_FILE_CHECK_TUNE=700 \
-  DEEPCW_FILE_CHECK_LIMIT_MS=200 xvfb-run -a ./app/deepcw_station 2>/dev/null)
-RC=$?
-set -e
-echo "$OUT" | grep -E "decode button|width:|text:" | cut -c1-200
-if [ $RC -ne 0 ]; then
-  echo "止まりが 200 ms を超えたか、何も読めませんでした（終了コード $RC）"
-  exit 1
-fi
-if ! echo "$OUT" | grep -q "text: .*JA1ABC"; then
-  echo "700 Hz の局の文（JA1ABC）が読めていません"
-  exit 1
-fi
-if ! echo "$OUT" | grep -q "±150 Hz"; then
-  echo "自動の幅が隣の局に合わせて ±150 Hz になっていません"
-  exit 1
-fi
+# 読んで確かめます（引数: 録音・止まりの上限 ms）。
+# Reads and checks (arguments: the recording, the stall limit in ms).
+check_file() {
+  set +e
+  OUT=$(env DEEPCW_FILE_CHECK="$1" DEEPCW_FILE_CHECK_TUNE=700 \
+    DEEPCW_FILE_CHECK_LIMIT_MS="$2" xvfb-run -a ./app/deepcw_station 2>/dev/null)
+  RC=$?
+  set -e
+  echo "$OUT" | grep -E "decode button|width:|text:" | cut -c1-200
+  if [ $RC -ne 0 ]; then
+    echo "止まりが $2 ms を超えたか、何も読めませんでした（終了コード $RC）"
+    exit 1
+  fi
+  if ! echo "$OUT" | grep -q "text: .*JA1ABC"; then
+    echo "700 Hz の局の文（JA1ABC）が読めていません"
+    exit 1
+  fi
+  if ! echo "$OUT" | grep -q "±150 Hz"; then
+    echo "自動の幅が隣の局に合わせて ±150 Hz になっていません"
+    exit 1
+  fi
+}
+
+make_wav "$WORK/five.wav" 8000 300
+check_file "$WORK/five.wav" 200
+
+# 48 kHz・10 秒（計画 6.1 の P7、付録 CL）。版 2.89 までは、波形の FFT（約
+# 150 ms）と保管庫の排他の待ち（約 120 ms）で、**録音の長さによらず**
+# 200〜260 ms 止まっていた。変えたあとは約 30 ms。上限 150 ms で、戻れば落ちる。
+# 48 kHz, ten seconds (plan 6.1 P7, appendix CL). Up to version 2.89 the
+# waterfall's FFTs (about 150 ms) and the wait on the audio store's lock
+# (about 120 ms) stalled the screen 200-260 ms **whatever the recording's
+# length**; about 30 ms now. With a 150 ms limit, a regression fails.
+make_wav "$WORK/high.wav" 48000 10
+check_file "$WORK/high.wav" 150
 echo "ok"

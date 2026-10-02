@@ -54,6 +54,8 @@ type
     function ColumnFor(Hz: Double): Integer;
     { 桁から周波数を引きます。/ Maps a column back to a frequency. }
     function FrequencyAt(X: Integer): Double;
+    { 描いた絵の要約。/ A digest of the picture drawn. }
+    function Digest: QWord;
   end;
 
   { バンドマップの押下も、そのままでは外から呼べません。
@@ -153,6 +155,11 @@ end;
 function TProbeView.FrequencyAt(X: Integer): Double;
 begin
   Result := XToFrequency(X);
+end;
+
+function TProbeView.Digest: QWord;
+begin
+  Result := ImageDigest;
 end;
 
 procedure TProbeTranscript.Tap(X, Y: Integer);
@@ -281,6 +288,65 @@ begin
   SetLength(Result, Round(Seconds * SampleRate));
   for I := 0 to High(Result) do
     Result[I] := 0.05 * (Random + Random - 1);
+end;
+
+{ 波形の行を画面のスレッドの外で作っても（`AnalyseWaterfall` → `PushBatch`）、
+  同じ音を `PushSamples` に渡したときと同じ絵・同じ行の時刻になり、**そのあとに
+  続けて渡した音も同じに描かれる**こと（計画 6.1 の P7、付録 CL）。ファイルの
+  復号は前者、受信と試験の多くは後者を通ります。
+  Rows made off the UI thread (`AnalyseWaterfall` then `PushBatch`) give the
+  picture and row times `PushSamples` gives for the same audio, **and audio
+  handed over after that is drawn the same too** (plan 6.1 P7, appendix CL).
+  A file decode takes the former path; reception and most checks the latter. }
+procedure CheckWaterfallBatch(Owner: TComponent);
+const
+  RATES: array[0..6] of Integer = (8000, 8000, 48000, 48000, 48000, 44100, 8000);
+  SECONDS: array[0..6] of Double = (30.0, 3.0, 30.0, 5.0, 0.1, 12.0, 0.0);
+  STARTS: array[0..6] of Double = (0.0, 0.0, 0.0, 3.5, 0.0, 0.0, 0.0);
+var
+  Direct, Batched: TProbeView;
+  Audio, More: TSingleArray;
+  Batch: TWaterfallBatch;
+  Trial: Integer;
+  Same: Boolean;
+  What: string;
+begin
+  for Trial := 0 to High(RATES) do
+  begin
+    Direct := TProbeView.Create(Owner);
+    Batched := TProbeView.Create(Owner);
+    try
+      Direct.Tracking := False;
+      Batched.Tracking := False;
+      Audio := SweptAudio(RATES[Trial], 600, 1400, SECONDS[Trial]);
+      Direct.PushSamples(Audio, RATES[Trial], STARTS[Trial]);
+      Batch := AnalyseWaterfall(Audio, RATES[Trial], STARTS[Trial]);
+      Batched.PushBatch(Batch);
+      Same := (Direct.Digest = Batched.Digest) and
+        (Direct.NewestSeconds = Batched.NewestSeconds);
+      { 続きの 0.7 秒。溜めかけの音と基準が引き継がれていなければ、ここで食い違う。
+        The next 0.7 s: if the part-filled carry and the origin were not carried
+        over, this is where they part. }
+      More := NoiseOnly(RATES[Trial], 0.7);
+      Direct.PushSamples(More, RATES[Trial],
+        STARTS[Trial] + Length(Audio) / RATES[Trial]);
+      Batched.PushSamples(More, RATES[Trial],
+        STARTS[Trial] + Length(Audio) / RATES[Trial]);
+      What := Format('%d Hz・%.1f 秒（%.1f 秒から）', [RATES[Trial],
+        SECONDS[Trial], STARTS[Trial]]);
+      Check('まとめて作った行が同じ絵になる ' + What, Same,
+        Format('(時刻 %.4f と %.4f)', [Direct.NewestSeconds,
+          Batched.NewestSeconds]));
+      Check('続けて渡した音も同じに描かれる ' + What,
+        (Direct.Digest = Batched.Digest) and
+        (Direct.NewestSeconds = Batched.NewestSeconds),
+        Format('(時刻 %.4f と %.4f)', [Direct.NewestSeconds,
+          Batched.NewestSeconds]));
+    finally
+      Direct.Free;
+      Batched.Free;
+    end;
+  end;
 end;
 
 { 実メモリの読み取りは `DeepCW.Platform` にあります。**同じものを実行ファイル
@@ -1445,6 +1511,7 @@ begin
     Abs(View.NewestSeconds - 600.0) < 0.3,
     Format('(%.2f 秒、渡したのは 0〜600 秒)', [View.NewestSeconds]));
   Audio := nil;
+  CheckWaterfallBatch(Form);
 
   { ── 復号文字の時刻整列（要件 FR-D.6）──
     受入基準は「位置誤差 100 ms 以内」。**時刻を画面の高さへ写し、そこから時刻へ

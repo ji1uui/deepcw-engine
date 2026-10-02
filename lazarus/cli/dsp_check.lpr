@@ -488,6 +488,140 @@ begin
   end;
 end;
 
+{ 保管庫に別のスレッドから 1 回足します。/ One append into the store from
+  another thread. }
+type
+  TAppendThread = class(TThread)
+  public
+    History: TAudioHistory;
+    Audio: TSingleArray;
+    Rate: Integer;
+    Spent: QWord;
+  protected
+    procedure Execute; override;
+  end;
+
+procedure TAppendThread.Execute;
+var
+  Started: QWord;
+begin
+  Started := GetTickCount64;
+  History.Append(Audio, Rate, 0);
+  Spent := GetTickCount64 - Started;
+end;
+
+{ 足し方を変えても（1 標本ずつの剰余 → 多くて 2 回の写し、付録 CL）、どこで
+  環を折り返しても中身と時刻が変わらないこと。長さの違う音を足し続け、
+  保持している範囲を、足した音の末尾と突き合わせます。もう一つは、**周波数の
+  変わる大きな足し算の間も、ほかのスレッドが長く待たされないこと**。待ちの
+  長さを、足し算そのものにかかった時間と比べます（機械の速さによらない）。
+  Whatever the way of writing (a remainder per sample, now at most two copies;
+  appendix CL), the contents and times are the same wherever the ring wraps:
+  audio of varying lengths is appended and what is held is compared with the
+  tail of what went in. And **a large append that changes the rate does not
+  keep other threads waiting long**: the wait is compared with the time the
+  append itself took, which does not depend on the machine's speed. }
+procedure TestHistoryWrites;
+const
+  RATE = 100;
+var
+  History: TAudioHistory;
+  Fed: array of Single;
+  Piece, Got: TSingleArray;
+  Total, Size, Step_, I, R, Held: Integer;
+  From_, To_: Double;
+  Ok: Boolean;
+  Worker: TAppendThread;
+  Mark, Longest, Waited: QWord;
+begin
+  WriteLn('TAudioHistory（書き込み・排他）');
+  History := TAudioHistory.Create(60, RATE);
+  try
+    Fed := nil;
+    Total := 0;
+    Ok := True;
+    RandSeed := 7;
+    for Step_ := 1 to 200 do
+    begin
+      { 1 標本から容量（6000）を超える長さまで。/ From one sample to more
+        than the capacity (6000). }
+      case Step_ mod 4 of
+        0: Size := 1 + Random(7);
+        1: Size := 1 + Random(700);
+        2: Size := 1 + Random(5999);
+      else
+        Size := 5000 + Random(4000);
+      end;
+      Piece := Ramp(Total, Size);
+      History.Append(Piece, RATE, Total / RATE);
+      SetLength(Fed, Total + Size);
+      for I := 0 to Size - 1 do
+        Fed[Total + I] := Piece[I];
+      Inc(Total, Size);
+      Held := Min(Total, 60 * RATE);
+      Got := History.Extract(History.EarliestSeconds, History.LatestSeconds,
+        From_, To_, R);
+      if (Length(Got) <> Held) or
+         not SameValue(History.LatestSeconds, Total / RATE, 1E-9) then
+        Ok := False
+      else
+        for I := 0 to Held - 1 do
+          if Got[I] <> Fed[Total - Held + I] then
+          begin
+            Ok := False;
+            Break;
+          end;
+      if not Ok then
+      begin
+        WriteLn(Format('      %d 回目（%d 標本）で食い違い', [Step_, Size]));
+        Break;
+      end;
+    end;
+    Check('どこで折り返しても中身と時刻が足した音と合う（200 回）', Ok);
+  finally
+    History.Free;
+  end;
+
+  { 5 分・48 kHz を、8 kHz の保管庫へ別のスレッドから足す。ファイルの復号と
+    同じ形（版 2.83 から、足すのは復号のスレッド）。
+    Five minutes at 48 kHz appended from another thread into a store at
+    8 kHz -- the shape of a file decode (since version 2.83 the decode thread
+    appends). }
+  History := TAudioHistory.Create(600, 8000);
+  Worker := TAppendThread.Create(True);
+  try
+    Worker.History := History;
+    Worker.Rate := 48000;
+    Worker.Audio := Ramp(0, 48000 * 300);
+    Worker.FreeOnTerminate := False;
+    Longest := 0;
+    Worker.Start;
+    while not Worker.Finished do
+    begin
+      Mark := GetTickCount64;
+      History.RetainedSeconds;
+      Waited := GetTickCount64 - Mark;
+      if Waited > Longest then
+        Longest := Waited;
+    end;
+    Worker.WaitFor;
+    WriteLn(Format('      足し算 %d ms、ほかのスレッドの最長の待ち %d ms',
+      [Worker.Spent, Longest]));
+    { 20 ms までの待ちは、時計の刻み（Windows で約 16 ms）の内として認めます。
+      Waits up to 20 ms are within the clock's tick (about 16 ms on Windows). }
+    Check('大きな足し算の間、ほかのスレッドの待ちは足し算の半分未満',
+      (Longest <= 20) or (Longest * 2 < Worker.Spent),
+      Format('(待ち %d ms / 足し算 %d ms)', [Longest, Worker.Spent]));
+    Check('大きな足し算のあとの時刻と周波数',
+      SameValue(History.LatestSeconds, 300, 1E-6) and
+      (History.SampleRate = 48000),
+      Format('(%.3f 秒、%d Hz)', [History.LatestSeconds, History.SampleRate]));
+  finally
+    Worker.Free;
+    History.Free;
+  end;
+end;
+
 { 文字列を、時刻の付いた確定文字の並びへ直します。時刻は 1 文字 0.1 秒。
   Turns a string into timed confirmed characters, a tenth of a second each. }
 function CharsOf(const Text: string; StartSeconds: Double): TDecodedChars;
@@ -5953,6 +6087,7 @@ begin
     TestBandPass;
     TestResampleBandLimited;
     TestHistory;
+    TestHistoryWrites;
     TestJournal;
     Answers := TAlwaysWorked.Create;
     Listed := TAlwaysInRoster.Create;

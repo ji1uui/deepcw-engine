@@ -84,6 +84,34 @@ type
   end;
   TStationLabels = array of TStationLabel;
 
+  { 波形の 1 行: FFT の振幅と、その行が表す時刻（窓の真ん中）。
+    One waterfall row: the FFT magnitudes and the time it stands for (the
+    middle of its window). }
+  TWaterfallRow = record
+    Seconds: Double;
+    Magnitudes: TDoubleArray;
+  end;
+  TWaterfallRows = array of TWaterfallRow;
+
+  { 音をまとめて読んだ波形の行と、続きを読むための帳簿（計画 6.1 の P7、
+    付録 CL）。`AnalyseWaterfall` が画面のスレッドの外で作り、`PushBatch` が
+    画面のスレッドで描きます。**FFT は前者だけが掛けます。**48 kHz の録音では、
+    画面に残る 10 秒ぶんの FFT が約 150 ms かかり、その間画面が止まっていました。
+    Rows read from a block of audio at once, with the books needed to carry on
+    from it (plan 6.1 P7, appendix CL). `AnalyseWaterfall` makes it off the UI
+    thread and `PushBatch` draws it on the UI thread. **Only the former runs
+    FFTs**: for a 48 kHz recording the ten seconds that stay on screen took
+    about 150 ms of them, with the screen frozen meanwhile. }
+  TWaterfallBatch = record
+    SampleRate: Integer;
+    Rows: TWaterfallRows;
+    Carry: TSingleArray;
+    CarryCount: Integer;
+    BaseSeconds: Double;
+    NextSeconds: Double;
+    Consumed: Int64;
+  end;
+
   TWaterfallView = class(TCustomControl)
   private
     FSampleRate: Integer;
@@ -98,6 +126,9 @@ type
       Input not yet transformed, held until one FFT's worth has arrived. }
     FCarry: TSingleArray;
     FCarryCount: Integer;
+    { 1 回の受け渡しで作った行。行ごとの確保を避けるため使い回します。
+      The rows made by one hand-over, reused to avoid allocating per row. }
+    FRows: TWaterfallRows;
 
     { 画像を環状に使います。FRow が次に書き込む行です。
       The image is used as a ring; FRow is the row written next. }
@@ -202,6 +233,12 @@ type
       Forces the image to be rebuilt on the next paint; called from the
       verification harness. }
     procedure MarkImageStale;
+    { 描いた絵（古い行から順に、全画素）と行の数の要約。2 つの部品が同じ絵を
+      持つかを、検証用の測定から比べます（`PaintTo` は中身を描かないため）。
+      A digest of the picture (every pixel, oldest row first) and the row
+      count, so the verification harness can tell whether two controls hold the
+      same picture (`PaintTo` does not draw the content). }
+    function ImageDigest: QWord;
     procedure Paint; override;
     procedure MouseDown(Button: TMouseButton; Shift: TShiftState;
       X, Y: Integer); override;
@@ -237,6 +274,14 @@ type
       (requirement FR-D.6). }
     procedure PushSamples(const Samples: TSingleArray; ASampleRate: Integer;
       StartSeconds: Double);
+    { `AnalyseWaterfall` が読んだ行を描きます。**数え直しから始めます**
+      （`PushSamples` に、前回の続きでない時刻で渡したのと同じ）。描かれる絵・
+      行の時刻・続きの受け渡しは、同じ音を `PushSamples` に渡した場合と同じです。
+      Draws the rows `AnalyseWaterfall` read. **Counting starts afresh**, as
+      when `PushSamples` is handed a time that does not continue the last; the
+      picture, the rows' times and what later hand-overs continue from are
+      those `PushSamples` would give for the same audio. }
+    procedure PushBatch(const Batch: TWaterfallBatch);
     procedure Clear;
 
     { 帯域にいる局の見出しを重ねます（要件 FR-J.5）。渡さなければ何も重なりません。
@@ -320,6 +365,19 @@ type
     property OnMouseMove;
   end;
 
+{ 録音の周波数から、FFT の長さ・行の間隔・桁の数を決めます。
+  The FFT length, the hop between rows and the number of columns for a
+  capture rate. }
+procedure WaterfallGeometry(SampleRate: Integer; out FFTSize, Hop,
+  Columns: Integer);
+
+{ 音をまとめて波形の行にします。画面に触れないので、どのスレッドからでも
+  呼べます。StartSeconds の意味は `PushSamples` と同じです。
+  Turns a block of audio into waterfall rows. It touches no control, so any
+  thread may call it. StartSeconds means what it does for `PushSamples`. }
+function AnalyseWaterfall(const Samples: TSingleArray; SampleRate: Integer;
+  StartSeconds: Double): TWaterfallBatch;
+
 implementation
 
 resourcestring
@@ -368,6 +426,113 @@ begin
   Result.Alpha := alphaOpaque;
 end;
 
+procedure WaterfallGeometry(SampleRate: Integer; out FFTSize, Hop,
+  Columns: Integer);
+begin
+  { 分解能の目安に最も近い 2 の冪を選びます。
+    Pick the power of two closest to the wanted resolution. }
+  FFTSize := 256;
+  while (FFTSize < 8192) and (SampleRate / FFTSize > WATERFALL_RESOLUTION_HZ) do
+    FFTSize := FFTSize * 2;
+  Hop := Max(1, Round(SampleRate / WATERFALL_ROWS_PER_SECOND));
+  Columns := Max(2, Trunc(Min(WATERFALL_TOP_HZ, SampleRate / 2) * FFTSize /
+    SampleRate) + 1);
+end;
+
+{ 画面に残るのは末尾のぶんだけです。**それを超える量が一度に来たら、超えた分は
+  初めから読みません。**書いてすぐ上書きするために FFT を掛けるのは、そのまま
+  画面が止まる時間になります（10 分の録音で 1.9 秒）。保管庫が
+  「一度に容量を超える量が来たら、その末尾だけを残す」のと同じ考えです。
+  返すのは読まない先頭の標本の数です。
+
+  Only the tail ever survives on screen. **When more than that arrives at
+  once, the excess is never read.** Running an FFT over audio that is
+  overwritten immediately turns straight into time the display is frozen --
+  1.9 seconds for a ten-minute recording. It is the same reasoning by which
+  the audio store keeps only the tail of an oversized block. Returns how many
+  leading samples are not read. }
+function WaterfallSkip(Count, Hop, FFTSize: Integer): Integer;
+begin
+  Result := Max(0, Count - (WATERFALL_ROWS * Hop + FFTSize));
+end;
+
+{ 溜めた音（Carry）に Samples の Offset 以降を足し、FFT 1 回ぶん溜まるたびに
+  1 行作ります。行は Rows の先頭から Count 個に書き、前に入っていた振幅の
+  配列は使い回します。画面に触れません。
+  Adds Samples from Offset onwards to the carry and makes a row whenever one
+  FFT's worth has gathered. Rows are written to the first Count entries of
+  Rows, reusing the magnitude arrays already there. Touches no control. }
+procedure TransformRows(const Samples: TSingleArray; Offset: Integer;
+  FFT: TRealFFT; const Window: TDoubleArray; Hop, Columns, SampleRate: Integer;
+  BaseSeconds: Double; var Carry: TSingleArray; var CarryCount: Integer;
+  var Consumed: Int64; var Rows: TWaterfallRows; out Count: Integer);
+var
+  Frame: TDoubleArray;
+  I, Taken, Size: Integer;
+begin
+  Count := 0;
+  Size := FFT.Size;
+  Frame := nil;
+  SetLength(Frame, Size);
+  while Offset < Length(Samples) do
+  begin
+    Taken := Min(Length(Samples) - Offset, Length(Carry) - CarryCount);
+    for I := 0 to Taken - 1 do
+      Carry[CarryCount + I] := Samples[Offset + I];
+    Inc(CarryCount, Taken);
+    Inc(Offset, Taken);
+
+    while CarryCount >= Size do
+    begin
+      for I := 0 to Size - 1 do
+        Frame[I] := Carry[I] * Window[I];
+      if Count > High(Rows) then
+        SetLength(Rows, Max(4, 2 * Length(Rows)));
+      FFT.MagnitudeSpectrum(Frame, 0, Columns, Rows[Count].Magnitudes);
+      { この行が表すのは、いま使った窓の**真ん中**の時刻です。端を採ると、
+        窓の長さ（8000 Hz で 128 ms）の半分だけ系統的にずれます。
+        The row stands for the time at the **middle** of the window just used.
+        Taking an edge would bias every row by half the window — 128 ms at
+        8000 Hz. }
+      Rows[Count].Seconds := BaseSeconds + (Consumed + Size / 2) / SampleRate;
+      Inc(Count);
+      Inc(Consumed, Hop);
+      { ホップぶんだけ捨てます。/ Discard one hop. }
+      for I := 0 to CarryCount - Hop - 1 do
+        Carry[I] := Carry[I + Hop];
+      Dec(CarryCount, Hop);
+      if CarryCount < 0 then
+        CarryCount := 0;
+    end;
+  end;
+end;
+
+function AnalyseWaterfall(const Samples: TSingleArray; SampleRate: Integer;
+  StartSeconds: Double): TWaterfallBatch;
+var
+  FFTSize, Hop, Columns, Skip, Count: Integer;
+  FFT: TRealFFT;
+begin
+  Result := Default(TWaterfallBatch);
+  if (SampleRate <= 0) or (Length(Samples) = 0) then
+    Exit;
+  Result.SampleRate := SampleRate;
+  WaterfallGeometry(SampleRate, FFTSize, Hop, Columns);
+  Skip := WaterfallSkip(Length(Samples), Hop, FFTSize);
+  Result.BaseSeconds := StartSeconds + Skip / SampleRate;
+  Result.NextSeconds := StartSeconds + Length(Samples) / SampleRate;
+  SetLength(Result.Carry, FFTSize * 2);
+  FFT := TRealFFT.Create(FFTSize);
+  try
+    TransformRows(Samples, Skip, FFT, HannWindow(FFTSize), Hop, Columns,
+      SampleRate, Result.BaseSeconds, Result.Carry, Result.CarryCount,
+      Result.Consumed, Result.Rows, Count);
+  finally
+    FFT.Free;
+  end;
+  SetLength(Result.Rows, Count);
+end;
+
 constructor TWaterfallView.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
@@ -399,24 +564,17 @@ end;
 
 procedure TWaterfallView.Configure(ASampleRate: Integer);
 var
-  Size, I, Column: Integer;
+  I, Column: Integer;
   Blank: TFPColor;
 begin
   if ASampleRate <= 0 then
     Exit;
   FSampleRate := ASampleRate;
-  { 分解能の目安に最も近い 2 の冪を選びます。
-    Pick the power of two closest to the wanted resolution. }
-  Size := 256;
-  while (Size < 8192) and (FSampleRate / Size > WATERFALL_RESOLUTION_HZ) do
-    Size := Size * 2;
-  FFFTSize := Size;
-  FHop := Max(1, Round(FSampleRate / WATERFALL_ROWS_PER_SECOND));
+  WaterfallGeometry(FSampleRate, FFFTSize, FHop, FColumns);
   FreeAndNil(FFFT);
   FFFT := TRealFFT.Create(FFFTSize);
   FWindow := HannWindow(FFFTSize);
   FTopHz := Min(WATERFALL_TOP_HZ, FSampleRate / 2);
-  FColumns := Max(2, Trunc(FTopHz * FFFTSize / FSampleRate) + 1);
 
   SetLength(FCarry, FFFTSize * 2);
   FCarryCount := 0;
@@ -555,9 +713,7 @@ end;
 procedure TWaterfallView.PushSamples(const Samples: TSingleArray;
   ASampleRate: Integer; StartSeconds: Double);
 var
-  Frame: TDoubleArray;
-  Magnitudes: TDoubleArray;
-  I, Taken, Offset, Room, Skip: Integer;
+  I, Skip, Count: Integer;
 begin
   if Length(Samples) = 0 then
     Exit;
@@ -582,62 +738,53 @@ begin
   end;
   FNextSeconds := StartSeconds + Length(Samples) / FSampleRate;
 
-  { 画面に残るのは末尾のぶんだけです。**それを超える量が一度に来たら、超えた分は
-    初めから読みません。**書いてすぐ上書きするために FFT を掛けるのは、そのまま
-    画面が止まる時間になります（10 分の録音で 1.9 秒）。保管庫が
-    「一度に容量を超える量が来たら、その末尾だけを残す」のと同じ考えです。
-
-    Only the tail ever survives on screen. **When more than that arrives at
-    once, the excess is never read.** Running an FFT over audio that is
-    overwritten immediately turns straight into time the display is frozen --
-    1.9 seconds for a ten-minute recording. It is the same reasoning by which
-    the audio store keeps only the tail of an oversized block.
-
-    飛ばした分だけ基準を進めるので、行の時刻はずれません。
-    The origin moves forward by what was skipped, so the rows keep their
-    times. }
-  Room := WATERFALL_ROWS * FHop + FFFTSize;
-  Skip := 0;
-  if Length(Samples) > Room then
+  { 画面に残らない先頭は読みません（`WaterfallSkip`）。飛ばした分だけ基準を
+    進めるので、行の時刻はずれません。
+    The head that would not stay on screen is not read (`WaterfallSkip`). The
+    origin moves forward by what was skipped, so the rows keep their times. }
+  Skip := WaterfallSkip(Length(Samples), FHop, FFFTSize);
+  if Skip > 0 then
   begin
-    Skip := Length(Samples) - Room;
     FBaseSeconds := StartSeconds + Skip / FSampleRate;
     FConsumed := 0;
     FCarryCount := 0;
     FNewestRowSeconds := FBaseSeconds;
   end;
 
-  SetLength(Frame, FFFTSize);
-  Offset := Skip;
-  while Offset < Length(Samples) do
+  TransformRows(Samples, Skip, FFFT, FWindow, FHop, FColumns, FSampleRate,
+    FBaseSeconds, FCarry, FCarryCount, FConsumed, FRows, Count);
+  for I := 0 to Count - 1 do
   begin
-    Taken := Min(Length(Samples) - Offset, Length(FCarry) - FCarryCount);
-    for I := 0 to Taken - 1 do
-      FCarry[FCarryCount + I] := Samples[Offset + I];
-    Inc(FCarryCount, Taken);
-    Inc(Offset, Taken);
+    FNewestRowSeconds := FRows[I].Seconds;
+    PushRow(FRows[I].Magnitudes);
+  end;
+  { 長い音を一度に受けたあとの行（48 kHz で 1 MB ほど）は持ち続けません。
+    The rows left from one long block (about 1 MB at 48 kHz) are not kept. }
+  if Length(FRows) > WATERFALL_ROWS_PER_SECOND then
+    FRows := nil;
+  Invalidate;
+end;
 
-    while FCarryCount >= FFFTSize do
-    begin
-      for I := 0 to FFFTSize - 1 do
-        Frame[I] := FCarry[I] * FWindow[I];
-      FFFT.MagnitudeSpectrum(Frame, 0, FColumns, Magnitudes);
-      { この行が表すのは、いま使った窓の**真ん中**の時刻です。端を採ると、
-        窓の長さ（8000 Hz で 128 ms）の半分だけ系統的にずれます。
-        The row stands for the time at the **middle** of the window just used.
-        Taking an edge would bias every row by half the window — 128 ms at
-        8000 Hz. }
-      FNewestRowSeconds := FBaseSeconds +
-        (FConsumed + FFFTSize / 2) / FSampleRate;
-      Inc(FConsumed, FHop);
-      PushRow(Magnitudes);
-      { ホップぶんだけ捨てます。/ Discard one hop. }
-      for I := 0 to FCarryCount - FHop - 1 do
-        FCarry[I] := FCarry[I + FHop];
-      Dec(FCarryCount, FHop);
-      if FCarryCount < 0 then
-        FCarryCount := 0;
-    end;
+procedure TWaterfallView.PushBatch(const Batch: TWaterfallBatch);
+var
+  I: Integer;
+begin
+  if (Batch.SampleRate <= 0) or (Length(Batch.Carry) = 0) then
+    Exit;
+  if Batch.SampleRate <> FSampleRate then
+    Configure(Batch.SampleRate);
+  if (FFFT = nil) or (Length(Batch.Carry) <> Length(FCarry)) then
+    Exit;
+  FBaseSeconds := Batch.BaseSeconds;
+  FNextSeconds := Batch.NextSeconds;
+  FConsumed := Batch.Consumed;
+  FCarry := Copy(Batch.Carry);
+  FCarryCount := Batch.CarryCount;
+  FNewestRowSeconds := FBaseSeconds;
+  for I := 0 to High(Batch.Rows) do
+  begin
+    FNewestRowSeconds := Batch.Rows[I].Seconds;
+    PushRow(Batch.Rows[I].Magnitudes);
   end;
   Invalidate;
 end;
@@ -670,6 +817,35 @@ end;
 procedure TWaterfallView.MarkImageStale;
 begin
   FImageStale := True;
+end;
+
+function TWaterfallView.ImageDigest: QWord;
+var
+  I, Row, Column: Integer;
+  Colour: TFPColor;
+
+  procedure Mix(Value: QWord);
+  begin
+    Result := (Result xor Value) * QWord(1099511628211);
+  end;
+
+begin
+  Result := QWord(14695981039346656037);
+  Mix(FFilled);
+  Mix(FColumns);
+  if FImage = nil then
+    Exit;
+  for I := 0 to WATERFALL_ROWS - 1 do
+  begin
+    Row := (FRow + I) mod WATERFALL_ROWS;
+    for Column := 0 to FColumns - 1 do
+    begin
+      Colour := FImage.Colors[Column, Row];
+      Mix(Colour.Red);
+      Mix(Colour.Green);
+      Mix(Colour.Blue);
+    end;
+  end;
 end;
 
 procedure TWaterfallView.SetShowChars(Value: Boolean);

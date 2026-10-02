@@ -146,6 +146,11 @@ type
     FClickTune: Double;
     FClickHalf: Double;
     FLoadError: string;
+    { 読んだファイルの波形の行。FFT はこのスレッドで掛け、画面は描くだけです
+      （計画 6.1 の P7、付録 CL）。
+      The loaded file's waterfall rows. The FFTs run on this thread; the
+      screen only draws (plan 6.1 P7, appendix CL). }
+    FWaterfall: TWaterfallBatch;
     FOnLoaded: TNotifyEvent;
     FOnShaped: TNotifyEvent;
     FRecheck: Boolean;
@@ -226,6 +231,7 @@ type
     property AppliedHalfWidthHz: Double read FAppliedHalf;
     property Neighbours: TDoubleArray read FNeighbours;
     property LoadError: string read FLoadError;
+    property Waterfall: TWaterfallBatch read FWaterfall;
     property Chars: TDecodedChars read FChars;
     property Recheck: Boolean read FRecheck;
     property Fist: Boolean read FFist;
@@ -1886,7 +1892,11 @@ begin
     end;
   end;
   FSamples := Raw;
+  FWaterfall := AnalyseWaterfall(Raw, FSampleRate, 0);
   Synchronize(@ReportLoaded);
+  { 描き終えた行は、もう要りません。/ The rows are drawn and no longer
+    needed. }
+  FWaterfall := Default(TWaterfallBatch);
   { 画面が閉じられようとしていれば、重い仕事は始めません。
     If the window is closing, the heavy work is not started. }
   if Terminated then
@@ -7063,7 +7073,7 @@ begin
     audio hardware.** The display holds the last ten seconds; characters older
     than that are not laid over it. }
   FRxWaterfall.Clear;
-  FRxWaterfall.PushSamples(Thread.Samples, Thread.SampleRate, 0);
+  FRxWaterfall.PushBatch(Thread.Waterfall);
   { ノイズ低減は画面のスレッドで掛けます（FR-N の取り決め 4。低減器は設定で
     差し替わるため、復号のスレッドには渡しません）。
     Noise reduction is applied on the UI thread (rule 4 of FR-N: the reducer

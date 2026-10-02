@@ -147,6 +147,8 @@ type
     FShortfall: Double;
     FLock: TRTLCriticalSection;
     procedure Resize(ARate: Integer);
+    procedure Install(ARate: Integer; const AData: TSingleArray;
+      AShortfall: Double);
     function LatestUnlocked: Double;
   public
     constructor Create(ASeconds: Double; ARate: Integer);
@@ -233,6 +235,47 @@ begin
   inherited Destroy;
 end;
 
+{ 環を確保します。フィールドに触れないので、排他の外で呼べます。
+  Allocates a ring. It touches no field, so it may run outside the lock.
+
+  30 分を 48 kHz で保つと 345 MB を一度に確保することになります。取れない
+  ことは実際に起こり得ます（32 ビット版、混み合った機械）。取れないまま
+  例外を上げると、受信の脈動のたびに同じ失敗を繰り返します。取れるところまで
+  半分ずつ下げ、**足りなかったことを覚えておいて画面に出します**（第 10 章
+  10.9）。
+
+  Half an hour at 48 kHz means a single 345 MB allocation, and failing to get
+  it is a real possibility on a 32-bit build or a busy machine. Letting the
+  exception out would repeat the same failure on every pulse of the receive
+  loop, so the request is halved until it succeeds and **the shortfall is
+  remembered and shown** (chapter 10, rule 10.9). }
+procedure AllocateRing(Seconds: Double; Rate: Integer; out Data: TSingleArray;
+  out Shortfall: Double);
+var
+  Wanted: Int64;
+begin
+  Data := nil;
+  Shortfall := 0;
+  Wanted := Max(1, Round(Seconds * Rate));
+  while Wanted >= Rate do
+  begin
+    try
+      SetLength(Data, Wanted);
+      Break;
+    except
+      on EOutOfMemory do
+      begin
+        Data := nil;
+        Wanted := Wanted div 2;
+      end;
+    end;
+  end;
+  if Length(Data) = 0 then
+    SetLength(Data, Rate);
+  if Length(Data) < Round(Seconds * Rate) then
+    Shortfall := Seconds - Length(Data) / Rate;
+end;
+
 { 環の大きさを決め直します。中身は捨てます。保持時間や録音周波数が変わったとき
   だけ呼ばれ、そのどちらも、それまでの音声をそのまま使い続けられない変化です。
   Sets the ring's size, discarding its contents. It is called only when the
@@ -240,42 +283,24 @@ end;
   already held usable as it stands. }
 procedure TAudioHistory.Resize(ARate: Integer);
 var
-  Wanted: Int64;
+  Data: TSingleArray;
+  Shortfall: Double;
+begin
+  FData := nil;
+  AllocateRing(FSeconds, Max(1, ARate), Data, Shortfall);
+  Install(ARate, Data, Shortfall);
+end;
+
+{ 確保した環に入れ替えます。中身は捨てます。/ Puts an allocated ring in
+  place, discarding the contents. }
+procedure TAudioHistory.Install(ARate: Integer; const AData: TSingleArray;
+  AShortfall: Double);
 begin
   FRate := Max(1, ARate);
-  FData := nil;
+  FData := AData;
   FCount := 0;
   FHead := 0;
-  FShortfall := 0;
-  Wanted := Max(1, Round(FSeconds * FRate));
-  { 30 分を 48 kHz で保つと 345 MB を一度に確保することになります。取れない
-    ことは実際に起こり得ます（32 ビット版、混み合った機械）。取れないまま
-    例外を上げると、受信の脈動のたびに同じ失敗を繰り返します。取れるところまで
-    半分ずつ下げ、**足りなかったことを覚えておいて画面に出します**（第 10 章
-    10.9）。
-
-    Half an hour at 48 kHz means a single 345 MB allocation, and failing to get
-    it is a real possibility on a 32-bit build or a busy machine. Letting the
-    exception out would repeat the same failure on every pulse of the receive
-    loop, so the request is halved until it succeeds and **the shortfall is
-    remembered and shown** (chapter 10, rule 10.9). }
-  while Wanted >= FRate do
-  begin
-    try
-      SetLength(FData, Wanted);
-      Break;
-    except
-      on EOutOfMemory do
-      begin
-        FData := nil;
-        Wanted := Wanted div 2;
-      end;
-    end;
-  end;
-  if Length(FData) = 0 then
-    SetLength(FData, FRate);
-  if Length(FData) < Round(FSeconds * FRate) then
-    FShortfall := FSeconds - Length(FData) / FRate;
+  FShortfall := AShortfall;
 end;
 
 function TAudioHistory.LatestUnlocked: Double;
@@ -286,17 +311,58 @@ end;
 procedure TAudioHistory.Append(const Samples: TSingleArray; ASampleRate: Integer;
   StartSeconds: Double);
 var
-  Capacity, Total, Take, Start, Room, I, Tail: Integer;
+  Capacity, Total, Take, Start, Room, Tail, Write_, First: Integer;
+  Seconds, Shortfall: Double;
+  Fresh, Old: TSingleArray;
 begin
   if (Length(Samples) = 0) or (ASampleRate <= 0) then
     Exit;
+  { 周波数が変わるなら、新しい環は**排他の外で**確保します。48 kHz・10 分で
+    115 MB を確保して埋める間（約 70 ms）、画面のスレッドが保持時間を尋ねて
+    待たされていました（付録 CL）。古い環は確保の前に手放します。中身は
+    どのみち捨てるもので、新旧を同時に持つと 30 分・48 kHz で 600 MB を超えます。
+    If the rate changes, the new ring is allocated **outside the lock**: while
+    115 MB (ten minutes at 48 kHz) was allocated and cleared, about 70 ms, the
+    UI thread asking for the retained time was kept waiting (appendix CL). The
+    old ring is let go before that: its contents are discarded anyway, and
+    holding both would pass 600 MB at thirty minutes and 48 kHz. }
+  Fresh := nil;
+  Old := nil;
+  Shortfall := 0;
+  EnterCriticalSection(FLock);
+  try
+    Seconds := 0;
+    if ASampleRate <> FRate then
+    begin
+      Seconds := FSeconds;
+      Old := FData;
+      FData := nil;
+      SetLength(FData, FRate);
+      FCount := 0;
+      FHead := 0;
+    end;
+  finally
+    LeaveCriticalSection(FLock);
+  end;
+  Old := nil;
+  if Seconds > 0 then
+    AllocateRing(Seconds, ASampleRate, Fresh, Shortfall);
   EnterCriticalSection(FLock);
   try
     if ASampleRate <> FRate then
       { 周波数が変われば、標本の並びの意味が変わります。中身は手放します。
+        確保した間に保持時間が変わっていれば、確保し直します。
         A different rate gives the samples a different meaning, so the contents
-        are released. }
-      Resize(ASampleRate);
+        are released. Should the retention have changed meanwhile, the ring is
+        allocated again. The old ring is let go after the lock (`Old`). }
+    begin
+      Old := FData;
+      if (Length(Fresh) > 0) and (Seconds = FSeconds) then
+        Install(ASampleRate, Fresh, Shortfall)
+      else
+        Resize(ASampleRate);
+    end;
+    Fresh := nil;
 
     { 渡された時刻が、保持しているものの続きになっているか。半標本より離れて
       いれば、呼び出し側が数え直した（受信のやり直し・ファイルの復号）と見て、
@@ -338,12 +404,22 @@ begin
     if Start > 0 then
       FBaseSeconds := FBaseSeconds + Start / FRate;
 
-    for I := 0 to Take - 1 do
-      FData[(FHead + FCount + I) mod Capacity] := Samples[Start + I];
+    { 環の末尾から書き、はみ出した分を頭から書きます（多くて 2 回の写し）。
+      1 標本ずつ剰余を取っていた写しは、5 分・48 kHz で約 50 ms 排他を握って
+      いました（付録 CL）。
+      Written from the end of the ring, wrapping the rest to its start: at most
+      two copies. Taking a remainder per sample held the lock about 50 ms for
+      five minutes at 48 kHz (appendix CL). }
+    Write_ := (FHead + FCount) mod Capacity;
+    First := Min(Take, Capacity - Write_);
+    Move(Samples[Start], FData[Write_], First * SizeOf(Single));
+    if Take > First then
+      Move(Samples[Start + First], FData[0], (Take - First) * SizeOf(Single));
     Inc(FCount, Take);
   finally
     LeaveCriticalSection(FLock);
   end;
+  Old := nil;
 end;
 
 procedure TAudioHistory.Clear;
