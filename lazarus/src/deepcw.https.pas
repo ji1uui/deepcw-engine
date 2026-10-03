@@ -191,6 +191,11 @@ begin
       SetString(Chunk, PAnsiChar(@Buffer[0]), Got);
       Body := Body + Chunk;
     until (Got = 0) or (Length(Body) >= HTTPS_MAX_BODY_BYTES);
+    { 最後の読みで上限を越えた分は捨てます（ほかの OS と同じく上限まで）。
+      What the last read brought past the limit is dropped (up to the limit,
+      as on the other systems). }
+    if Length(Body) > HTTPS_MAX_BODY_BYTES then
+      SetLength(Body, HTTPS_MAX_BODY_BYTES);
     Result := True;
   finally
     if Request <> nil then

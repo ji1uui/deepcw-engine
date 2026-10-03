@@ -4725,6 +4725,83 @@ begin
 {$ENDIF}
 end;
 
+type
+  { 作業スレッドから照会する（画面のアプリと同じ呼び方）。/ Queries from a
+    worker thread, as the GUI does. }
+  TProbeThread = class(TThread)
+  protected
+    procedure Execute; override;
+  public
+    Url, Body, Failure: string;
+    Status: Integer;
+    Answered: Boolean;
+  end;
+
+procedure TProbeThread.Execute;
+begin
+  Answered := HttpsGet(Url, LOOKUP_USER_AGENT, 15000, Status, Body, Failure);
+end;
+
+{ 実際の相手から HTTPS の応答を受け取る（付録 CM.16）。**環境変数
+  `DEEPCW_HTTPS_PROBE_URLS` に URL（空白で区切る）を与えたときだけ**走ります。
+  CI が照会先とは別の相手を与えます。手元では、与えなければ通信しません。
+  各 URL を画面のスレッドと作業スレッドの両方から受け取り、本文が上限
+  （`HTTPS_MAX_BODY_BYTES`）を越えないことも確かめます。
+  Receives a real HTTPS answer (appendix CM.16), **only when
+  `DEEPCW_HTTPS_PROBE_URLS` holds URLs** (space separated). CI supplies a host
+  other than the lookup service; locally nothing is contacted unless given.
+  Each URL is fetched from the main thread and from a worker thread, and the
+  body must not exceed the limit (`HTTPS_MAX_BODY_BYTES`). }
+procedure TestHttpsProbe;
+var
+  Urls: TStringList;
+  Url, Body, Failure: string;
+  Status, I: Integer;
+  Answered: Boolean;
+  Probe: TProbeThread;
+begin
+  Urls := TStringList.Create;
+  try
+    Urls.Delimiter := ' ';
+    Urls.StrictDelimiter := True;
+    Urls.DelimitedText := Trim(GetEnvironmentVariable('DEEPCW_HTTPS_PROBE_URLS'));
+    for I := Urls.Count - 1 downto 0 do
+      if Urls[I] = '' then
+        Urls.Delete(I);
+    if Urls.Count = 0 then
+    begin
+      WriteLn('  --   DEEPCW_HTTPS_PROBE_URLS が無いので、実際の応答の確かめはとばします');
+      Exit;
+    end;
+    for Url in Urls do
+    begin
+      Answered := HttpsGet(Url, LOOKUP_USER_AGENT, 15000, Status, Body, Failure);
+      WriteLn(Format('       %s: 状態 %d、本文 %d バイト', [Url, Status, Length(Body)]));
+      Check('実際の相手から応答を受け取る（' + Url + '）',
+        Answered and (Status = 200) and (Body <> ''),
+        Format('(状態 %d、%d バイト、%s)', [Status, Length(Body), Failure]));
+      Check('本文は上限まで（' + Url + '）', Length(Body) <= HTTPS_MAX_BODY_BYTES,
+        Format('(%d / %d バイト)', [Length(Body), HTTPS_MAX_BODY_BYTES]));
+
+      Probe := TProbeThread.Create(True);
+      try
+        Probe.Url := Url;
+        Probe.Start;
+        Probe.WaitFor;
+        Check('作業スレッドからも受け取る（' + Url + '）',
+          Probe.Answered and (Probe.Status = 200) and (Probe.Body <> '') and
+          (Length(Probe.Body) <= HTTPS_MAX_BODY_BYTES),
+          Format('(状態 %d、%d バイト、%s)',
+            [Probe.Status, Length(Probe.Body), Probe.Failure]));
+      finally
+        Probe.Free;
+      end;
+    end;
+  finally
+    Urls.Free;
+  end;
+end;
+
 { HTTPS の部品（付録 CM.13）。**照会先へは繋ぎません**（試験のたびに相手へ
   負荷を掛けないため。CI からも繋がない）。URL の分け方と、繋がらないときに
   理由を返して落ちないことを、この OS の部品そのもので確かめます。
@@ -4812,6 +4889,7 @@ begin
   else
     WriteLn('  --   要件定義書が無いので、版の突き合わせはとばします');
   TestTlsVerification;
+  TestHttpsProbe;
 end;
 
 procedure TestPrefixTable;

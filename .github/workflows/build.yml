@@ -261,8 +261,18 @@ jobs:
       # On Windows the executables carry `.exe`. **Whether bash supplies it is
       # not relied on**: if it does not, the step fails with "not found", and
       # only on Windows.
+      #
+      # `DEEPCW_HTTPS_PROBE_URLS`: 各 OS の HTTPS の部品が、実際の応答を
+      # 受け取れること（付録 CM.16）。**総務省の照会先ではありません**（試験の
+      # たびに負荷を掛けないため）。小さい本文と、上限（64 KB）を越える本文の 2 つ。
+      #
+      # `DEEPCW_HTTPS_PROBE_URLS`: each system's HTTPS client receives a real
+      # answer (appendix CM.16). **Not the ministry's lookup service** (no load
+      # on it per test run). One small body and one over the 64 KB limit.
       - name: 数値・記録・読み取りの検証
         working-directory: lazarus
+        env:
+          DEEPCW_HTTPS_PROBE_URLS: https://github.com/robots.txt https://github.com/
         run: ./cli/dsp_check${{ runner.os == 'Windows' && '.exe' || '' }}
 
       # 性能の報告（計画 6.1 の P2）が、この OS で表を出せること。**基準機で
