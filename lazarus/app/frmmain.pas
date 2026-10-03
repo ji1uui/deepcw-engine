@@ -36,6 +36,7 @@ uses
   DeepCW.Review, DeepCW.Journal, DeepCW.Multi, DeepCW.BandMap, DeepCW.Log,
   DeepCW.Callsign, DeepCW.Recorder, DeepCW.Practice, DeepCW.Fist,
   DeepCW.FistLog, DeepCW.Diagnostics, DeepCW.Reference, DeepCW.Roster, DeepCW.CopyLog,
+  DeepCW.LicenseLookup,
   DeepCW.Hamlib, DeepCW.RigKeyer, DeepCW.TxMessage, DeepCW.NoiseReduction,
   DeepCW.Alphabet, DeepCW.TxGate, DeepCW.RigConfig,
   DeepCW.Platform,
@@ -749,6 +750,18 @@ type
     FSetRosterClear: TButton;
     FSetRosterInfo: TLabel;
     FRosterFile: string;
+    { 総務省の無線局等情報検索（要件 FR-K.3〜K.8、付録 CM）。照会は作業スレッド
+      が行い、画面は覚えている結果を待たずに引くだけです。
+      The ministry's radio station search (requirements FR-K.3-K.8, appendix
+      CM). A worker thread does the querying; the screen only reads what is
+      remembered, never waiting. }
+    FLicence: TLicenseLookup;
+    FLicenceThread: TLicenseLookupThread;
+    FLicenceProblem: string;
+    FSetLicence: TCheckBox;
+    FSetLicenceNote: TLabel;
+    FSetLicenceSource: TLabel;
+    FSetLicenceInfo: TLabel;
     { 国別前置符字表（要件 FR-K.12）。**形は満たすがどの国にも割り当てられて
       いない前置符字**を弾くために使います。
       The country prefix table (requirement FR-K.12), used to reject a prefix
@@ -934,6 +947,10 @@ type
     procedure SetRosterClearClick(Sender: TObject);
     procedure LoadRoster(const FileName: string);
     procedure UpdateRosterInfo;
+    function LicenceResult(const Callsign: string): TLicenseResult;
+    procedure SetLicenceChanged(Sender: TObject);
+    procedure ApplyLicence;
+    procedure UpdateLicenceInfo;
     procedure SetPrefixesClick(Sender: TObject);
     procedure SetPrefixesClearClick(Sender: TObject);
     procedure LoadPrefixes(const FileName: string);
@@ -1421,6 +1438,20 @@ resourcestring
   RsPrefixesUnused = '使っていません（形だけで判定します）';
   RsPrefixesSkipped = '（前置符字として読めなかった行 %d）';
   RsRosterUnused = '使っていません';
+  { 総務省の検索の設定（要件 FR-K.3、付録 CM）。**有効にする前に、何を送り
+    何を受け取るかを見せます。**取得元の明示は規約第 3 条の文言そのままです。
+    The ministry search setting (requirement FR-K.3, appendix CM). **What is
+    sent and what comes back is shown before it is switched on.** The source
+    statement is the wording of article 3 of the terms, as it stands. }
+  RsSetLicence = '総務省の無線局等情報検索で免許を確かめる（通信します）';
+  RsSetLicenceNote = '送るもの: 複数回一致した日本の局の呼出符号だけ。' +
+    '受け取るもの: 件数とデータ更新日だけ（名前や住所は受け取りません）。';
+  RsLicenceAttribution = 'このサービスは、総務省 電波利用ポータルのWeb-API 機能を' +
+    '利用して取得した情報をもとに作成しているが、サービスの内容は総務省によって' +
+    '保証されたものではない';
+  RsLicenceUnbuilt = 'この版では使えません（通信の部品が未実装）';
+  RsLicenceRequests = '照会 %d 回';
+  RsLicenceProblem = '（照会できない: %s）';
   RsRosterSkipped = '（符号として読めなかった行 %d）';
   RsRosterTruncated = '（大きすぎるため途中まで）';
   RsLogOnceNote = '（1 回だけ）';
@@ -1558,6 +1589,7 @@ resourcestring
   RsPrefixesOpenTitle = '国別前置符字表を開く';
   RsTextFilter = 'テキスト (*.txt;*.csv)|*.txt;*.csv|すべて (*.*)|*.*';
   RsCtxRoster = '呼出符号の一覧';
+  RsCtxLicence = '総務省の検索';
   RsRosterOpenTitle = '呼出符号の一覧を開く';
   RsInRoster = '手元の一覧';
 
@@ -2031,6 +2063,9 @@ begin
   FReviewPlay := TAudioPlayback.Create;
   FAlerts := TWatchAlerts.Create;
   FHistory := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, FCaptureRate);
+  { 既定は切です（要件 FR-K.3）。/ Off by default (requirement FR-K.3). }
+  FLicence := TLicenseLookup.Create(NewLookupTransport, True);
+  FLicence.UserAgent := 'DeepCW';
   FJournal := TTranscriptJournal.Create(JournalDirectory);
   FLog := TContactLog.Create(LogFileName);
   FMode := rmContact;
@@ -2219,6 +2254,14 @@ begin
   FLog.Free;
   FRoster.Free;
   FPrefixes.Free;
+  { 照会を止めてから解放します。/ Querying stops before release. }
+  if FLicenceThread <> nil then
+  begin
+    FLicenceThread.Terminate;
+    FLicenceThread.WaitFor;
+    FreeAndNil(FLicenceThread);
+  end;
+  FLicence.Free;
   FHistory.Free;
   FRing.Free;
   FDecoder.Free;
@@ -4345,7 +4388,9 @@ begin
     The prefix table row (requirement FR-K.12) adds another 32. }
   { 画面の言語の行（要件 NFR-7.6）を足したので 40 画素ぶん高くします。
     The language row (requirement NFR-7.6) adds another 40. }
-  Operating.Height := 340;
+  { 総務省の検索の行と説明（付録 CM）で 112 画素。
+    The ministry search row and its explanation (appendix CM) add 112. }
+  Operating.Height := 452;
   RegisterCaption(Operating, @RsSetOperating);
   Stretch(Operating, alTop);
   { 幅が決まるたびに、置き場所を収め直します（`FitPath`）。
@@ -4449,18 +4494,51 @@ begin
     @SetPrefixesClearClick);
   FSetPrefixesInfo := AddLabel(Operating, '', 440, 214);
 
+  { 総務省の無線局等情報検索（要件 FR-K.3〜K.8、付録 CM）。**既定は切で、
+    有効にする前に何を送り何を受け取るかが見えるように、説明を常に出して
+    おきます。**取得元の明示（規約第 3 条）も同じ場所に置きます。通信の部品が
+    無い版では選べません。
+    The ministry's radio station search (requirements FR-K.3-K.8, appendix
+    CM). **Off by default, with the explanation always on show so that what
+    is sent and what comes back is seen before switching it on**; the source
+    statement of article 3 of the terms sits in the same place. A version
+    without the transport does not offer it. }
+  FSetLicence := TCheckBox.Create(Operating);
+  FSetLicence.Parent := Operating;
+  FSetLicence.SetBounds(14, 242, 420, 22);
+  RegisterCaption(FSetLicence, @RsSetLicence);
+  FSetLicence.Checked := False;
+  FSetLicence.Enabled := LookupTransportBuilt;
+  FSetLicence.OnChange := @SetLicenceChanged;
+  FSetLicenceInfo := AddLabel(Operating, '', 440, 244);
+  FSetLicenceNote := AddLabel(Operating, @RsSetLicenceNote, 34, 268);
+  FSetLicenceNote.AutoSize := False;
+  FSetLicenceNote.WordWrap := True;
+  FSetLicenceNote.SetBounds(34, 268, 600, 40);
+  { 規約第 3 条の文言は、英語の画面でも日本語のままです（規約の文言なので
+    訳しません。`.po` の訳も原文と同じ）。登録してあるので、言語の往復の試験は
+    「意図して残した日本語」として扱います（「画面の言葉 / Language」と同じ）。
+    The wording of article 3 stays Japanese on the English screen too (it is
+    the terms' own wording, so it is not translated; the `.po` carries the
+    original). Being registered, the language round trip treats it as
+    deliberate Japanese, like "画面の言葉 / Language". }
+  FSetLicenceSource := AddLabel(Operating, @RsLicenceAttribution, 34, 310);
+  FSetLicenceSource.AutoSize := False;
+  FSetLicenceSource.WordWrap := True;
+  FSetLicenceSource.SetBounds(34, 310, 600, 40);
+
   { 高コントラスト表示（要件 NFR-5.5）。**この製品が想定する利用者は老眼を
     抱える運用者**なので、薄い文字は読めないことがあります。
     High contrast (requirement NFR-5.5): **the operators this product is for
     have presbyopia**, and faint text can simply be unreadable to them. }
   FSetHighContrast := TCheckBox.Create(Operating);
   FSetHighContrast.Parent := Operating;
-  FSetHighContrast.SetBounds(14, 244, 420, 22);
+  FSetHighContrast.SetBounds(14, 356, 420, 22);
   RegisterCaption(FSetHighContrast, @RsSetHighContrast);
   FSetHighContrast.Checked := False;
   FSetHighContrast.OnChange := @HighContrastChanged;
   AddLabel(Operating, @RsSetHighContrastNote,
-    440, 246);
+    440, 358);
 
   { 画面の言語（要件 NFR-7.6）。**再起動を求めません。**押したその場で変わります。
 
@@ -4478,16 +4556,16 @@ begin
 
     **These choices are not translated**, or the operator would be hunting for a
     language they can read among names written in one they cannot. }
-  AddLabel(Operating, @RsSetLanguage, 14, 278);
+  AddLabel(Operating, @RsSetLanguage, 14, 390);
   FSetLanguage := TComboBox.Create(Operating);
   FSetLanguage.Parent := Operating;
-  FSetLanguage.SetBounds(200, 274, 160, 28);
+  FSetLanguage.SetBounds(200, 386, 160, 28);
   FSetLanguage.Style := csDropDownList;
   for Language_ := Low(UI_LANG_KEYS) to High(UI_LANG_KEYS) do
     FSetLanguage.Items.Add(UiLangCaption(Language_));
   FSetLanguage.ItemIndex := UI_LANG_DEFAULT;
   FSetLanguage.OnChange := @SetLanguageChanged;
-  FSetLanguageInfo := AddLabel(Operating, '', 380, 278);
+  FSetLanguageInfo := AddLabel(Operating, '', 380, 390);
 
   { ── 練習で鳴らす音 ──（版 2.85 で送信タブから移した。付録 CG）
     PC で鳴らす音（受信練習・文から作る音）にだけ効きます。**無線機の側音は
@@ -5091,6 +5169,10 @@ begin
       "cannot match", not "cannot start" (requirement FR-K.10). }
     LoadRoster(Ini.ReadString('roster', 'file', ''));
     LoadPrefixes(Ini.ReadString('roster', 'prefixes', ''));
+    { 通信の部品が無い版では、前に入れていても入れません。
+      In a version without the transport it stays off even if it was on. }
+    FSetLicence.Checked := LookupTransportBuilt and
+      Ini.ReadBool('licence', 'enabled', False);
     FSetHighContrast.Checked :=
       Ini.ReadBool('receive', 'high_contrast', False);
     FPrDelay.Checked := Ini.ReadBool('practice', 'delay', True);
@@ -5261,6 +5343,7 @@ begin
         says the file is the operator's). }
       Ini.WriteString('roster', 'file', FRosterFile);
       Ini.WriteString('roster', 'prefixes', FPrefixFile);
+      Ini.WriteBool('licence', 'enabled', FSetLicence.Checked);
       Ini.WriteBool('receive', 'high_contrast', FSetHighContrast.Checked);
       Ini.WriteBool('practice', 'delay', FPrDelay.Checked);
       Ini.WriteInteger('practice', 'delay_seconds', FPrDelaySeconds.Value);
@@ -5398,6 +5481,7 @@ begin
   UpdateLogInfo;
   UpdatePrefixesInfo;
   UpdateRosterInfo;
+  UpdateLicenceInfo;
   UpdateWatchInfo;
   UpdateFindInfo;
   UpdateRecordInfo;
@@ -7794,6 +7878,70 @@ begin
   RefreshBandMap;
 end;
 
+{ 総務省の検索の結果（要件 FR-K.3〜K.8）。**待ちません。**覚えていなければ
+  照会を待たせて「待っている」を返し、作業スレッドが照会します。
+  The ministry search's result (requirements FR-K.3-K.8). **It never waits**:
+  with nothing remembered it queues a query and says pending, and the worker
+  does the querying. }
+function TMainForm.LicenceResult(const Callsign: string): TLicenseResult;
+begin
+  Result := FLicence.Lookup(Callsign, GetTickCount64 / 1000);
+end;
+
+procedure TMainForm.SetLicenceChanged(Sender: TObject);
+begin
+  MarkSettingsDirty;
+  ApplyLicence;
+end;
+
+{ 設定に合わせて照会を始め、止めます。**切ったら待っていた照会も捨てます**
+  （要件 FR-K.3）。
+  Starts or stops querying to match the setting. **Switching off drops what
+  was waiting too** (requirement FR-K.3). }
+procedure TMainForm.ApplyLicence;
+begin
+  FLicence.Enabled := FSetLicence.Checked and LookupTransportBuilt;
+  if FLicence.Enabled and (FLicenceThread = nil) then
+    FLicenceThread := TLicenseLookupThread.Create(FLicence)
+  else if (not FLicence.Enabled) and (FLicenceThread <> nil) then
+  begin
+    FLicenceThread.Terminate;
+    FLicenceThread.WaitFor;
+    FreeAndNil(FLicenceThread);
+  end;
+  UpdateLicenceInfo;
+end;
+
+{ 設定の脇の状態と説明。照会できない理由が新しく出たら診断にも残します
+  （要件 FR-K.10）。
+  The state beside the setting and the explanation. A new reason for not
+  being able to query also goes to the diagnostics (requirement FR-K.10). }
+procedure TMainForm.UpdateLicenceInfo;
+var
+  Problem: string;
+begin
+  if FSetLicenceInfo = nil then
+    Exit;
+  if not LookupTransportBuilt then
+  begin
+    FSetLicenceInfo.Caption := RsLicenceUnbuilt;
+    Exit;
+  end;
+  if not FLicence.Enabled then
+  begin
+    FSetLicenceInfo.Caption := RsRosterUnused;
+    Exit;
+  end;
+  Problem := FLicence.LastProblem;
+  FSetLicenceInfo.Caption := Format(RsLicenceRequests, [FLicence.Requests]);
+  if Problem <> '' then
+    FSetLicenceInfo.Caption := FSetLicenceInfo.Caption +
+      Format(RsLicenceProblem, [Problem]);
+  if (Problem <> '') and (Problem <> FLicenceProblem) then
+    LogDiagnostic(RsCtxLicence, Problem);
+  FLicenceProblem := Problem;
+end;
+
 { 呼出符号と信号報告だけをクリップボードへ送ります（要件 FR-E.2）。
 
   RST が聞こえていなければ符号だけを送ります。**聞こえていないものを 599 と
@@ -8634,8 +8782,13 @@ begin
     処理が毎秒 5 回になります（dsp_check の実測）。
     The list just built is kept: having the log side rebuild the same thing
     would run a 10.6 ms job five times a second (measured in dsp_check). }
-  FBandEntries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
-    @WorkedBefore, @WatchedCall, @InRoster);
+  if FLicence.Enabled then
+    FBandEntries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
+      @WorkedBefore, @WatchedCall, @InRoster, @LicenceResult)
+  else
+    FBandEntries := BuildBandEntries(FMulti.Logs, FMulti.ElapsedSeconds,
+      @WorkedBefore, @WatchedCall, @InRoster);
+  UpdateLicenceInfo;
   { コンテストモードでは、交信済みの局を一覧から外せます。**世界のコンテスト
     ソフトが例外なく持つ機能で、混み合った帯域では、呼ぶ相手だけが残ることに
     値打ちがあります。**外した局も記録には残っており、印を外せば戻ります。
@@ -8936,6 +9089,13 @@ procedure TMainForm.OperatingResized(Sender: TObject);
 begin
   UpdateRecordInfo;
   UpdateLogInfo;
+  { 説明は枠の幅で折り返します。/ The explanation wraps at the box width. }
+  if FSetLicenceNote <> nil then
+  begin
+    FSetLicenceNote.Width := Max(200,
+      TWinControl(Sender).ClientWidth - FSetLicenceNote.Left - 14);
+    FSetLicenceSource.Width := FSetLicenceNote.Width;
+  end;
 end;
 
 procedure TMainForm.RxRecordChanged(Sender: TObject);

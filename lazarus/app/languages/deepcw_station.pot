@@ -46,8 +46,16 @@ msgstr ""
 msgid "%sあり"
 msgstr ""
 
+#: deepcw.bandmap.rstrustfourthclass
+msgid "電信不可?"
+msgstr ""
+
 #: deepcw.bandmap.rstrustinroster
 msgid "資料あり"
+msgstr ""
+
+#: deepcw.bandmap.rstrustnotfoundsoumu
+msgid "総務省に無し"
 msgstr ""
 
 #: deepcw.bandmap.rstrustshape
@@ -59,8 +67,17 @@ msgctxt "deepcw.bandmap.rstrustsourcelog"
 msgid "交信記録"
 msgstr ""
 
+#: deepcw.bandmap.rstrustsourcesoumu
+#, object-pascal-format
+msgid "総務省の検索（%s 時点）"
+msgstr ""
+
 #: deepcw.bandmap.rstrustverified
 msgid "実在確認"
+msgstr ""
+
+#: deepcw.bandmap.rstrustverifiedsoumu
+msgid "総務省で確認"
 msgstr ""
 
 #: deepcw.copylog.rsconfusionadded
@@ -448,6 +465,10 @@ msgstr ""
 
 #: frmmain.rsctxjournal
 msgid "記録"
+msgstr ""
+
+#: frmmain.rsctxlicence
+msgid "総務省の検索"
 msgstr ""
 
 #: frmmain.rsctxmonitoraudio
@@ -1021,6 +1042,24 @@ msgstr ""
 #: frmmain.rsjournalon
 #, object-pascal-format
 msgid "受信テキストを %s に記録します。"
+msgstr ""
+
+#: frmmain.rslicenceattribution
+msgid "このサービスは、総務省 電波利用ポータルのWeb-API 機能を利用して取得した情報をもとに作成しているが、サービスの内容は総務省によって保証されたものではない"
+msgstr ""
+
+#: frmmain.rslicenceproblem
+#, object-pascal-format
+msgid "（照会できない: %s）"
+msgstr ""
+
+#: frmmain.rslicencerequests
+#, object-pascal-format
+msgid "照会 %d 回"
+msgstr ""
+
+#: frmmain.rslicenceunbuilt
+msgid "この版では使えません（通信の部品が未実装）"
 msgstr ""
 
 #: frmmain.rsloggedbadrst
@@ -1859,6 +1898,14 @@ msgstr ""
 
 #: frmmain.rssetlanguage
 msgid "画面の言葉 / Language"
+msgstr ""
+
+#: frmmain.rssetlicence
+msgid "総務省の無線局等情報検索で免許を確かめる（通信します）"
+msgstr ""
+
+#: frmmain.rssetlicencenote
+msgid "送るもの: 複数回一致した日本の局の呼出符号だけ。受け取るもの: 件数とデータ更新日だけ（名前や住所は受け取りません）。"
 msgstr ""
 
 #: frmmain.rssetlog

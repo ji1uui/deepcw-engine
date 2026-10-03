@@ -40,7 +40,8 @@ unit LayoutCheck;
 interface
 
 uses
-  SysUtils, Classes, Controls, Forms, StdCtrls, ExtCtrls, ComCtrls;
+  SysUtils, Classes, Types, Controls, Forms, StdCtrls, ExtCtrls, ComCtrls,
+  LCLType, LCLIntf;
 
 type
   TLayoutProblemKind = (lpTooNarrow, lpOverlap, lpOutside, lpTabOrder);
@@ -169,6 +170,22 @@ begin
     (A.Top < B.Top + B.Height) and (B.Top < A.Top + A.Height);
 end;
 
+{ 折り返す見出しの、今の幅で要る高さ。LCL の「要る大きさ」は 1 行として
+  答えるので、折り返す見出しは幅ではなく高さで判じます。
+  The height a wrapping label needs at its current width. The LCL's
+  preferred size answers as if on one line, so a wrapping label is judged by
+  its height instead of its width. }
+function WrappedHeight(Lab: TLabel): Integer;
+var
+  R: TRect;
+begin
+  R := Rect(0, 0, Lab.Width, 0);
+  Lab.Canvas.Font := Lab.Font;
+  DrawText(Lab.Canvas.Handle, PChar(Lab.Caption), Length(Lab.Caption), R,
+    DT_CALCRECT or DT_WORDBREAK or DT_NOPREFIX);
+  Result := R.Bottom - R.Top;
+end;
+
 procedure Walk(Parent: TWinControl; const Path: string;
   var List: TLayoutProblems);
 var
@@ -189,7 +206,14 @@ begin
       Continue;
     Here := Path + '/' + ControlCaption(Child);
 
-    if TextMustFit(Child) and not Child.AutoSize then
+    if (Child is TLabel) and TLabel(Child).WordWrap and not Child.AutoSize then
+    begin
+      WantedHeight := WrappedHeight(TLabel(Child));
+      if WantedHeight > Child.Height then
+        Add(List, lpTooNarrow, Here,
+          Format('(折り返して高さ %d、要る高さ %d)', [Child.Height, WantedHeight]));
+    end
+    else if TextMustFit(Child) and not Child.AutoSize then
     begin
       Child.GetPreferredSize(Wanted, WantedHeight);
       if (Wanted > 0) and (Child.Width < Wanted) then

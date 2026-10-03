@@ -128,6 +128,17 @@ type
       out Body, Failure: string): Boolean; virtual; abstract;
   end;
 
+  { HTTPS の部品が入るまでの口（計画の段 3、付録 CM.10）。**何も送らず**、
+    「この版には通信の部品が無い」と答えます。
+    The transport until the HTTPS client arrives (stage 3 of the plan,
+    appendix CM.10). **It sends nothing** and answers that this version has no
+    client. }
+  TUnbuiltTransport = class(TLookupTransport)
+  public
+    function Get(const Url, UserAgent: string; out Status: Integer;
+      out Body, Failure: string): Boolean; override;
+  end;
+
   { 照会の窓口。結果を覚え、間引き、混み合えば待ちます。
 
     `Lookup` はどのスレッドからでも呼べ、**待たずに**覚えている結果を返します
@@ -211,6 +222,14 @@ type
     constructor Create(ALookup: TLicenseLookup);
   end;
 
+{ この版の通信の口と、それが実際に通信できるか。段 3 までは
+  `TUnbuiltTransport` と偽です。画面は偽の間、設定を選べなくします。
+  This version's transport and whether it can actually talk. Until stage 3,
+  `TUnbuiltTransport` and false; while false the screen does not offer the
+  setting. }
+function NewLookupTransport: TLookupTransport;
+function LookupTransportBuilt: Boolean;
+
 { 照会してよい符号か。日本の前置符字で、通常の形（19.68A の特別な形でない）の
   ものだけ。Key は附加符号を除いた本体、Ambiguous は後置符字が 3 字に満たない
   （部分一致で他の局にも当たる）こと。
@@ -233,6 +252,25 @@ function ParseCountResponse(Status: Integer; const Body: string;
   out Count: Integer; out DataDate, Problem: string): TCountOutcome;
 
 implementation
+
+function TUnbuiltTransport.Get(const Url, UserAgent: string;
+  out Status: Integer; out Body, Failure: string): Boolean;
+begin
+  Status := 0;
+  Body := '';
+  Failure := 'no HTTPS client in this version';
+  Result := False;
+end;
+
+function NewLookupTransport: TLookupTransport;
+begin
+  Result := TUnbuiltTransport.Create;
+end;
+
+function LookupTransportBuilt: Boolean;
+begin
+  Result := False;
+end;
 
 function LookupKey(const Callsign: string; out Key: string;
   out Ambiguous: Boolean): Boolean;

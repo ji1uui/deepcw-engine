@@ -32,7 +32,7 @@ interface
 
 uses
   SysUtils, Math, DeepCW.Types, DeepCW.Decoder, DeepCW.Callsign, DeepCW.Multi,
-  DeepCW.Exchange;
+  DeepCW.Exchange, DeepCW.LicenseLookup;
 
 const
   { CQ を出していると見なす、最後の根拠からの時間。要件は「根拠が消えたら区別も
@@ -62,7 +62,9 @@ type
     一覧との照合（FR-K.9）と実在の確認（FR-K.3〜K.6）は、同じ第 3・第 4 段へ
     あとから合流します。どの資料で満たしたのかは `TrustSource` に入ります。
 
-    **第 4 段は、この版では設定されません。**
+    **第 4 段は、総務省の無線局等情報検索で免許が確かめられたときです**
+    （要件 FR-K.3〜K.8、付録 CM）。第 3 段までで確かめられなかった符号だけを
+    照会します。
 
     How far a call sign may be trusted, matching the four stages of requirement
     FR-K.
@@ -73,13 +75,15 @@ type
     (FR-K.9) and an outside check (FR-K.3-K.6) join the same two stages later;
     what filled the stage is named in `TrustSource`.
 
-    **The fourth stage is never set in this version.** }
+    **The fourth stage is a licence confirmed by the ministry's radio station
+    search** (requirements FR-K.3-K.8, appendix CM); only call signs the first
+    three stages could not confirm are queried. }
   TCallsignTrust = (
     ctNone,      { 候補が無い / no candidate }
     ctShape,     { 形が規則に合う。1 度きり / the shape fits, seen once }
     ctAgreed,    { 同じ符号が複数回出た / the same call sign came out repeatedly }
     ctInRoster,  { 手元の資料にある / in material held locally }
-    ctVerified); { 実在を確認した（未実装）/ confirmed to exist (not built) }
+    ctVerified); { 免許を確かめた / licence confirmed }
 
   { 一覧の 1 行。/ One row of the list. }
   TBandEntry = record
@@ -173,6 +177,17 @@ type
       would be no telling one's own log from a roster someone distributed, and
       those are not evidence of the same strength. }
     TrustSource: string;
+
+    { 総務省の検索で分かった、気を付けること（要件 FR-K.4・FR-K.8）。
+      「見つからない」と「当たった局がすべて第四級（電信不可）」のときだけ入り、
+      **確からしさは上げも下げもしません**（要件 FR-K.5）。見つからないのは
+      データが古いだけかもしれず、誤りとは言えないためです。
+      What the ministry's search turned up that deserves care (requirements
+      FR-K.4, FR-K.8): set only for "not found" and "every hit is fourth class
+      (no telegraphy)", and **the trust is neither raised nor lowered**
+      (requirement FR-K.5) -- not found may only mean the data is behind, which
+      is no proof of an error. }
+    TrustNote: string;
   end;
   TBandEntries = array of TBandEntry;
 
@@ -211,6 +226,13 @@ type
     The roster itself is not held here, for the same reason the log is not. }
   TRosterLookup = function(const Callsign: string): string of object;
 
+  { 総務省の検索の結果を引く手続き（要件 FR-K.3〜K.8）。**待たずに返すこと**
+    （`TLicenseLookup.Lookup` は待ちません）。照会そのものはここでは持ちません。
+    The lookup of the ministry's search result (requirements FR-K.3-K.8). **It
+    must not wait** (`TLicenseLookup.Lookup` does not). The querying itself is
+    not held here. }
+  TLicenceLookup = function(const Callsign: string): TLicenseResult of object;
+
 { 局ごとの読み取り結果を、一覧の行へ翻訳します。渡された引き当て以外に状態を
   持たず、同じ入力からは必ず同じ行が出ます。
 
@@ -218,7 +240,7 @@ type
   holds no state, and the same input always gives the same rows. }
 function BuildBandEntries(const Logs: TStationLogs; NowSeconds: Double;
   Worked: TWorkedLookup = nil; Watch: TWatchLookup = nil;
-  Roster: TRosterLookup = nil): TBandEntries;
+  Roster: TRosterLookup = nil; Licence: TLicenceLookup = nil): TBandEntries;
 
 { 確からしさを、運用者に見せる短い言葉にします。
   Puts the trust into the few words shown to the operator. }
@@ -259,6 +281,13 @@ resourcestring
   RsTrustInRoster = '資料あり';
   RsTrustVerified = '実在確認';
   RsTrustFoundIn = '%sあり';
+  { 総務省の検索の札（要件 FR-K.3〜K.8、付録 CM）。桁は 6 文字まで。
+    The ministry search's labels (FR-K.3-K.8, appendix CM); six characters at
+    most in the column. }
+  RsTrustSourceSoumu = '総務省の検索（%s 時点）';
+  RsTrustVerifiedSoumu = '総務省で確認';
+  RsTrustNotFoundSoumu = '総務省に無し';
+  RsTrustFourthClass = '電信不可?';
 
 { 語に切る規則と、相手の符号を選ぶ規則は DeepCW.Exchange が持ちます。交信モードの
   記録も同じ規則で選ぶ必要があり、写しを 2 つ置くと食い違うためです。
@@ -279,9 +308,11 @@ begin
 end;
 
 function BuildBandEntries(const Logs: TStationLogs; NowSeconds: Double;
-  Worked: TWorkedLookup; Watch: TWatchLookup; Roster: TRosterLookup): TBandEntries;
+  Worked: TWorkedLookup; Watch: TWatchLookup; Roster: TRosterLookup;
+  Licence: TLicenceLookup): TBandEntries;
 var
   I: Integer;
+  Found: TLicenseResult;
   Words: TWords;
   Text: string;
   Calling: Double;
@@ -357,6 +388,37 @@ begin
         Result[I].Trust := ctInRoster;
     end;
 
+    { 第 3 段までで確かめられなかった符号だけを総務省の検索に引きます（要件
+      FR-K の第 4 段）。**照会は一致した符号だけ**——1 度きりの符号を照会すれば、
+      誤った読みを外へ送ることになります。**受信文も符号も書き換えません**
+      （要件 FR-K.5）。
+      Only call signs the first three stages could not confirm go to the
+      ministry's search (the fourth stage of FR-K). **Only agreed call signs
+      are queried**: querying a seen-once one would send a misreading out.
+      **Neither the text nor the call sign is rewritten** (requirement
+      FR-K.5). }
+    Result[I].TrustNote := '';
+    if Assigned(Licence) and (Result[I].Trust = ctAgreed) then
+    begin
+      Found := Licence(Result[I].Callsign);
+      case Found.Verdict of
+        lvFound:
+          if Found.FourthClass then
+            { 免許はあるが、当たった局がすべて第四級。電信では運用できない
+              ので、電信で読んだ符号としては疑わしい（要件 FR-K.8）。
+              Licensed, but every hit is fourth class, which may not operate
+              telegraphy: doubtful as a call sign read off CW (FR-K.8). }
+            Result[I].TrustNote := RsTrustFourthClass
+          else
+          begin
+            Result[I].Trust := ctVerified;
+            Result[I].TrustSource := Format(RsTrustSourceSoumu, [Found.DataDate]);
+          end;
+        lvNotFound:
+          Result[I].TrustNote := RsTrustNotFoundSoumu;
+      end;
+    end;
+
     { 待っている符号との照合も、同じ確かさの条件で行います。条件を 2 つに分けると、
       一覧に出ていない符号で知らせが鳴りうることになります。
       The watch is matched on the same trust condition. Two different conditions
@@ -421,6 +483,15 @@ begin
     handed out. }
   if (Entry.TrustSource <> '') and (Entry.Trust = ctInRoster) then
     Result := Format(RsTrustFoundIn, [Entry.TrustSource]);
+  { 総務省の検索で確かめた局。日付は根拠（`TrustSource`）の側に入ります。
+    A station confirmed by the ministry's search; the date rides in the
+    evidence (`TrustSource`). }
+  if (Entry.TrustSource <> '') and (Entry.Trust = ctVerified) then
+    Result := RsTrustVerifiedSoumu;
+  { 気を付けることがあれば、それを出します（要件 FR-K.4・FR-K.8）。
+    Anything that deserves care is shown instead (FR-K.4, FR-K.8). }
+  if Entry.TrustNote <> '' then
+    Result := Entry.TrustNote;
 end;
 
 end.

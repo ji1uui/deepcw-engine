@@ -2701,8 +2701,25 @@ var
   Listed: TAlwaysInRoster;
   Waiting: TWatchingFor;
 
+type
+  { 総務省の検索の代わり。決めた結果を返し、引かれた符号を控えます。
+    Stands in for the ministry's search: returns a set result and keeps the
+    call signs asked about. }
+  TLicenceAnswers = class
+    Answer: TLicenseResult;
+    Asked: string;
+    function Lookup(const Callsign: string): TLicenseResult;
+  end;
+
+function TLicenceAnswers.Lookup(const Callsign: string): TLicenseResult;
+begin
+  Asked := Asked + Callsign + ' ';
+  Result := Answer;
+end;
+
 procedure TestBandMap;
 var
+  Licence: TLicenceAnswers;
   Logs: TStationLogs;
   Entries: TBandEntries;
   Started: TDateTime;
@@ -2834,6 +2851,69 @@ begin
   Entries := BuildBandEntries(Logs, 10, nil, nil, @Listed.Always);
   Check('確かでない符号は、一覧に当たっても上げない',
     Entries[0].Trust = ctShape, TrustCaption(Entries[0]));
+
+  { 総務省の検索（要件 FR-K の第 4 段、付録 CM）。第 3 段までで確かめられ
+    なかった、一致した符号だけを引く。受信文も符号も書き換えない。
+    The ministry's search (the fourth stage of FR-K, appendix CM): only agreed
+    call signs the first three stages could not confirm are asked about, and
+    neither text nor call sign is rewritten. }
+  Licence := TLicenceAnswers.Create;
+  try
+    SetLength(Logs, 1);
+    Logs[0] := LogOf('CQ CQ DE JH2XYZ JH2XYZ K ', 1000, 0.99);
+    Licence.Answer := Default(TLicenseResult);
+    Licence.Answer.Verdict := lvFound;
+    Licence.Answer.DataDate := '2026-10-01';
+    Entries := BuildBandEntries(Logs, 10, nil, nil, nil, @Licence.Lookup);
+    Check('総務省の検索で確かめれば第 4 段', (Entries[0].Trust = ctVerified) and
+      (TrustCaption(Entries[0]) = '総務省で確認'), TrustCaption(Entries[0]));
+    Check('根拠にデータ更新日を添える',
+      Entries[0].TrustSource = '総務省の検索（2026-10-01 時点）',
+      Entries[0].TrustSource);
+    Check('符号は書き換えない（FR-K.5）', Entries[0].Callsign = 'JH2XYZ');
+
+    Licence.Answer.FourthClass := True;
+    Entries := BuildBandEntries(Logs, 10, nil, nil, nil, @Licence.Lookup);
+    Check('すべて第四級なら「電信不可?」で、確からしさは上げない（FR-K.8）',
+      (Entries[0].Trust = ctAgreed) and (TrustCaption(Entries[0]) = '電信不可?'),
+      TrustCaption(Entries[0]));
+
+    Licence.Answer.FourthClass := False;
+    Licence.Answer.Verdict := lvNotFound;
+    Entries := BuildBandEntries(Logs, 10, nil, nil, nil, @Licence.Lookup);
+    Check('見つからなくても下げず、「総務省に無し」とだけ言う（FR-K.4）',
+      (Entries[0].Trust = ctAgreed) and (TrustCaption(Entries[0]) = '総務省に無し'),
+      TrustCaption(Entries[0]));
+
+    Licence.Answer.Verdict := lvAmbiguous;
+    Entries := BuildBandEntries(Logs, 10, nil, nil, nil, @Licence.Lookup);
+    Check('確かめられないなら何も変えない', (Entries[0].Trust = ctAgreed) and
+      (TrustCaption(Entries[0]) = '一致'), TrustCaption(Entries[0]));
+    Licence.Answer.Verdict := lvUnavailable;
+    Entries := BuildBandEntries(Logs, 10, nil, nil, nil, @Licence.Lookup);
+    Check('照会できないなら何も変えない（FR-K.10）', (Entries[0].Trust = ctAgreed) and
+      (TrustCaption(Entries[0]) = '一致'), TrustCaption(Entries[0]));
+
+    { 交信記録・手元の一覧で確かめた符号は照会しない（通信を減らす）。
+      A call sign confirmed by the log or the roster is not asked about. }
+    Licence.Asked := '';
+    Licence.Answer.Verdict := lvFound;
+    Entries := BuildBandEntries(Logs, 10, @Answers.Always, nil, nil, @Licence.Lookup);
+    BuildBandEntries(Logs, 10, nil, nil, @Listed.Always, @Licence.Lookup);
+    Check('記録や一覧で確かめた符号は照会しない', Licence.Asked = '',
+      Licence.Asked);
+    Check('記録で確かめたほうを言う', Entries[0].TrustSource = '交信記録',
+      Entries[0].TrustSource);
+
+    { 1 度きりの符号は照会しない。誤った読みを外へ送らないため。
+      A seen-once call sign is not asked about, so a misreading is not sent
+      out. }
+    Logs[0] := LogOf('CQ DE JH2XYZ K ', 1000, 0.99);
+    BuildBandEntries(Logs, 10, nil, nil, nil, @Licence.Lookup);
+    Check('1 度きりの符号は照会しない', Licence.Asked = '', Licence.Asked);
+  finally
+    Licence.Free;
+  end;
 
   { 確かでない符号は、記録に当たっても上げません。**1 文字違いの別人の記録に
     当たっているかもしれないためです。**
