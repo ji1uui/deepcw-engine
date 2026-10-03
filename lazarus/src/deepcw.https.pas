@@ -76,7 +76,7 @@ uses
   CocoaAll;
 {$ELSE}
 uses
-  fphttpclient, opensslsockets;
+  ctypes, dynlibs, ssockets, openssl, opensslsockets, fphttpclient;
 {$ENDIF}
 
 function SplitHttpsUrl(const Url: string; out Host: string; out Port: Integer;
@@ -419,9 +419,78 @@ begin
 end;
 
 {$ELSE}
+{ Free Pascal 3.2.2 の OpenSSL の口は、既定では**証明書を確かめません**
+  （`SSL_VERIFY_NONE`。付録 CM.15 で、自己署名の相手に繋がることを確かめた）。
+  ここで、OS の信頼する認証局で鎖を確かめ（`SSL_CTX_set_default_verify_paths`）、
+  繋ぐ先の名前と証明書の名前が合うかも確かめさせます（`SSL_set1_host`、
+  OpenSSL 1.1.0 から）。どちらかが使えなければ繋ぎません。
+  Free Pascal 3.2.2's OpenSSL handler **does not check certificates** by
+  default (`SSL_VERIFY_NONE`; appendix CM.15 confirmed it connects to a
+  self-signed peer). Here the chain is checked against the authorities the
+  system trusts (`SSL_CTX_set_default_verify_paths`) and the host name against
+  the certificate (`SSL_set1_host`, OpenSSL 1.1.0 onwards). If either is
+  unavailable, no connection is made. }
+type
+  TVerifyingSocketHandler = class(TOpenSSLSocketHandler)
+  protected
+    function InitContext(NeedCertificate: Boolean): Boolean; override;
+  public
+    constructor Create; override;
+  end;
+
+  { `TFPHTTPClient` に確かめる口を渡す役。/ Hands the verifying handler to
+    `TFPHTTPClient`. }
+  TVerifyingHandlerSource = class
+    procedure GetHandler(Sender: TObject; const UseSSL: Boolean;
+      out AHandler: TSocketHandler);
+  end;
+
+var
+  SslGetSslCtx: function(Ssl: PSSL): PSSL_CTX; cdecl = nil;
+  SslCtxSetDefaultVerifyPaths: function(Ctx: PSSL_CTX): cInt; cdecl = nil;
+  SslSet1Host: function(Ssl: PSSL; HostName: PAnsiChar): cInt; cdecl = nil;
+
+constructor TVerifyingSocketHandler.Create;
+begin
+  inherited Create;
+  VerifyPeerCert := True;
+end;
+
+function TVerifyingSocketHandler.InitContext(NeedCertificate: Boolean): Boolean;
+var
+  Host: AnsiString;
+begin
+  Result := inherited InitContext(NeedCertificate);
+  if not Result then
+    Exit;
+  if not Assigned(SslSet1Host) then
+  begin
+    Pointer(SslGetSslCtx) := GetProcedureAddress(SSLLibHandle, 'SSL_get_SSL_CTX');
+    Pointer(SslCtxSetDefaultVerifyPaths) :=
+      GetProcedureAddress(SSLLibHandle, 'SSL_CTX_set_default_verify_paths');
+    Pointer(SslSet1Host) := GetProcedureAddress(SSLLibHandle, 'SSL_set1_host');
+  end;
+  if not (Assigned(SslGetSslCtx) and Assigned(SslCtxSetDefaultVerifyPaths) and
+     Assigned(SslSet1Host)) or not (Socket is TInetSocket) then
+    Exit(False);
+  Host := TInetSocket(Socket).Host;
+  Result := (SslCtxSetDefaultVerifyPaths(SslGetSslCtx(SSL.SSL)) = 1) and
+    (SslSet1Host(SSL.SSL, PAnsiChar(Host)) = 1);
+end;
+
+procedure TVerifyingHandlerSource.GetHandler(Sender: TObject;
+  const UseSSL: Boolean; out AHandler: TSocketHandler);
+begin
+  if UseSSL then
+    AHandler := TVerifyingSocketHandler.Create
+  else
+    AHandler := nil;
+end;
+
 function HttpsGet(const Url, UserAgent: string; TimeoutMs: Integer;
   out Status: Integer; out Body, Failure: string): Boolean;
 var
+  Source: TVerifyingHandlerSource;
   Client: TFPHTTPClient;
   Answer: TStringStream;
   Host, Path: string;
@@ -436,13 +505,19 @@ begin
     Failure := 'not an https URL';
     Exit;
   end;
+  Source := TVerifyingHandlerSource.Create;
   Client := TFPHTTPClient.Create(nil);
   Answer := TStringStream.Create('');
   try
     try
+      Client.OnGetSocketHandler := @Source.GetHandler;
       Client.ConnectTimeout := TimeoutMs;
       Client.IOTimeout := TimeoutMs;
-      Client.AllowRedirect := True;
+      { 転送は追いません（https から http へ移されれば、呼出符号が暗号化されず
+        に流れるため）。照会先は転送しない前提です。
+        Redirects are not followed (one from https to http would send the call
+        sign unencrypted); the service is not expected to redirect. }
+      Client.AllowRedirect := False;
       Client.AddHeader('User-Agent', UserAgent);
       { どの状態でも例外にせず、そのまま返します（429 などは呼び出し側が
         判じます）。
@@ -459,6 +534,7 @@ begin
   finally
     Answer.Free;
     Client.Free;
+    Source.Free;
   end;
 end;
 {$ENDIF}
@@ -467,10 +543,10 @@ end;
 initialization
   InitCriticalSection(GLock);
   GDone := RTLEventCreate;
-
-finalization
-  RTLEventDestroy(GDone);
-  DoneCriticalSection(GLock);
+  { 終わりに壊しません。閉じるときに照会の最中だった作業スレッドは待たずに
+    残すので（`StopLookupWorker`）、まだこれを使っているかもしれません。
+    Not destroyed at the end: a worker left mid-query when closing
+    (`StopLookupWorker`) may still be using them. }
 {$ENDIF}
 
 end.

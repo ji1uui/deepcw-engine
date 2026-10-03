@@ -80,7 +80,7 @@ const
   { 製品の版。**要件定義書の版と同じにします**（`dsp_check` が突き合わせます）。
     The product version: **the same as the requirements document's**
     (`dsp_check` compares them). }
-  DEEPCW_VERSION = '2.96';
+  DEEPCW_VERSION = '2.97';
   { 照会に付ける User-Agent。2025-01 の刷新から、ブラウザらしい値でないと
     断られたという報告があり（付録 CM.8）、互換の印のあとに製品名と版を名乗り
     ます（利用者の判断、付録 CM.13）。
@@ -237,6 +237,21 @@ type
   public
     constructor Create(ALookup: TLicenseLookup);
   end;
+
+{ 作業スレッドを止めます。**待つのは WaitMs まで**です。照会の最中なら、通信の
+  待ち時間（`LOOKUP_TIMEOUT_MS`、OS によってはその数倍）まで終わらないことがあり、
+  画面のスレッドがそれを待つと画面が止まります（付録 CM.15 で 3 秒を測った）。
+  止まれば解放して真を返します。止まらなければ偽を返し、**スレッドも照会の窓口
+  も手放しません**（スレッドがまだ使っているため）。閉じるときにだけ使い、
+  偽なら、そのままプロセスの終わりに任せます。
+  Stops the worker, **waiting no more than WaitMs**. Mid-query it may not end
+  until the network timeout (`LOOKUP_TIMEOUT_MS`, several times that on some
+  systems), and the UI thread waiting for it is a frozen screen (appendix CM.15
+  measured 3 s). If it stops it is freed and true is returned; if not, false,
+  and **neither the thread nor the lookup is released** (the thread still uses
+  them). Only for closing: on false, the end of the process takes care of it. }
+function StopLookupWorker(var Worker: TLicenseLookupThread;
+  WaitMs: Integer): Boolean;
 
 { この版の通信の口と、それが実際に通信できるか。偽の間、画面は設定を選べなく
   します。
@@ -677,7 +692,13 @@ begin
   else
   begin
     Outcome := coFailed;
-    Problem := Failure;
+    { 通信の部品の理由には URL が入ることがあります。理由は設定の脇と診断に
+      出るので、URL と呼出符号は伏せます（要件 NFR-6.3）。
+      A transport's reason may contain the URL. Reasons reach the settings
+      label and the diagnostics, so the URL and the call sign are masked
+      (requirement NFR-6.3). }
+    Problem := StringReplace(Failure, Url, '(URL)', [rfReplaceAll, rfIgnoreCase]);
+    Problem := StringReplace(Problem, Job.Key, '***', [rfReplaceAll, rfIgnoreCase]);
     if Problem = '' then
       Problem := 'no answer';
   end;
@@ -753,6 +774,24 @@ begin
   FLookup := ALookup;
   FreeOnTerminate := False;
   inherited Create(False);
+end;
+
+function StopLookupWorker(var Worker: TLicenseLookupThread;
+  WaitMs: Integer): Boolean;
+var
+  Started: QWord;
+begin
+  Result := True;
+  if Worker = nil then
+    Exit;
+  Worker.Terminate;
+  Started := GetTickCount64;
+  while not Worker.Finished and (GetTickCount64 - Started < QWord(WaitMs)) do
+    Sleep(10);
+  if not Worker.Finished then
+    Exit(False);
+  Worker.WaitFor;
+  FreeAndNil(Worker);
 end;
 
 procedure TLicenseLookupThread.Execute;

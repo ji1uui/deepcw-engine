@@ -2254,14 +2254,14 @@ begin
   FLog.Free;
   FRoster.Free;
   FPrefixes.Free;
-  { 照会を止めてから解放します。/ Querying stops before release. }
-  if FLicenceThread <> nil then
-  begin
-    FLicenceThread.Terminate;
-    FLicenceThread.WaitFor;
-    FreeAndNil(FLicenceThread);
-  end;
-  FLicence.Free;
+  { 照会を止めてから解放します。**待つのは 0.5 秒まで**で、照会の最中で止まら
+    なければ、窓口もスレッドも手放さずにプロセスの終わりに任せます（付録 CM.15）。
+    Querying stops before release. **The wait is at most 0.5 s**: if a query
+    is still under way, neither the lookup nor the thread is released and the
+    end of the process takes care of them (appendix CM.15). }
+  FLicence.Enabled := False;
+  if StopLookupWorker(FLicenceThread, 500) then
+    FLicence.Free;
   FHistory.Free;
   FRing.Free;
   FDecoder.Free;
@@ -7901,14 +7901,16 @@ end;
 procedure TMainForm.ApplyLicence;
 begin
   FLicence.Enabled := FSetLicence.Checked and LookupTransportBuilt;
+  { 作業スレッドは初めて入れたときに作り、切っても止めません。止めるには照会の
+    終わりを待つことになり、そのあいだ画面が止まります（付録 CM.15。照会の最中
+    に切ると 3 秒止まった）。切っている間のスレッドは 0.1 秒ごとに起きて何も
+    しないだけです（5 秒で CPU 0 ms）。
+    The worker is made the first time this is switched on and is not stopped
+    when switched off: stopping it means waiting for the query to end, with the
+    screen frozen meanwhile (appendix CM.15: 3 s when switched off mid-query).
+    While off, it only wakes every 0.1 s and does nothing (0 ms CPU over 5 s). }
   if FLicence.Enabled and (FLicenceThread = nil) then
-    FLicenceThread := TLicenseLookupThread.Create(FLicence)
-  else if (not FLicence.Enabled) and (FLicenceThread <> nil) then
-  begin
-    FLicenceThread.Terminate;
-    FLicenceThread.WaitFor;
-    FreeAndNil(FLicenceThread);
-  end;
+    FLicenceThread := TLicenseLookupThread.Create(FLicence);
   UpdateLicenceInfo;
 end;
 

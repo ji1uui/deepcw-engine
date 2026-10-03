@@ -28,7 +28,7 @@ uses
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
   DeepCW.Reference, DeepCW.Roster, DeepCW.Platform, DeepCW.TxMessage,
   DeepCW.NoiseReduction, DeepCW.Alphabet, DeepCW.TxGate, DeepCW.RigConfig,
-  DeepCW.Hamlib, DeepCW.LicenseLookup, DeepCW.Https, FistCases;
+  DeepCW.Hamlib, DeepCW.LicenseLookup, DeepCW.Https, FistCases, Process, ssockets;
 
 var
   Meta: TDeepCWMetadata;
@@ -4208,6 +4208,28 @@ begin
   Result := True;
 end;
 
+{ 返すまでに時間のかかる相手（照会の最中を作るため）。/ A peer that takes
+  its time, to have a query under way. }
+type
+  TSlowLookupTransport = class(TLookupTransport)
+  public
+    DelayMs: Integer;
+    Started: Boolean;
+    function Get(const Url, UserAgent: string; out Status: Integer;
+      out Body, Failure: string): Boolean; override;
+  end;
+
+function TSlowLookupTransport.Get(const Url, UserAgent: string;
+  out Status: Integer; out Body, Failure: string): Boolean;
+begin
+  Started := True;
+  Sleep(DelayMs);
+  Status := 200;
+  Body := '{"musenInformation":{"lastUpdateDate":"2026-10-01","totalCount":"0"}}';
+  Failure := '';
+  Result := True;
+end;
+
 { 件数取得 API の応答の形（仕様書 6.1、付録 CM）。/ The count API's answer
   (specification 6.1, appendix CM). }
 function CountAnswer(Count: Integer; const Date: string = '2026-10-01'): string;
@@ -4234,6 +4256,9 @@ var
   T: Double;
   Worker: TLicenseLookupThread;
   Started: QWord;
+  Slow: TSlowLookupTransport;
+  Stopped: Boolean;
+  Spent: QWord;
 
   procedure Drain(var At: Double; Steps: Integer);
   var
@@ -4424,6 +4449,25 @@ begin
       (Fake.Urls.Count = Count) and (Got.Verdict = lvUnavailable) and
       (Got.Problem = 'EQ00043'), Got.Problem);
 
+    { 繋がらなかった理由に URL（呼出符号）が入っていても、理由には残さない。
+      理由は設定の脇と診断に出る（要件 NFR-6.3）。
+      Even if a failure names the URL (and so the call sign), the reason does
+      not keep it: reasons reach the settings label and the diagnostics
+      (requirement NFR-6.3). }
+    T := T + LOOKUP_BACKOFF_MAX_SECONDS * 4;
+    Fake.Answers.Values[BASE + 'JE1LEK'] := '!GET ' + BASE + 'JE1LEK failed for JE1LEK';
+    Lookup.Lookup('JE1LEK', T);
+    Lookup.Step(T);
+    Got := Lookup.Lookup('JE1LEK', T);
+    Check('理由に呼出符号も URL も残さない（NFR-6.3）',
+      (Got.Verdict = lvUnavailable) and (Got.Problem <> '') and
+      (Pos('JE1LEK', Got.Problem) = 0) and (Pos('JE1LEK', Lookup.LastProblem) = 0) and
+      (Pos('musen', Got.Problem) = 0), Got.Problem);
+    Fake.Answers.Values[BASE + 'JE1LEK'] := CountAnswer(0);
+    T := T + LOOKUP_BACKOFF_MAX_SECONDS * 4;
+    Lookup.Step(T);
+    T := T + 2;
+
     { 個人情報を受け取っても残さない（FR-K.7）。件数取得 API は返さないが、
       返ってきても読むのは件数と日付だけ。
       Personal details are not kept even if they arrive (FR-K.7): the count
@@ -4488,6 +4532,11 @@ begin
     until (Got.Verdict = lvNotFound) or (GetTickCount64 - Started > 5000);
     Check('作業スレッドが照会を進める', Got.Verdict = lvNotFound,
       Format('(%d ms)', [GetTickCount64 - Started]));
+    Started := GetTickCount64;
+    Stopped := StopLookupWorker(Worker, 1000);
+    Spent := GetTickCount64 - Started;
+    Check('照会していない作業スレッドはすぐ止まる', Stopped and (Worker = nil),
+      Format('(%d ms)', [Spent]));
   finally
     if Worker <> nil then
     begin
@@ -4497,6 +4546,183 @@ begin
     end;
     Lookup.Free;
   end;
+
+  { 照会の最中に切る・閉じる。**画面のスレッドが照会の終わりを待たないこと**
+    （付録 CM.15。待つと照会の長さだけ画面が止まった）。
+    Switching off or closing mid-query: **the UI thread must not wait for the
+    query to end** (appendix CM.15: waiting froze the screen for the query's
+    length). }
+  Slow := TSlowLookupTransport.Create;
+  Slow.DelayMs := 2000;
+  Lookup := TLicenseLookup.Create(Slow, True);
+  Worker := nil;
+  try
+    Lookup.Enabled := True;
+    Lookup.Lookup('JR3QQQ', GetTickCount64 / 1000);
+    Worker := TLicenseLookupThread.Create(Lookup);
+    Started := GetTickCount64;
+    while not Slow.Started and (GetTickCount64 - Started < 5000) do
+      Sleep(5);
+    Started := GetTickCount64;
+    Lookup.Enabled := False;
+    Spent := GetTickCount64 - Started;
+    Check('照会の最中でも、切るのは待たない', Spent < 100,
+      Format('(%d ms)', [Spent]));
+    Started := GetTickCount64;
+    Stopped := StopLookupWorker(Worker, 200);
+    Spent := GetTickCount64 - Started;
+    Check('照会の最中なら、止めるのは上限で諦める',
+      (not Stopped) and (Worker <> nil) and (Spent < 1000),
+      Format('(%d ms)', [Spent]));
+  finally
+    if Worker <> nil then
+    begin
+      Worker.WaitFor;
+      Worker.Free;
+    end;
+    Lookup.Free;
+  end;
+end;
+
+{ 手元に TLS の相手を立てて、証明書を確かめていることを試します（付録
+  CM.15）。`openssl` が無ければとばします。
+  - どの OS でも: 自己署名の相手には繋がらない（Windows・macOS では OS の仕組み
+    そのものの確かめ）
+  - Linux では、試験用の認証局を信頼させて（`SSL_CERT_FILE`）、名前の合う
+    `localhost` には繋がり、名前の合わない `127.0.0.1` には繋がらない
+  Puts up a local TLS peer to test that certificates are checked (appendix
+  CM.15); skipped without `openssl`. On every system a self-signed peer is
+  refused (on Windows and macOS this exercises the system's own client); on
+  Linux, with a test authority trusted through `SSL_CERT_FILE`, `localhost`
+  (matching name) connects and `127.0.0.1` (non-matching) does not. }
+{$IFDEF LINUX}
+function setenv(Name, Value: PAnsiChar; Overwrite: Integer): Integer; cdecl;
+  external 'c';
+function unsetenv(Name: PAnsiChar): Integer; cdecl; external 'c';
+{$ENDIF}
+
+procedure TestTlsVerification;
+const
+  PORT_SELF = 18643;
+  PORT_CA = 18644;
+var
+  Openssl, Dir, Output, Body, Failure: string;
+  Server: TProcess;
+  Status: Integer;
+  Answered: Boolean;
+
+  function Run(const Args: array of string): Boolean;
+  begin
+    Result := RunCommandInDir(Dir, Openssl, Args, Output, [poNoConsole]);
+  end;
+
+  { 相手が聞き始めるまで待ちます。聞いていないのに「繋がらない」を「確かめて
+    断った」と取り違えないため。/ Waits until the peer listens, so a peer that
+    is not there is never mistaken for one that was refused. }
+  function Listening(Port: Integer): Boolean;
+  var
+    Tries: Integer;
+    Probe: TInetSocket;
+  begin
+    Result := False;
+    for Tries := 1 to 50 do
+    begin
+      try
+        Probe := TInetSocket.Create('127.0.0.1', Port);
+        Probe.Free;
+        Exit(True);
+      except
+        Sleep(100);
+      end;
+    end;
+  end;
+
+  function StartServer(const Cert, Key: string; Port: Integer): TProcess;
+  begin
+    Result := TProcess.Create(nil);
+    Result.Executable := Openssl;
+    Result.CurrentDirectory := Dir;
+    Result.Parameters.Add('s_server');
+    Result.Parameters.Add('-accept');
+    Result.Parameters.Add(IntToStr(Port));
+    Result.Parameters.Add('-cert');
+    Result.Parameters.Add(Cert);
+    Result.Parameters.Add('-key');
+    Result.Parameters.Add(Key);
+    Result.Parameters.Add('-www');
+    Result.Options := [poUsePipes, poNoConsole];
+    Result.Execute;
+  end;
+
+begin
+  Openssl := ExeSearch('openssl'{$IFDEF WINDOWS} + '.exe'{$ENDIF},
+    GetEnvironmentVariable('PATH'));
+  if Openssl = '' then
+  begin
+    WriteLn('  --   openssl が無いので、TLS の確かめはとばします');
+    Exit;
+  end;
+  Dir := IncludeTrailingPathDelimiter(GetTempDir) + 'deepcw-tls-test';
+  ForceDirectories(Dir);
+  if not Run(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout',
+     'self.key', '-out', 'self.pem', '-days', '1', '-subj', '/CN=localhost']) then
+  begin
+    WriteLn('  --   試験の証明書を作れないので、TLS の確かめはとばします');
+    Exit;
+  end;
+  Server := StartServer('self.pem', 'self.key', PORT_SELF);
+  try
+    if not Listening(PORT_SELF) then
+      WriteLn('  --   試験の相手が立たないので、自己署名の確かめはとばします')
+    else
+    begin
+      Answered := HttpsGet(Format('https://127.0.0.1:%d/', [PORT_SELF]),
+        LOOKUP_USER_AGENT, 3000, Status, Body, Failure);
+      Check('自己署名の証明書の相手には繋がない', not Answered,
+        Format('(状態 %d)', [Status]));
+    end;
+  finally
+    Server.Terminate(0);
+    Server.Free;
+  end;
+
+{$IFDEF LINUX}
+  if not (Run(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout',
+       'ca.key', '-out', 'ca.pem', '-days', '1', '-subj', '/CN=DeepCW Test CA']) and
+     Run(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf.key', '-out',
+       'leaf.csr', '-subj', '/CN=localhost'])) then
+    Exit;
+  with TStringList.Create do
+  try
+    Add('subjectAltName=DNS:localhost');
+    SaveToFile(IncludeTrailingPathDelimiter(Dir) + 'ext.cnf');
+  finally
+    Free;
+  end;
+  if not Run(['x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey',
+     'ca.key', '-CAcreateserial', '-out', 'leaf.pem', '-days', '1', '-extfile',
+     'ext.cnf']) then
+    Exit;
+  setenv('SSL_CERT_FILE', PAnsiChar(AnsiString(Dir + PathDelim + 'ca.pem')), 1);
+  Server := StartServer('leaf.pem', 'leaf.key', PORT_CA);
+  try
+    if Listening(PORT_CA) then
+    begin
+      Answered := HttpsGet(Format('https://localhost:%d/', [PORT_CA]),
+        LOOKUP_USER_AGENT, 3000, Status, Body, Failure);
+      Check('信頼する認証局の証明書で、名前が合えば繋がる', Answered and
+        (Status = 200), Format('(%s)', [Failure]));
+      Answered := HttpsGet(Format('https://127.0.0.1:%d/', [PORT_CA]),
+        LOOKUP_USER_AGENT, 3000, Status, Body, Failure);
+      Check('信頼する認証局の証明書でも、名前が合わなければ繋がない',
+        not Answered, Format('(状態 %d)', [Status]));
+    end;
+  finally
+    Server.Terminate(0);
+    Server.Free;
+    unsetenv('SSL_CERT_FILE');
+  end;
+{$ENDIF}
 end;
 
 { HTTPS の部品（付録 CM.13）。**照会先へは繋ぎません**（試験のたびに相手へ
@@ -4585,6 +4811,7 @@ begin
   end
   else
     WriteLn('  --   要件定義書が無いので、版の突き合わせはとばします');
+  TestTlsVerification;
 end;
 
 procedure TestPrefixTable;
