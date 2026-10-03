@@ -80,7 +80,7 @@ const
   { 製品の版。**要件定義書の版と同じにします**（`dsp_check` が突き合わせます）。
     The product version: **the same as the requirements document's**
     (`dsp_check` compares them). }
-  DEEPCW_VERSION = '2.98';
+  DEEPCW_VERSION = '2.99';
   { 照会に付ける User-Agent。2025-01 の刷新から、ブラウザらしい値でないと
     断られたという報告があり（付録 CM.8）、互換の印のあとに製品名と版を名乗り
     ます（利用者の判断、付録 CM.13）。

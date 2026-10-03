@@ -1613,9 +1613,22 @@ msgstr "Analysing the loaded audio."
 msgid "指定なし"
 msgstr "Any"
 
+#: frmmain.rsrxbandfrozen
+#, object-pascal-format
+msgid "止まっています（%s 時点）"
+msgstr "Frozen (as of %s)"
+
+#: frmmain.rsrxbandidle
+msgid "待機モードにすると、帯域内の局がここに並びます。"
+msgstr "Switch to Standby to list the stations in the band."
+
 #: frmmain.rsrxbandlabel
 msgid "運用バンド"
 msgstr "Band"
+
+#: frmmain.rsrxbandlisttitle
+msgid "帯域の一覧"
+msgstr "Band list"
 
 #: frmmain.rsrxcallandrst
 msgid "符号と RST"
@@ -1670,6 +1683,10 @@ msgstr "Hide worked"
 msgid "入力レベル"
 msgstr "Input level"
 
+#: frmmain.rsrxinputsettings
+msgid "入力の設定..."
+msgstr "Input settings..."
+
 #: frmmain.rsrxlogcontact
 msgid "交信を記録"
 msgstr "Log contact"
@@ -1709,6 +1726,10 @@ msgstr "Open Morse audio"
 #: frmmain.rsrxoverlay
 msgid "文字を波形に重ねる"
 msgstr "Text on waterfall"
+
+#: frmmain.rsrxpickfromlist
+msgid "一覧から局を選ぶと、ここで読みます。"
+msgstr "Pick a station in the list to read it here."
 
 #: frmmain.rsrxreceivinghint
 msgid "受信中です。最初の文字が出るまで数秒かかります。"

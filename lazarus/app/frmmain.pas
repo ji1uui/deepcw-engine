@@ -601,6 +601,17 @@ type
     { コンテストモードでだけ現れる行（要件 FR-I.5）。
       A row that appears only in the contest mode (requirement FR-I.5). }
     FFindTools: TPanel;
+    { 交信を記録する行（受信テキストと送信欄の間）と、帯域の一覧の見出しの脇の
+      札（交信モードで一覧が止まっていることを言う）、入力の設定へ行く釦
+      （付録 CN）。/ The row that logs a contact (between the received text
+      and the send panel), the label beside the band list's heading (saying
+      the list is frozen in the contact mode), and the button to the input
+      settings (appendix CN). }
+    FLogRow: TPanel;
+    FRxMiddle: TPanel;
+    FRxBandPane: TPanel;
+    FRxBandNote: TLabel;
+    FRxInputSettings: TButton;
     FContestTools: TPanel;
     FRxBand: TComboBox;
     FRxHideWorked: TCheckBox;
@@ -1027,6 +1038,13 @@ type
     procedure RxClearClick(Sender: TObject);
     procedure RxCopyClick(Sender: TObject);
     procedure RxDeviceRefreshClick(Sender: TObject);
+    procedure RxInputSettingsClick(Sender: TObject);
+    procedure UpdateInputShortcut;
+    procedure ClearBandList;
+    procedure FitBandPane;
+    procedure UpdateBandNote;
+    procedure RxMiddleResized(Sender: TObject);
+    procedure BuildReceiveInputGroup(Host: TWinControl);
     procedure RefreshDeviceList(const Preferred: string);
     function SelectedDeviceIndex: Integer;
     function SelectedDeviceName: string;
@@ -1140,6 +1158,11 @@ resourcestring
   RsRxModeContact = '交信モード';
   RsRxModeWatch = '待機モード';
   RsRxModeContest = 'コンテスト';
+  RsRxBandListTitle = '帯域の一覧';
+  RsRxBandFrozen = '止まっています（%s 時点）';
+  RsRxBandIdle = '待機モードにすると、帯域内の局がここに並びます。';
+  RsRxPickFromList = '一覧から局を選ぶと、ここで読みます。';
+  RsRxInputSettings = '入力の設定...';
   RsRxDenoise = '帯域外の雑音を抑える';
   RsRxTuneHint = '読みたい信号をクリック。ホイールで微調整。';
   RsRxUntune = '同調を解除';
@@ -1727,12 +1750,27 @@ resourcestring
 
 const
   { 受信テキストに必ず残す高さと、ウォーターフォールの枠の既定・最小の高さ
-    （96 dpi での画素。付録 BV.4）。/ The height always left to the received
-    text, and the waterfall panel's default and least heights (pixels at
-    96 dpi; appendix BV.4). }
-  RX_TRANSCRIPT_MIN_96 = 80;
-  RX_WATERFALL_DEFAULT_96 = 230;
+    （96 dpi での画素。付録 BV.4。版 2.99 で受信テキストを 80 → 140 に。
+    付録 CN）。/ The height always left to the received text, and the
+    waterfall panel's default and least heights (pixels at 96 dpi; appendix
+    BV.4; the text went from 80 to 140 in 2.99, appendix CN). }
+  RX_TRANSCRIPT_MIN_96 = 140;
+  RX_WATERFALL_DEFAULT_96 = 170;
   RX_WATERFALL_MIN_96 = 120;
+  { 帯域の一覧に必ず残す高さ（付録 CN）。コンテストモードで行が 1 つ増えても、
+    数局ぶんは見えること。/ The height always left to the band list
+    (appendix CN): a few stations stay visible even with the contest mode's
+    extra row. }
+  RX_BANDMAP_MIN_96 = 80;
+  { 帯域の一覧の幅（付録 CN）。交信モードでは受信テキストが主役なので狭く、
+    待機・コンテストでは一覧が主役なので、受信テキストに最小の幅を残して全体の
+    6 割まで広げます（局ごとの直近の文が読める）。
+    The band list's width (appendix CN): narrow in the contact mode, where the
+    text is the main box; in the waiting and contest modes the list is, and it
+    widens to 60% of the whole while leaving the text its least width (so each
+    station's recent text can be read). }
+  RX_BANDPANE_NARROW_96 = 400;
+  RX_TEXTPANE_MIN_96 = 530;
   { 送受信画面の中身が要る大きさ（96 dpi での画素）。窓の最小（1040×660）で
     実測した送受信タブの中の大きさ。**これより狭い・低い画面では押し潰さず、
     巻き取らせます**（付録 CH）。
@@ -2636,99 +2674,98 @@ begin
   AddLabel(Group, @RsMkNote, 14, 128);
 end;
 
+{ 送受信画面（付録 CN、版 2.99）。上から:
+
+    操作の行（受信開始・停止・クリア・受信のしかた・入力レベル）
+    同調の行とウォーターフォール
+    受信テキスト（左）｜ 帯域の一覧（右）
+    交信を記録する行
+    送信欄
+
+  **探す（波形・一覧）と読む（受信テキスト）を同時に見せ、モードを変えても
+  中身が入れ替わらない**ようにしました。版 2.98 までは一覧と受信テキストが同じ
+  場所を取り合い、モードで入れ替わっていました。受信テキストは既定の窓で約 80
+  画素しかありませんでした。
+
+  一覧が生きているのは待機・コンテストのときだけです（交信モードは選んだ 1 局
+  だけを復号します）。交信モードでは**最後に見た一覧を止めたまま**出し、そう
+  言います（利用者の判断）。めったに変えない入力装置・文字が決まるまで・帯域外
+  の雑音は設定タブへ移しました（`BuildReceiveInputGroup`）。
+
+  The operating screen (appendix CN, version 2.99). From the top: the control
+  row, the tuning row and waterfall, the received text (left) beside the band
+  list (right), the row that logs a contact, and the send panel. **Finding
+  (waterfall, list) and reading (text) are on screen together, and changing
+  the mode no longer swaps what is shown.** Up to 2.98 the list and the text
+  took turns in one place and the text had about 80 pixels.
+
+  The list is live only in the waiting and contest modes (the contact mode
+  decodes the chosen station alone); in the contact mode **the last list is
+  shown frozen**, and says so (the operator's decision). The input device,
+  the settle time and the out-of-band filter, rarely changed, moved to the
+  settings tab (`BuildReceiveInputGroup`). }
 function TMainForm.BuildReceiveTab: TTabSheet;
 var
   Sheet: TTabSheet;
-  LiveBox: TGroupBox;
-  LiveControls, LevelPanel, WaterfallPanel, TuneTools, TextPanel: TPanel;
-  Header, FindTools, SendPanel: TPanel;
+  TopRow, LevelPanel, WaterfallPanel, TuneTools, Middle, TextPane, BandPane: TPanel;
+  Header, FindTools, BandTitle, SendPanel: TPanel;
 begin
   Sheet := FPages.AddTabSheet;
   RegisterCaption(Sheet, @RsRxTab);
   Result := Sheet;
 
   { 中身は巻き取り欄に載せます。**画面が中身より小さいときだけ**巻き取りが
-    出ます。ふだんは中身が欄いっぱいに広がり、見た目は前と同じです（付録 CH）。
+    出ます。ふだんは中身が欄いっぱいに広がります（付録 CH）。
     The content rides in a scrolling box, which scrolls **only when the screen
-    is smaller than the content**; otherwise the content fills it and looks as
-    before (appendix CH). }
+    is smaller than the content**; otherwise the content fills it (appendix
+    CH). }
   FRxContent := AddScrollingContent(Sheet, OPERATE_MIN_WIDTH_96,
     OPERATE_MIN_HEIGHT_96, FRxScroller);
 
-  LiveBox := TGroupBox.Create(FRxContent);
-  LiveBox.Parent := FRxContent;
-  LiveBox.Height := 120;
-  RegisterCaption(LiveBox, @RsRxFromInput);
-  Stretch(LiveBox, alTop);
+  { 操作の行。運用のたびに触るものだけを 1 行に置きます。
+    The control row: only what is touched every session, on one line. }
+  TopRow := AddTopPanel(FRxContent, 40);
 
-  LevelPanel := TPanel.Create(LiveBox);
-  LevelPanel.Parent := LiveBox;
+  LevelPanel := TPanel.Create(TopRow);
+  LevelPanel.Parent := TopRow;
   LevelPanel.Align := alRight;
-  LevelPanel.Width := 190;
+  LevelPanel.Width := 360;
   LevelPanel.BevelOuter := bvNone;
-  AddLabel(LevelPanel, @RsRxInputLevel, 6, 4);
+  AddLabel(LevelPanel, @RsRxInputLevel, 6, 12);
   FRxLevel := TProgressBar.Create(LevelPanel);
   FRxLevel.Parent := LevelPanel;
-  FRxLevel.SetBounds(6, 24, 178, 20);
+  FRxLevel.SetBounds(82, 12, 100, 16);
   FRxLevel.Max := 100;
   { 音が届いているかどうかを文字でも出します。レベルの棒だけでは、静かな信号と
     まったく鳴っていない状態を見分けられません（要件 FR-A.3）。
-
     Whether audio is arriving is stated in words as well. A bar alone does not
     separate a quiet signal from nothing at all (requirement FR-A.3). }
-  FRxSignal := AddLabel(LevelPanel, '', 6, 48);
+  FRxSignal := AddLabel(LevelPanel, '', 190, 12);
+  { 装置を待っているときだけ、同じ場所に入力の設定へ行く釦を出します
+    （`UpdateInputShortcut`）。入力装置は設定タブへ移したので、**使えない
+    ときに、どこで直すのかが見えなければなりません。**
+    Only while waiting for the device, a button to the input settings takes
+    the same place (`UpdateInputShortcut`). The input device moved to the
+    settings tab, so **when it does not work, where to fix it must be in
+    sight.** }
+  FRxInputSettings := AddButton(LevelPanel, @RsRxInputSettings, 190, 5, 150,
+    @RxInputSettingsClick);
+  FRxInputSettings.Visible := False;
 
-  LiveControls := TPanel.Create(LiveBox);
-  LiveControls.Parent := LiveBox;
-  LiveControls.Align := alClient;
-  LiveControls.BevelOuter := bvNone;
-
-  FRxStart := AddButton(LiveControls, @RsRxStart, 8, 22, 110, @RxStartClick);
-  FRxStop := AddButton(LiveControls, @RsRxStop, 126, 22, 110, @RxStopClick);
-  FRxClear := AddButton(LiveControls, @RsRxClear, 244, 22, 130, @RxClearClick);
-
-  { 2 行目は 1 行目の釦（22＋30）から 4 画素空けます。**ぴったり付けると、
-    125% の拡大の丸めで 1 画素重なりました**（付録 CH）。
-    The second row keeps 4 pixels below the first row's buttons (22 + 30):
-    **flush against them, 125% scaling's rounding overlapped them by one
-    pixel** (appendix CH). }
-  AddLabel(LiveControls, @RsRxDevice, 8, 60);
-  FRxDevice := TComboBox.Create(LiveControls);
-  FRxDevice.Parent := LiveControls;
-  FRxDevice.SetBounds(78, 56, 380, 28);
-  FRxDevice.Style := csDropDownList;
-  FRxDevice.OnChange := @RxConfirmSpeedChanged;
-  FRxDeviceRefresh := AddButton(LiveControls, @RsRxRescan, 466, 56, 80,
-    @RxDeviceRefreshClick);
-
-  AddLabel(LiveControls, @RsRxSettleLabel, 390, 1);
-  FRxConfirmSpeed := TComboBox.Create(LiveControls);
-  FRxConfirmSpeed.Parent := LiveControls;
-  FRxConfirmSpeed.SetBounds(390, 24, 150, 28);
-  FRxConfirmSpeed.Style := csDropDownList;
-  RegisterItem(FRxConfirmSpeed, 0, @RsRxSettleFast);
-  RegisterItem(FRxConfirmSpeed, 1, @RsRxSettleNormal);
-  RegisterItem(FRxConfirmSpeed, 2, @RsRxSettleSure);
-  FRxConfirmSpeed.ItemIndex := 1;
-  FRxConfirmSpeed.OnChange := @RxConfirmSpeedChanged;
+  FRxStart := AddButton(TopRow, @RsRxStart, 8, 5, 100, @RxStartClick);
+  FRxStop := AddButton(TopRow, @RsRxStop, 112, 5, 100, @RxStopClick);
+  FRxClear := AddButton(TopRow, @RsRxClear, 216, 5, 120, @RxClearClick);
 
   { 受信のしかたを選びます。**いま何モードかが常に見えていること**が要件です
-    （FR-I.6）ので、選択そのものを操作列に置き、説明を隣に添えます。
-    How reception is used. The requirement is that the mode **is always visible**
-    (FR-I.6), so the choice itself sits in the control row with a word of
-    explanation beside it. }
-  AddLabel(LiveControls, @RsRxModeLabel, 556, 60);
-  FRxMode := TComboBox.Create(LiveControls);
-  FRxMode.Parent := LiveControls;
-  FRxMode.SetBounds(646, 56, 150, 28);
+    （FR-I.6）。表記は短くし、説明は状態表示に出します。
+    How reception is used. The requirement is that the mode **is always
+    visible** (FR-I.6); the captions are short and the explanation goes to
+    the status line. }
+  AddLabel(TopRow, @RsRxModeLabel, 350, 12);
+  FRxMode := TComboBox.Create(TopRow);
+  FRxMode.Parent := TopRow;
+  FRxMode.SetBounds(440, 6, 130, 28);
   FRxMode.Style := csDropDownList;
-  { 表記は短くします。長い説明を選択肢に入れると、狭い窓で切れて**どちらを
-    選んでいるのかが読めなくなります。**モードが常に見えていることが要件です
-    （FR-I.6）。説明は状態表示に出します。
-    The captions are short. A long explanation inside the choice is cut off in a
-    narrow window and **then which mode is set cannot be read** — and the
-    requirement is that it always can (FR-I.6). The explanation goes to the status
-    line instead. }
   RegisterItem(FRxMode, 0, @RsRxModeContact);
   RegisterItem(FRxMode, 1, @RsRxModeWatch);
   RegisterItem(FRxMode, 2, @RsRxModeContest);
@@ -2738,53 +2775,33 @@ begin
     The notification is attached after the settings are read: assigning during the
     load would announce a mode change the operator never made. }
 
-  FRxAntiAlias := TCheckBox.Create(LiveControls);
-  FRxAntiAlias.Parent := LiveControls;
-  FRxAntiAlias.SetBounds(556, 26, 190, 24);
-  RegisterCaption(FRxAntiAlias, @RsRxDenoise);
-  FRxAntiAlias.Checked := True;
-  FRxAntiAlias.OnChange := @RxConfirmSpeedChanged;
+  { 解析中の知らせ（「デコード中...」）。受信テキストにも一覧にも掛かるので、
+    操作の行に置きます。
+    The busy note ("decoding..."): it concerns both the text and the list, so
+    it sits on the control row. }
+  FRxBusy := AddLabel(TopRow, '', 580, 12);
 
-  { この塊は、**画面の並びと作った順が一致していない。**置き場所の都合（幅の
-    広い入力装置の欄を先に取る、通知を繋ぐ順序）で作る順が決まり、LCL は
-    タブ順序を作った順で取るためである。**置き場所は動かさず、順序だけを
-    目で追う順に置き直す**（要件 NFR-5.6）。
-
-    番号で与える。`A.TabOrder := B.TabOrder` は代入のたびに番号が詰め直される
-    ので、**続けて書くと意図した並びにならない**（付録 AX.3）。
-
-    1 行目: 受信開始・受信停止・表示をクリア・文字が決まるまで・帯域外の雑音
-    2 行目: 入力装置・再検出・交信モード
-
-    In this group **the order on screen and the order of construction do not
-    agree.** What to build first was decided by where things go (the wide device
-    box needs its space; notifications are attached in a certain order), and the
-    LCL takes the Tab order from the order of construction. **The positions stay
-    put; only the order is laid back out the way the eye follows it**
-    (requirement NFR-5.6).
-
-    Given by number: `A.TabOrder := B.TabOrder` renumbers as it assigns, so
-    **written one after another it does not produce the order intended**
-    (appendix AX.3). }
+  { 見た目の順にタブで進むよう、番号で並べます（要件 NFR-5.6）。入力レベルの
+    枠は右端に場所を取るため先に作ったので、順序だけ最後へ回します。
+    Numbered so that Tab follows the order on screen (NFR-5.6); the level
+    panel was made first to claim the right edge, so only its order moves to
+    the end. }
   FRxStart.TabOrder := 0;
   FRxStop.TabOrder := 1;
   FRxClear.TabOrder := 2;
-  FRxConfirmSpeed.TabOrder := 3;
-  FRxAntiAlias.TabOrder := 4;
-  FRxDevice.TabOrder := 5;
-  FRxDeviceRefresh.TabOrder := 6;
-  FRxMode.TabOrder := 7;
+  FRxMode.TabOrder := 3;
+  LevelPanel.TabOrder := 4;
 
-  WaterfallPanel := TPanel.Create(FRxContent);
-  WaterfallPanel.Parent := FRxContent;
-  WaterfallPanel.Align := alBottom;
-  WaterfallPanel.Height := RX_WATERFALL_DEFAULT_96;
+  { 波形は操作の行のすぐ下。**探す場所（波形）と、探した結果（一覧）と、読む
+    場所（受信テキスト）を、上から近い順に並べます。**
+    The waterfall sits right under the control row: **where one looks for
+    signals, what was found (the list) and where one reads (the text) are
+    stacked close together.** }
+  WaterfallPanel := AddTopPanel(FRxContent, RX_WATERFALL_DEFAULT_96);
   FRxWaterfallPanel := WaterfallPanel;
-  WaterfallPanel.BevelOuter := bvNone;
 
   { 同調の操作はウォーターフォールのすぐ上に置きます。読みたい信号を選ぶ
     という一連の動作が 1 か所にまとまるためです（要件 FR-D.1、FR-D.5）。
-
     The tuning controls sit directly above the waterfall so that choosing a
     signal to read is one gesture in one place (requirements FR-D.1, FR-D.5). }
   TuneTools := TPanel.Create(WaterfallPanel);
@@ -2805,7 +2822,6 @@ begin
   Stretch(FRxMonitor, alRight);
   { 動いていく信号を追いかけるかどうか。既定は有効です。周波数を決め打ちで
     見張りたい場合のために、切れるようにしてあります（要件 FR-D.7）。
-
     Whether to follow a signal that moves; on by default, and switchable off
     for an operator deliberately watching one frequency (FR-D.7). }
   FRxTrack := TCheckBox.Create(TuneTools);
@@ -2835,27 +2851,96 @@ begin
   FRxWaterfall.Message_ := FWfMessage^;
   Stretch(FRxWaterfall, alClient);
 
-  TextPanel := TPanel.Create(FRxContent);
-  TextPanel.Parent := FRxContent;
-  TextPanel.Align := alClient;
-  TextPanel.BevelOuter := bvNone;
+  { 送信欄はいちばん下（`alBottom`）。**読んだ文の下で返事を作り、そのまま
+    送る**ためです（付録 CG）。中の受信テキストの `alClient` より先に場所を
+    取らせるため、ここで作ります。
+    The send panel is at the very bottom (`alBottom`): **the reply is made
+    below what was read and sent from there** (appendix CG). Made here so it
+    claims its place before the text's `alClient`. }
+  SendPanel := BuildSendPanel(FRxContent);
+  SendPanel.Top := 20000;
 
-  { 見出しの行: 「受信テキスト」・解析中の知らせ・ファイルから読む・コピー。
-    表示の好み（濃淡・文字の大きさ・波形に重ねる）は設定タブへ移し、WAV の
-    行はここのボタン 1 つにしました。**空いた高さを送信欄に回すため**です
-    （付録 CG）。
-    The heading row: "received text", the busy note, read a file, copy. The
-    display preferences (shading, size, overlay) went to the settings tab and
-    the WAV row became one button here, **so that the height they took could
-    go to the send panel** (appendix CG). }
-  Header := TPanel.Create(TextPanel);
-  Header.Parent := TextPanel;
+  { 交信を記録する行。受信テキストと送信欄の間に、画面の幅いっぱいで置きます。
+    **読めた符号をその場で残す**——読む・返す・残すが縦に並びます（要件
+    FR-E.3）。2 段目は打った値の読み（RST・市郡区番号）です。
+    The row that logs a contact, full width between the received text and
+    the send panel: **a call sign read is kept on the spot**, so reading,
+    replying and keeping stack up vertically (requirement FR-E.3). The second
+    line is the reading of what was typed (the reports, the subdivision). }
+  FLogRow := TPanel.Create(FRxContent);
+  FLogRow.Parent := FRxContent;
+  FLogRow.BevelOuter := bvNone;
+  FLogRow.Height := 62;
+  FLogRow.Top := 19000;
+  FLogRow.Align := alBottom;
+  FRxWorked := AddButton(FLogRow, @RsRxLogContact, 6, 2, 100, @RxWorkedClick);
+  FRxWorked.Enabled := False;
+  FRxLogInfo := TLabel.Create(FLogRow);
+  FRxLogInfo.Parent := FLogRow;
+  FRxLogInfo.SetBounds(114, 9, 230, 20);
+  { 送った・受けた RST（要件 FR-E.11）。見て、直して、記録する。
+    The reports sent and received (FR-E.11): look, correct, record. }
+  AddLabel(FLogRow, @RsRxRstRcvd, 352, 9);
+  FRxRstRcvd := TEdit.Create(FLogRow);
+  FRxRstRcvd.Parent := FLogRow;
+  FRxRstRcvd.SetBounds(440, 4, 56, 26);
+  FRxRstRcvd.MaxLength := 3;
+  FRxRstRcvd.CharCase := ecUppercase;
+  FRxRstRcvd.OnChange := @RxRstChanged;
+  AddLabel(FLogRow, @RsRxRstSent, 508, 9);
+  FRxRstSent := TEdit.Create(FLogRow);
+  FRxRstSent.Parent := FLogRow;
+  FRxRstSent.SetBounds(596, 4, 56, 26);
+  FRxRstSent.MaxLength := 3;
+  FRxRstSent.CharCase := ecUppercase;
+  FRxRstSent.OnChange := @RxRstChanged;
+  { JCC/JCG（要件 FR-E.7）。**交信を記録する釦と同じ行に置きます。**打ってから
+    記録する、という順序が場所で分かるようにするためです。
+    JCC/JCG (requirement FR-E.7), on the same row as the button that records
+    the contact, so that the order -- type it, then record -- is legible from
+    where things sit. }
+  AddLabel(FLogRow, 'JCC/JCG', 668, 9);
+  FRxSubdivision := TEdit.Create(FLogRow);
+  FRxSubdivision.Parent := FLogRow;
+  FRxSubdivision.SetBounds(734, 4, 110, 26);
+  FRxSubdivision.OnChange := @RxSubdivisionChanged;
+  { 読みの札は 2 段目。**伸びる札は、伸びた先に何も無い所へ置きます**——打って
+    から出る「この形では記録に書けません（4・5・6 桁）」は、起動時の文より長い
+    （付録 AZ.3）。
+    The readings go on the second line. **A label that grows goes where nothing
+    lies in its way**: "cannot be written in this form" appears only once
+    something is typed, and is longer than the text at startup (appendix
+    AZ.3). }
+  FRxRstInfo := AddLabel(FLogRow, '', 6, 38);
+  { 打ちながら読みが出ます。**記録を押してから「書けませんでした」と言われる
+    のでは遅い。**
+    The reading appears as it is typed: **being told "could not be written"
+    after pressing record comes too late.** }
+  FRxSubdivisionInfo := AddLabel(FLogRow, '', 668, 38);
+  RxSubdivisionChanged(nil);
+
+  Middle := TPanel.Create(FRxContent);
+  Middle.Parent := FRxContent;
+  Middle.Align := alClient;
+  Middle.BevelOuter := bvNone;
+  FRxMiddle := Middle;
+
+  TextPane := TPanel.Create(Middle);
+  TextPane.Parent := Middle;
+  TextPane.Align := alClient;
+  TextPane.BevelOuter := bvNone;
+
+  { 見出しの行: 「受信テキスト」・解析中の知らせ・ファイルから読む・コピー・
+    符号と RST。
+    The heading row: "received text", the busy note, read a file, copy, call
+    sign and report. }
+  Header := TPanel.Create(TextPane);
+  Header.Parent := TextPane;
   Header.Height := 34;
   StackBelow(Header);
   Header.Align := alTop;
   Header.BevelOuter := bvNone;
   AddLabel(Header, @RsRxText, 6, 9);
-  FRxBusy := AddLabel(Header, '', 130, 9);
   { alRight の並びは作った順ではなく `Left` の値で決まります（実物で逆に
     並んだ）。見た目の左から「ファイル・コピー・符号と RST」になるよう、その
     順に大きな `Left` を与えます。
@@ -2873,142 +2958,60 @@ begin
   Stretch(FRxCopy, alRight, 2);
   FRxOpenFile := AddButton(Header, @RsRxOpenFile, 1000, 0, 150, @RxOpenFileClick);
   Stretch(FRxOpenFile, alRight, 2);
-  { 見た目の順にタブで進むよう、番号で並べます（要件 NFR-5.6）。
-    Numbered so that Tab follows the order on screen (NFR-5.6). }
   FRxOpenFile.TabOrder := 0;
   FRxCopy.TabOrder := 1;
   FRxCopyCall.TabOrder := 2;
 
-  { 検索と聴き直しは、表示の設定とは別の行に置きます。同じ行に並べると、窓を
-    狭くしたときに右端の操作が画面の外へ出て、押せなくなります（最小幅 900）。
-    Search and replay go on their own row: on the same row as the display
-    settings, narrowing the window pushes the right-hand controls off the screen
-    where they cannot be pressed (the minimum width is 900). }
-  FindTools := TPanel.Create(TextPanel);
-  FindTools.Parent := TextPanel;
-  { 2 段です。上の段に操作、下の段に聴き直しの状態を置きます。**1 段に収める
-    と、状態の文が行の外へ出て、一度も見えませんでした**（付録 AW.3）。
-    Two rows: the controls above, the replay's state below. **On one row the
-    state ran off the end and was never once visible** (appendix AW.3). }
-  FindTools.Height := 94;
+  { 検索と聴き直し。どちらも受信テキストに対する操作なので、受信テキストの
+    真上に置きます。2 段目は聴き直しの状態です。**1 段に収めると、状態の文が
+    行の外へ出て、一度も見えませんでした**（付録 AW.3）。
+    Search and replay, both acting on the received text, sit right above it.
+    The second line is the replay's state: **on one line the state ran off the
+    end and was never once visible** (appendix AW.3). }
+  FindTools := TPanel.Create(TextPane);
+  FindTools.Parent := TextPane;
+  FindTools.Height := 52;
   StackBelow(FindTools);
   FindTools.Align := alTop;
   FindTools.BevelOuter := bvNone;
-  { モードによって出し入れするので、この行だけは手元に控えます。
-    This row is shown and hidden by mode, so a reference to it is kept. }
+  { 交信モードでだけ効くので、モードで押せるかどうかを変えます（`ApplyMode`）。
+    It only works in the contact mode, so the mode decides whether it can be
+    pressed (`ApplyMode`). }
   FFindTools := FindTools;
 
-  { 検索（要件 FR-B.5）。溜まった受信テキストから、呼出符号や符丁を探すための
-    ものです。入力しながら探し、Enter で次へ進みます。
-    Search (requirement FR-B.5), for finding a call sign or an abbreviation in
-    what has accumulated. It searches as you type; Enter moves to the next hit. }
+  { 検索（要件 FR-B.5）。入力しながら探し、Enter で次へ進みます。
+    Search (requirement FR-B.5): it searches as you type; Enter moves to the
+    next hit. }
   AddLabel(FindTools, @RsRxFind, 6, 9);
   FRxFind := TEdit.Create(FindTools);
   FRxFind.Parent := FindTools;
-  FRxFind.SetBounds(42, 4, 150, 26);
+  FRxFind.SetBounds(42, 4, 120, 26);
   FRxFind.OnChange := @RxFindChanged;
   FRxFind.OnKeyDown := @RxFindKeyDown;
-  FRxFindPrev := AddButton(FindTools, '<', 198, 2, 34, @RxFindPrevClick);
-  FRxFindNext := AddButton(FindTools, '>', 234, 2, 34, @RxFindNextClick);
+  FRxFindPrev := AddButton(FindTools, '<', 166, 2, 34, @RxFindPrevClick);
+  FRxFindNext := AddButton(FindTools, '>', 202, 2, 34, @RxFindNextClick);
   FRxFindInfo := TLabel.Create(FindTools);
   FRxFindInfo.Parent := FindTools;
-  FRxFindInfo.SetBounds(276, 9, 110, 20);
+  FRxFindInfo.SetBounds(242, 9, 100, 20);
 
   { 聴き直しの操作。文字を押せば鳴るので、この 2 つは「もう一度」と「止める」
     だけです（要件 FR-E.10）。
     The replay controls. A press on a character already plays it, so these two
     are only "again" and "stop" (requirement FR-E.10). }
-  { 交信を記録する操作は、受信テキストのすぐ下に置きます。読めた符号をその場で
-    残す、という一連の動作が 1 か所にまとまります（要件 FR-E.3）。
-    Recording a contact sits directly under the transcript, so that reading a call
-    sign and keeping it is one gesture in one place (requirement FR-E.3). }
-  FRxWorked := AddButton(FindTools, @RsRxLogContact, 396, 2, 100, @RxWorkedClick);
-  FRxWorked.Enabled := False;
-  FRxLogInfo := TLabel.Create(FindTools);
-  FRxLogInfo.Parent := FindTools;
-  FRxLogInfo.SetBounds(504, 9, 250, 20);
-
-  FRxReplay := AddButton(FindTools, @RsRxReplay, 760, 2, 110, @RxReplayClick);
+  FRxReplay := AddButton(FindTools, @RsRxReplay, 346, 2, 110, @RxReplayClick);
   FRxReplay.Enabled := False;
-  FRxReplayStop := AddButton(FindTools, @RsRxReplayStop, 874, 2, 60, @RxReplayStopClick);
+  FRxReplayStop := AddButton(FindTools, @RsRxReplayStop, 460, 2, 60, @RxReplayStopClick);
   FRxReplayStop.Enabled := False;
-  FRxReplayInfo := TLabel.Create(FindTools);
-  FRxReplayInfo.Parent := FindTools;
-  { JCC/JCG（要件 FR-E.7）。**交信を記録する釦と同じ塊に置きます。**打ってから
-    記録する、という順序が場所で分かるようにするためです。
+  { 幅は文字に任せます（`AutoSize`）。右端に留めると、置き場所を移したあとも
+    最初の右端を守り続けて親の外まで伸びました（付録 AW.3）。
+    The width is left to the text (`AutoSize`): anchored to the right it kept
+    the first right edge after being moved and reached past its parent
+    (appendix AW.3). }
+  FRxReplayInfo := AddLabel(FindTools, @RsRxReplayHint, 6, 32);
 
-    伸びる札（聴き直しの状態）は**この右**に置きます。逆に置くと、札が伸びた
-    ぶんだけ入力欄に重なります。伸びるものは行の終わりに置く。
-
-    JCC/JCG (requirement FR-E.7), in the same group as the button that records
-    the contact, so that the order -- type it, then record -- is legible from
-    where things sit.
-
-    The label that grows (the replay state) goes **to the right of this**: the
-    other way round, it would grow over the input. What grows belongs at the
-    end of the row. }
-  AddLabel(FindTools, 'JCC/JCG', 6, 40);
-  FRxSubdivision := TEdit.Create(FindTools);
-  FRxSubdivision.Parent := FindTools;
-  FRxSubdivision.SetBounds(72, 36, 110, 26);
-  FRxSubdivision.OnChange := @RxSubdivisionChanged;
-  { 打ちながら読みが出ます。**記録を押してから「書けませんでした」と言われる
-    のでは遅い。**
-    The reading appears as it is typed: **being told "could not be written"
-    after pressing record comes too late.** }
-  FRxSubdivisionInfo := AddLabel(FindTools, '', 190, 40);
-  RxSubdivisionChanged(nil);
-
-  { 送った・受けた RST（要件 FR-E.11）。記録の行に置きます（見て、直して、
-    記録する）。/ The reports sent and received (FR-E.11), on the logging row:
-    look, correct, record. }
-  AddLabel(FindTools, @RsRxRstRcvd, 6, 72);
-  FRxRstRcvd := TEdit.Create(FindTools);
-  FRxRstRcvd.Parent := FindTools;
-  FRxRstRcvd.SetBounds(110, 68, 60, 26);
-  FRxRstRcvd.MaxLength := 3;
-  FRxRstRcvd.CharCase := ecUppercase;
-  FRxRstRcvd.OnChange := @RxRstChanged;
-  AddLabel(FindTools, @RsRxRstSent, 190, 72);
-  FRxRstSent := TEdit.Create(FindTools);
-  FRxRstSent.Parent := FindTools;
-  FRxRstSent.SetBounds(294, 68, 60, 26);
-  FRxRstSent.MaxLength := 3;
-  FRxRstSent.CharCase := ecUppercase;
-  FRxRstSent.OnChange := @RxRstChanged;
-  FRxRstInfo := AddLabel(FindTools, '', 370, 72);
-
-  { 読みの札（`FRxSubdivisionInfo`）が伸びる先を空けておきます。**実機で
-    重なりました。**組み方の検査は、部品が生まれたときの文字しか見ていない
-    ——起動時の「相手局の市郡区番号（任意）」は短く、打ってから出る
-    「この形では記録に書けません（4・5・6 桁）」は長い（付録 AZ.3）。
-
-    Room is left for the reading label (`FRxSubdivisionInfo`) to grow into.
-    **They overlapped on the real screen.** The layout check only ever sees the
-    text a control was born with: the short one at startup, not the longer one
-    that appears once something is typed (appendix AZ.3). }
-  FRxReplayInfo.SetBounds(560, 40, 300, 20);
-  { 幅は文字に任せます（`AutoSize`）。**右端に留める指定をしていたのが誤りで
-    した。**左右どちらも留めると幅は引き伸ばされ、置き場所を左へ移したあとも
-    最初の置き場所から測った右端を守り続けて、親の外まで伸びていました。
-    文字に任せれば、文が伸びた分だけ伸びます（付録 AW.3）。
-
-    The width is left to the text (`AutoSize`). **Anchoring it to the right was
-    the mistake**: anchored on both sides it is stretched, and it went on
-    honouring a right edge measured from its first position even after being
-    moved left, reaching past its parent. Left to the text it grows by exactly
-    as much as the sentence does (appendix AW.3). }
-  RegisterCaption(FRxReplayInfo, @RsRxReplayHint);
-
-  { 送信欄は受信テキストの下（`alBottom`）。受信テキストの `alClient` より先に
-    場所を取らせるため、ここで作ります。
-    The send panel sits under the received text (`alBottom`), made here so it
-    claims its place before the text's `alClient`. }
-  SendPanel := BuildSendPanel(TextPanel);
-
-  FRxTranscript := TTranscriptView.Create(TextPanel);
+  FRxTranscript := TTranscriptView.Create(TextPane);
   FRxTranscript.OnResize := @RxTranscriptResized;
-  FRxTranscript.Parent := TextPanel;
+  FRxTranscript.Parent := TextPane;
   FRxTranscript.OnCharChosen := @RxCharChosen;
   FRxTranscript.Font.Size := 14;
   { まだ何も始めていない状態の言葉を、作った時点で入れます（要件 FR-B.1）。
@@ -3019,66 +3022,82 @@ begin
   FRxTranscript.Message_ := RsRxEmpty;
   Stretch(FRxTranscript, alClient);
 
-  { バンドマップは受信テキストと同じ場所に置き、モードで入れ替えます。並べて
-    出すと、どちらも狭くなって両方読めなくなります。
-    The band map occupies the same place as the transcript and the mode swaps
-    them. Side by side, both would be too narrow to read. }
-  { 待つ符号を書く行。**待機モードのときだけ出します。**交信モードでは効かない
-    ものを置いておくと、書いても何も起きない理由が分かりません
-    （progressive disclosure）。
-    The row for the call signs waited for. **It appears only in the waiting
-    mode**: left on screen where it has no effect, there would be no way to tell
-    why typing into it does nothing. }
-  FWatchTools := TPanel.Create(TextPanel);
-  FWatchTools.Parent := TextPanel;
-  FWatchTools.Height := 34;
+  { 帯域の一覧は受信テキストの右に、**どのモードでも**置きます。版 2.98 までは
+    同じ場所をモードで入れ替えていました。
+    The band list sits to the right of the received text **in every mode**; up
+    to 2.98 the mode swapped the two in one place. }
+  BandPane := TPanel.Create(Middle);
+  BandPane.Parent := Middle;
+  BandPane.Align := alRight;
+  BandPane.Width := RX_BANDPANE_NARROW_96;
+  BandPane.BevelOuter := bvNone;
+  FRxBandPane := BandPane;
+  Middle.OnResize := @RxMiddleResized;
+
+  BandTitle := TPanel.Create(BandPane);
+  BandTitle.Parent := BandPane;
+  BandTitle.Height := 30;
+  StackBelow(BandTitle);
+  BandTitle.Align := alTop;
+  BandTitle.BevelOuter := bvNone;
+  AddLabel(BandTitle, @RsRxBandListTitle, 6, 8);
+  { 交信モードでは一覧が止まっていることを言います。**止まった一覧を黙って
+    出すと、いまの帯域の様子と取り違えます。**
+    In the contact mode this says the list is frozen: **a frozen list shown
+    without a word is taken for the band as it is now.** }
+  FRxBandNote := AddLabel(BandTitle, '', 100, 8);
+
+  { 待つ符号を書く行（要件 FR-I.4）。待機・コンテストでだけ効くので、交信
+    モードでは押せなくします（`ApplyMode`）。2 段目はその状態です。
+    The row for the call signs waited for (requirement FR-I.4). It only works
+    in the waiting and contest modes, so in the contact mode it cannot be
+    used (`ApplyMode`). The second line is its state. }
+  FWatchTools := TPanel.Create(BandPane);
+  FWatchTools.Parent := BandPane;
+  FWatchTools.Height := 56;
   StackBelow(FWatchTools);
   FWatchTools.Align := alTop;
   FWatchTools.BevelOuter := bvNone;
   AddLabel(FWatchTools, @RsRxWatchLabel, 6, 9);
   FRxWatch := TEdit.Create(FWatchTools);
   FRxWatch.Parent := FWatchTools;
-  FRxWatch.SetBounds(80, 4, 260, 26);
+  FRxWatch.SetBounds(80, 4, 170, 26);
   FRxWatch.TextHint := 'JA1ABC JH2XYZ';
-  { 席を外しているときに気づけるよう、音でも知らせられます。**既定は切**です。
-    入れていない人に、いきなり音が鳴ることはありません（付録 BY）。
+  { 席を外しているときに気づけるよう、音でも知らせられます。**既定は切**です
+    （付録 BY）。
     A chime can announce it too, for when the operator is away from the desk.
-    **Off by default**: nobody who has not asked for it hears a sudden sound
-    (appendix BY). }
+    **Off by default** (appendix BY). }
   FRxWatchSound := TCheckBox.Create(FWatchTools);
   FRxWatchSound.Parent := FWatchTools;
-  FRxWatchSound.SetBounds(352, 6, 160, 24);
+  FRxWatchSound.SetBounds(258, 6, 140, 24);
   RegisterCaption(FRxWatchSound, @RsRxWatchSound);
   FRxWatchSound.Checked := False;
   FRxWatchSound.OnChange := @RxWatchSoundChanged;
   FRxWatchInfo := TLabel.Create(FWatchTools);
   FRxWatchInfo.Parent := FWatchTools;
-  FRxWatchInfo.SetBounds(524, 9, 420, 20);
+  FRxWatchInfo.SetBounds(6, 34, 390, 20);
 
-  { コンテスト中に見たいものを 1 行に置きます。**運用バンド・交信済みを隠す・
-    時間あたりの交信数**の 3 つです。
+  { コンテスト中に見たいもの（要件 FR-I.5）: **運用バンド・交信済みを隠す・
+    時間あたりの交信数**。コンテストモードでだけ出します。
 
     バンドを運用者が選ぶのは、**この機械が電波の周波数を知らない**ためです
-    （受信機との連携は別仕様）。世界のコンテストソフトは無線機から周波数を
-    受け取りますが、それが無い環境では手で選ばせるのが通例です。
+    （受信機との連携は別仕様）。
 
-    What a contest wants on one row: the band being worked, hiding what is
-    already worked, and the contacts per hour.
-
-    The operator chooses the band because **this machine does not know the
-    radio's frequency** (the receiver link is a separate specification). Contest
-    software elsewhere takes it from the radio; without that, choosing by hand is
-    the usual arrangement. }
-  FContestTools := TPanel.Create(TextPanel);
-  FContestTools.Parent := TextPanel;
-  FContestTools.Height := 34;
+    What a contest wants (requirement FR-I.5): the band being worked, hiding
+    what is already worked, and the contacts per hour; shown only in the
+    contest mode. The operator chooses the band because **this machine does
+    not know the radio's frequency** (the receiver link is a separate
+    specification). }
+  FContestTools := TPanel.Create(BandPane);
+  FContestTools.Parent := BandPane;
+  FContestTools.Height := 56;
   StackBelow(FContestTools);
   FContestTools.Align := alTop;
   FContestTools.BevelOuter := bvNone;
   AddLabel(FContestTools, @RsRxBandLabel, 6, 9);
   FRxBand := TComboBox.Create(FContestTools);
   FRxBand.Parent := FContestTools;
-  FRxBand.SetBounds(96, 4, 130, 26);
+  FRxBand.SetBounds(96, 4, 120, 26);
   FRxBand.Style := csDropDownList;
   { 表記は運用者の言葉（MHz）で、記録には ADIF の名前で残します。
     Shown in the operator's terms (MHz) and recorded under the ADIF name. }
@@ -3105,56 +3124,74 @@ begin
 
   FRxHideWorked := TCheckBox.Create(FContestTools);
   FRxHideWorked.Parent := FContestTools;
-  FRxHideWorked.SetBounds(240, 6, 190, 24);
+  FRxHideWorked.SetBounds(226, 6, 170, 24);
   RegisterCaption(FRxHideWorked, @RsRxHideWorked);
   FRxHideWorked.Checked := True;
   FRxHideWorked.OnChange := @RxContestChanged;
 
   FRxRate := TLabel.Create(FContestTools);
   FRxRate.Parent := FContestTools;
-  FRxRate.SetBounds(444, 9, 500, 20);
+  FRxRate.SetBounds(6, 34, 390, 20);
 
-  FRxBandMap := TBandMapView.Create(TextPanel);
-  FRxBandMap.Parent := TextPanel;
+  FRxBandMap := TBandMapView.Create(BandPane);
+  FRxBandMap.Parent := BandPane;
   FRxBandMap.OnStationChosen := @RxStationChosen;
-  FRxBandMap.Visible := False;
   Stretch(FRxBandMap, alClient);
 
-  { タブ順序を**見た目の順序**に合わせます（要件 NFR-5.6）。
+  { タブ順序を**見た目の順序**に合わせます（要件 NFR-5.6）。LCL はタブ順序を
+    作った順で決めます。送信欄と記録の行は `alBottom` で場所を先に取るため先に
+    作ったので、順序だけ受信テキスト・一覧の後へ回します。
+    The Tab order is made to match **the order on screen** (requirement
+    NFR-5.6). The LCL takes it from the order of construction; the send panel
+    and the log row were made early to claim their places at the bottom, so
+    only their order moves after the text and the list. }
+  FLogRow.TabOrder := FRxContent.ControlCount - 1;
+  SendPanel.TabOrder := FRxContent.ControlCount - 1;
+end;
 
-    LCL はタブ順序を**作った順**で決めます。ウォーターフォールの枠は画面では
-    いちばん下ですが、`alBottom` で場所を先に取る必要があるため、受信テキストの
-    枠より**先に**作ってあります。そのままだと、Tab を押していくと
+{ 受信の入力の設定（設定タブ。付録 CN）。版 2.98 までは送受信画面の上段に
+  ありました。**部品も設定ファイルの鍵も同じで、置き場所だけを移しました。**
+  変えればすぐ効きます（適用の釦は要りません）。
+  The receive input settings (settings tab; appendix CN). Up to 2.98 they sat
+  in the operating screen's top group. **The controls and the settings keys
+  are the same; only their place moved.** A change takes effect at once (no
+  apply button needed). }
+procedure TMainForm.BuildReceiveInputGroup(Host: TWinControl);
+var
+  Group: TGroupBox;
+begin
+  Group := TGroupBox.Create(Host);
+  Group.Parent := Host;
+  Group.Height := 104;
+  RegisterCaption(Group, @RsRxFromInput);
+  Stretch(Group, alTop);
 
-      … → 同調の操作 → ウォーターフォール → **上へ戻って** 受信テキストの行 → …
+  AddLabel(Group, @RsRxDevice, 14, 10);
+  FRxDevice := TComboBox.Create(Group);
+  FRxDevice.Parent := Group;
+  FRxDevice.SetBounds(150, 6, 380, 28);
+  FRxDevice.Style := csDropDownList;
+  FRxDevice.OnChange := @RxConfirmSpeedChanged;
+  FRxDeviceRefresh := AddButton(Group, @RsRxRescan, 538, 5, 80,
+    @RxDeviceRefreshClick);
 
-    と飛びます。実際に Tab を 18 回押して画面を撮り、焦点が y≈834 から y≈425 へ
-    戻ることを測って見つけました。
+  AddLabel(Group, @RsRxSettleLabel, 14, 46);
+  FRxConfirmSpeed := TComboBox.Create(Group);
+  FRxConfirmSpeed.Parent := Group;
+  FRxConfirmSpeed.SetBounds(150, 42, 150, 28);
+  FRxConfirmSpeed.Style := csDropDownList;
+  RegisterItem(FRxConfirmSpeed, 0, @RsRxSettleFast);
+  RegisterItem(FRxConfirmSpeed, 1, @RsRxSettleNormal);
+  RegisterItem(FRxConfirmSpeed, 2, @RsRxSettleSure);
+  FRxConfirmSpeed.ItemIndex := 1;
+  FRxConfirmSpeed.OnChange := @RxConfirmSpeedChanged;
 
-    **並べ替えるのは順序だけで、場所は動かしません。**`TabOrder` を入れ替えると、
-    LCL がほかの兄弟の番号を詰め直します。
-
-    The tab order is made to match **the order on screen** (requirement NFR-5.6).
-
-    LCL decides tab order by **the order things are created**. The waterfall's
-    panel is at the very bottom of the screen, but being `alBottom` it has to
-    claim its space first, so it is created **before** the transcript's panel.
-    Left alone, tabbing runs
-
-      ... -> tuning controls -> waterfall -> **back up** to the transcript row ...
-
-    which was found by pressing Tab eighteen times and photographing the screen:
-    the focus goes from y 834 back to y 425.
-
-    **Only the order is changed, never the placement**: assigning `TabOrder` has
-    LCL renumber the siblings around it. }
-  WaterfallPanel.TabOrder := TextPanel.TabOrder;
-  { 送信欄は画面では受信テキストの下なので、Tab でも受信テキスト・一覧の後に
-    来ます。場所を先に取るために先に作ったぶんを、順序だけ最後へ回します。
-    The send panel is below the received text on screen, so Tab reaches it
-    after the text and the list; made early to claim its place, it is only
-    moved to the end of the order. }
-  SendPanel.TabOrder := TextPanel.ControlCount - 1;
+  FRxAntiAlias := TCheckBox.Create(Group);
+  FRxAntiAlias.Parent := Group;
+  FRxAntiAlias.SetBounds(320, 44, 220, 24);
+  RegisterCaption(FRxAntiAlias, @RsRxDenoise);
+  FRxAntiAlias.Checked := True;
+  FRxAntiAlias.OnChange := @RxConfirmSpeedChanged;
 end;
 
 { 受信練習のタブ（要件 FR-F.3）。
@@ -4372,6 +4409,13 @@ begin
   Scroller.BorderStyle := bsNone;
   Scroller.HorzScrollBar.Visible := False;
 
+  { 受信の入力（付録 CN）。運用設定の上に置きます。**入力装置が使えないとき、
+    送受信画面の「入力の設定...」から来て最初に見える場所**だからです。
+    The receive input (appendix CN), above the operating settings: **it is
+    the first thing seen when arriving from the operating screen's "input
+    settings" button** while the device does not work. }
+  BuildReceiveInputGroup(Scroller);
+
   { ── 運用設定：普段さわるもの。技術用語を置かない ──
     Operating settings: what an operator actually changes. No jargon here. }
   Operating := TGroupBox.Create(Scroller);
@@ -5458,8 +5502,11 @@ end;
 procedure TMainForm.ApplyTexts;
 begin
   UiText.ApplyTexts;
-  if FRxTranscript <> nil then
-    FRxTranscript.Message_ := RsRxEmpty;
+  { 受信テキストの欄の言葉は、モードと受信の状態で決まります（付録 CN）。
+    The text area's words depend on the mode and the receiving state
+    (appendix CN). }
+  UpdateTranscriptMessage;
+  UpdateBandNote;
   { いまの状態から出し直せるもの。**控えに載らない「実行時に組み立てる札」は
     すべてここで出し直す。**これらは `UiText` に登録できない（内容が
     `Format` で作られる／実行中に組み直される）ため、呼び忘れれば起動した
@@ -7123,7 +7170,7 @@ begin
   if FMulti <> nil then
     FMulti.Reset;
   FReducer.Reset;
-  FRxBandMap.Clear;
+  ClearBandList;
   FReviewPlay.Stop;
   { ファイルの復号は実時刻を持ちません。記録は実時刻の記録なので、ここでは
     書き残しを出すだけで、以後は書きません（要件 FR-B.6）。
@@ -7458,7 +7505,7 @@ begin
   if FMulti <> nil then
     FMulti.Reset;
   FReducer.Reset;
-  FRxBandMap.Clear;
+  ClearBandList;
   { 受信テキストを消したら、そこを指していた音も手放します。残しておくと、
     次の受信の時刻と噛み合わない音が保管庫に居座ります（要件 FR-E.10）。
     Clearing the transcript releases the audio it pointed at; keeping it would
@@ -7604,7 +7651,12 @@ procedure TMainForm.UpdateTranscriptMessage;
 begin
   if FRxTranscript = nil then
     Exit;
-  if FCapture <> nil then
+  { 待機・コンテストでは、この欄は選んだ局を読むためのものです（付録 CN）。
+    In the waiting and contest modes this area is for reading the station
+    chosen (appendix CN). }
+  if BandMode then
+    FRxTranscript.Message_ := RsRxPickFromList
+  else if FCapture <> nil then
     FRxTranscript.Message_ := RsRxReceivingHint
   else if DecoderBusy then
     FRxTranscript.Message_ := RsRxAnalyzingHint
@@ -8520,37 +8572,53 @@ begin
   FRecheckPending := False;
   ReadTranscript;
   FRxTranscript.Clear;
-  FRxBandMap.Clear;
   { 一覧へ戻るなら、覚えていた符号は用済みです。持ち越すと、別の局を選ぶまで
     前の相手が記録の候補として残ります。
     Back to the list, the remembered call sign has served its purpose; carried
     over it would stand as the candidate to log until another is chosen. }
   if BandMode then
+  begin
     FChosenCallsign := '';
-  { 一覧の控えも捨てます。残しておくと、消えた一覧の中身で記録の相手が決まります。
-    The cached list goes too: kept, it would decide who to log from a list that
-    is no longer on screen. }
-  FBandEntries := nil;
+    { 一覧は作り直します（局の番号も振り直されます）。
+      The list is built afresh (the stations are renumbered too). }
+    ClearBandList;
+  end;
+  { 交信モードでは**最後に見た一覧を止めたまま**出し、そう言います（付録
+    CN、利用者の判断）。全局の復号は待機・コンテストでだけ回すので、一覧は
+    ここでは更新されません。止まった一覧から選び直すこともできます
+    （`RxStationChosen`）。記録の相手は一覧から取りません
+    （`CallsignToLog`）。
+    In the contact mode **the last list stays on screen, frozen**, and says
+    so (appendix CN, the operator's decision). All stations are decoded only
+    in the waiting and contest modes, so the list is not updated here. A
+    station can be chosen again from the frozen list (`RxStationChosen`);
+    who is logged is never taken from the list (`CallsignToLog`). }
+  UpdateBandNote;
 
   { 一覧を離れれば見出しも用済みです。残すと、交信モードの波形に前のモードの
     局名が浮いたままになります。
     Leaving the list, its labels have served their purpose; kept, the previous
     mode's station names would float over the contact mode's waterfall. }
   FRxWaterfall.SetStations(nil);
-  FRxTranscript.Visible := FMode = rmContact;
-  FRxBandMap.Visible := BandMode;
-  { 検索・記録・聴き直しの行は受信テキストと一緒に出し入れします。**この行の
-    操作はすべて受信テキストに対するもので、一覧を出している間はどれも押せません。**
-    押せない操作を並べたまま、一覧を 1 行に狭めるのは逆です。コンテストでは
-    一覧が主役なので、その分をここから返します。
-    The row of search, log and replay controls appears with the transcript.
-    **Every control on it acts on the transcript, and none of them can be pressed
-    while the list is shown.** Keeping a row of dead controls and squeezing the
-    list down to a single row would be the wrong way round: in a contest the list
-    is the tool, and this is where the room for it comes from. }
-  FFindTools.Visible := FMode = rmContact;
-  FWatchTools.Visible := BandMode;
+  { 受信テキストと一覧は、どのモードでも同じ場所にあります（付録 CN）。効か
+    ない行は**消さずに押せなくします**——消すと並びが動き、モードを変えるたびに
+    目で探し直すことになります。検索・聴き直し・記録は受信テキストに対する
+    操作で交信モードでだけ、待つ符号は一覧に対する操作で待機・コンテストで
+    だけ効きます。コンテストの行は、そのモードでしか意味が無いので出し入れ
+    します（一覧の枠の中だけが動きます）。
+    The received text and the list are in the same place in every mode
+    (appendix CN). A row that has no effect is **disabled rather than
+    removed**: removing it would move things and send the eye searching
+    after every change of mode. Search, replay and logging act on the text and
+    work only in the contact mode; the watch list acts on the list and works
+    only in the waiting and contest modes. The contest row means something only
+    in that mode, so it comes and goes (only the list's pane moves). }
+  FFindTools.Enabled := FMode = rmContact;
+  FLogRow.Enabled := FMode = rmContact;
+  FWatchTools.Enabled := BandMode;
   FContestTools.Visible := FMode = rmContest;
+  FitBandPane;
+  UpdateTranscriptMessage;
   { 受信をやり直せば局の番号も振り直されるので、知らせた覚えは捨てます。
     残すと、番号を使い回した別の局が黙ったままになります。
     Restarting reception renumbers the stations, so what was announced is
@@ -8583,6 +8651,93 @@ begin
     SetStatus('', '', RsModeWatchSet)
   else
     SetStatus('', '', RsModeContactSet);
+end;
+
+{ 帯域の一覧を空にします。画面の一覧・控え（`FBandEntries`）・止まっている
+  ことの札を、**いつも一緒に**捨てます。一部だけ残すと、画面に無い一覧で局を
+  選ぶか、空の一覧に「止まっています」と出ます。
+  Empties the band list: the list on screen, the cached entries
+  (`FBandEntries`) and the "frozen" label **always go together.** Leaving one
+  behind would choose a station from a list no longer on screen, or call an
+  empty list frozen. }
+procedure TMainForm.ClearBandList;
+begin
+  FRxBandMap.Clear;
+  FBandEntries := nil;
+  FRxBandNote.Caption := '';
+end;
+
+{ 帯域の一覧の幅を、モードと画面の幅に合わせます（付録 CN）。
+  Fits the band list's width to the mode and the screen's width (appendix
+  CN). }
+procedure TMainForm.FitBandPane;
+var
+  Wanted, Avail: Integer;
+begin
+  if (FRxMiddle = nil) or (FRxBandPane = nil) then
+    Exit;
+  Avail := FRxMiddle.ClientWidth;
+  Wanted := Scale96ToForm(RX_BANDPANE_NARROW_96);
+  if BandMode then
+    Wanted := Max(Wanted, Min(Avail - Scale96ToForm(RX_TEXTPANE_MIN_96),
+      Avail * 3 div 5));
+  if FRxBandPane.Width <> Wanted then
+    FRxBandPane.Width := Wanted;
+end;
+
+{ 一覧の見出しの脇の札と、一覧が空のときの言葉（付録 CN）。交信モードでは、
+  一覧が止まっていることと、どうすれば並ぶかを言います。言語を変えたときも
+  ここから出し直します（`ApplyTexts`）。
+  The label beside the list's heading and the words for an empty list
+  (appendix CN): in the contact mode they say the list is frozen and how to
+  fill it. Also redone from here when the language changes (`ApplyTexts`). }
+procedure TMainForm.UpdateBandNote;
+begin
+  if (FRxBandNote = nil) or (FRxBandMap = nil) then
+    Exit;
+  if BandMode then
+  begin
+    FRxBandNote.Caption := '';
+    FRxBandMap.EmptyMessage := '';
+  end
+  else
+  begin
+    if Length(FBandEntries) > 0 then
+      FRxBandNote.Caption := Format(RsRxBandFrozen,
+        [FormatDateTime('hh":"nn', FBandMapAt)])
+    else
+      FRxBandNote.Caption := '';
+    FRxBandMap.EmptyMessage := RsRxBandIdle;
+  end;
+  FRxBandMap.Invalidate;
+end;
+
+procedure TMainForm.RxMiddleResized(Sender: TObject);
+begin
+  FitBandPane;
+end;
+
+{ 装置を待っているあいだだけ、入力レベルの脇に「入力の設定...」を出します
+  （付録 CN）。入力装置は設定タブへ移したので、**使えないときにどこで直すの
+  かを、困っている場所に出します。**待っていることそのものは状態の欄が言い
+  ます（`WaitingForDeviceCaption`）。
+  Only while waiting for the device, "input settings..." appears beside the
+  level meter (appendix CN): the device choice moved to the settings tab, so
+  **where to fix it is shown where the trouble is.** The waiting itself is
+  stated in the status panel (`WaitingForDeviceCaption`). }
+procedure TMainForm.UpdateInputShortcut;
+begin
+  if (FRxInputSettings = nil) or (FRxInputSettings.Visible = FWaiting) then
+    Exit;
+  FRxInputSettings.Visible := FWaiting;
+  FRxSignal.Visible := not FWaiting;
+end;
+
+procedure TMainForm.RxInputSettingsClick(Sender: TObject);
+begin
+  FPages.ActivePage := FSettingsSheet;
+  if FRxDevice.CanFocus then
+    FRxDevice.SetFocus;
 end;
 
 { 一覧の行を選んだら、その局へ同調して交信モードへ移ります（要件 FR-J.3）。
@@ -10019,22 +10174,20 @@ var
   WasBusy: string;
   WasMode, Mode: TReceiveMode;
 
-  { 交信モードは受信テキスト、待機・コンテストはバンドマップが主役です。
-    The received text is the main box in contact mode, the band map in the
-    waiting and contest modes. }
+  { 受信テキストと一覧は、どのモードでも両方出ています（付録 CN）。
+    The received text and the list are both on screen in every mode
+    (appendix CN). }
   procedure Measure(const Situation: string);
-  var
-    Box: TControl;
   begin
     Application.ProcessMessages;
     Want := Scale96ToForm(RX_TRANSCRIPT_MIN_96);
-    if FMode = rmContact then
-      Box := FRxTranscript
-    else
-      Box := FRxBandMap;
-    if Box.Height < Want then
+    if FRxTranscript.Height < Want then
       Problems.Add(Format('[%0:s] 受信テキストが低すぎる（%1:s）: %2:d < %3:d 画素',
-        [FRxSheet.Caption, Situation, Box.Height, Want]));
+        [FRxSheet.Caption, Situation, FRxTranscript.Height, Want]));
+    Want := Scale96ToForm(RX_BANDMAP_MIN_96);
+    if FRxBandMap.Height < Want then
+      Problems.Add(Format('[%0:s] 帯域の一覧が低すぎる（%1:s）: %2:d < %3:d 画素',
+        [FRxSheet.Caption, Situation, FRxBandMap.Height, Want]));
   end;
 
 begin
@@ -10344,6 +10497,7 @@ begin
 
   UpdateTransmitProgress;
   UpdateLiveReceive;
+  UpdateInputShortcut;
   { 装置がつながるのを待っているなら、ここで試し直します（要件 NFR-4.4）。
     取り込みが動いているあいだは何もしません。
     If waiting for the device, this is where the next attempt happens
