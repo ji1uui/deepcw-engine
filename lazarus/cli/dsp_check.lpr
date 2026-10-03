@@ -28,7 +28,7 @@ uses
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
   DeepCW.Reference, DeepCW.Roster, DeepCW.Platform, DeepCW.TxMessage,
   DeepCW.NoiseReduction, DeepCW.Alphabet, DeepCW.TxGate, DeepCW.RigConfig,
-  DeepCW.Hamlib, FistCases;
+  DeepCW.Hamlib, DeepCW.LicenseLookup, FistCases;
 
 var
   Meta: TDeepCWMetadata;
@@ -4064,6 +4064,361 @@ end;
 
   **What matters most is that the table only tightens**: however damaged a table
   is handed over, a call sign the form rule rejects must never start passing. }
+{ 照会先の代わり。URL ごとに決めた応答を返し、受けた URL と User-Agent を
+  控えます。**通信はしません。**
+  Stands in for the remote service: answers each URL as scripted and keeps the
+  URLs and User-Agents it was given. **No traffic.** }
+type
+  TFakeLookupTransport = class(TLookupTransport)
+  public
+    Urls: TStringList;
+    Agents: TStringList;
+    { URL → 「状態|本文」。「!理由」は繋がらないこと。無い URL は 404。
+      URL to "status|body"; "!reason" means no answer; unknown URLs give 404. }
+    Answers: TStringList;
+    constructor Create;
+    destructor Destroy; override;
+    function Get(const Url, UserAgent: string; out Status: Integer;
+      out Body, Failure: string): Boolean; override;
+  end;
+
+constructor TFakeLookupTransport.Create;
+begin
+  inherited Create;
+  Urls := TStringList.Create;
+  Agents := TStringList.Create;
+  Answers := TStringList.Create;
+  { URL には「=」が入るので、名前と値の区切りは別の字にします。
+    URLs contain '=', so names and values are split on another character. }
+  Answers.NameValueSeparator := '~';
+end;
+
+destructor TFakeLookupTransport.Destroy;
+begin
+  Urls.Free;
+  Agents.Free;
+  Answers.Free;
+  inherited Destroy;
+end;
+
+function TFakeLookupTransport.Get(const Url, UserAgent: string;
+  out Status: Integer; out Body, Failure: string): Boolean;
+var
+  Answer: string;
+begin
+  Urls.Add(Url);
+  Agents.Add(UserAgent);
+  Status := 0;
+  Body := '';
+  Failure := '';
+  Answer := Answers.Values[Url];
+  if Answer = '' then
+  begin
+    Status := 404;
+    Body := 'not here';
+    Exit(True);
+  end;
+  if Answer[1] = '!' then
+  begin
+    Failure := Copy(Answer, 2, MaxInt);
+    Exit(False);
+  end;
+  Status := StrToInt(Copy(Answer, 1, Pos('|', Answer) - 1));
+  Body := Copy(Answer, Pos('|', Answer) + 1, MaxInt);
+  Result := True;
+end;
+
+{ 件数取得 API の応答の形（仕様書 6.1、付録 CM）。/ The count API's answer
+  (specification 6.1, appendix CM). }
+function CountAnswer(Count: Integer; const Date: string = '2026-10-01'): string;
+begin
+  Result := Format('200|{"musenInformation":{"lastUpdateDate":"%s","totalCount":"%d"},' +
+    '"musen":{"count":"%d"}}', [Date, Count, Count]);
+end;
+
+{ 実在の確認（要件 FR-K.3〜K.8・K.10、付録 CM.10）。偽の相手で、照会の
+  判断・URL・間引き・待ち・結果を確かめます。
+  The licence check (requirements FR-K.3-K.8, K.10, appendix CM.10), against
+  a fake: what is queried, the URLs, the spacing, the waiting, the results. }
+procedure TestLicenseLookup;
+const
+  BASE = LOOKUP_COUNT_URL + '?ST=1&OF=2&OW=AT&MA=';
+var
+  Fake: TFakeLookupTransport;
+  Lookup: TLicenseLookup;
+  Got: TLicenseResult;
+  Key, Date, Problem: string;
+  Ambiguous: Boolean;
+  Count, I: Integer;
+  Outcome: TCountOutcome;
+  T: Double;
+  Worker: TLicenseLookupThread;
+  Started: QWord;
+
+  procedure Drain(var At: Double; Steps: Integer);
+  var
+    K: Integer;
+  begin
+    for K := 1 to Steps do
+    begin
+      Lookup.Step(At);
+      At := At + LOOKUP_MIN_INTERVAL_SECONDS;
+    end;
+  end;
+
+begin
+  WriteLn('TLicenseLookup（無線局等情報検索、偽の相手）');
+
+  { 照会してよい符号。/ What may be queried. }
+  Check('日本の局は附加符号を外して照会する',
+    LookupKey('ja1abc/1', Key, Ambiguous) and (Key = 'JA1ABC') and not Ambiguous,
+    Key);
+  Check('後置符字が 2 字なら「確かめられない」扱い',
+    LookupKey('JA1AB', Key, Ambiguous) and Ambiguous);
+  Check('海外の局は照会しない（FR-K.4）', not LookupKey('K1ABC', Key, Ambiguous));
+  Check('形の違う語は照会しない', not LookupKey('JA1ABCDE', Key, Ambiguous) and
+    not LookupKey('599', Key, Ambiguous) and not LookupKey('', Key, Ambiguous));
+  Check('URL は件数取得 API・JSON・アマチュア局・完全な符号',
+    LookupCountUrl('JA1ABC', '') = BASE + 'JA1ABC',
+    LookupCountUrl('JA1ABC', ''));
+  Check('第四級の数え方は FC を足す',
+    LookupCountUrl('JA1ABC', '4AM') = BASE + 'JA1ABC&FC=4AM');
+
+  { 応答の読み方。/ Reading answers. }
+  Outcome := ParseCountResponse(200, Copy(CountAnswer(3), 5, MaxInt), Count, Date, Problem);
+  Check('件数とデータ更新日を読む', (Outcome = coCount) and (Count = 3) and
+    (Date = '2026-10-01'), Format('%d %s', [Count, Date]));
+  Outcome := ParseCountResponse(200,
+    '{"musenInformation":{"lastUpdateDate":"20261001","totalCount":2}}',
+    Count, Date, Problem);
+  Check('数のままの件数も読み、形の違う日付は捨てる',
+    (Outcome = coCount) and (Count = 2) and (Date = ''));
+  Outcome := ParseCountResponse(429, '', Count, Date, Problem);
+  Check('429 は「混み合っている」', Outcome = coBusy);
+  Outcome := ParseCountResponse(400,
+    '{"errs":{"errPost":"ERR","errCount":"1"},"err":[{"errCd":"EQ00031",' +
+    '"errMsg":"呼出符号（MA）は半角英数字で設定して下さい。"}]}', Count, Date, Problem);
+  Check('400 は誤りの番号だけを残す', (Outcome = coRejected) and
+    (Problem = 'EQ00031'), Problem);
+  Outcome := ParseCountResponse(200, '<html><body>Forbidden</body></html>',
+    Count, Date, Problem);
+  Check('JSON でない本文は「読めない」で、本文を残さない',
+    (Outcome = coFailed) and (Pos('Forbidden', Problem) = 0), Problem);
+
+  Fake := TFakeLookupTransport.Create;
+  Lookup := TLicenseLookup.Create(Fake, True);
+  try
+    Lookup.UserAgent := 'DeepCW/test';
+    Fake.Answers.Values[BASE + 'JA1ABC'] := CountAnswer(1);
+    Fake.Answers.Values[BASE + 'JA1ABC&FC=4AF'] := CountAnswer(0);
+    Fake.Answers.Values[BASE + 'JA1ABC&FC=4AM'] := CountAnswer(0);
+    Fake.Answers.Values[BASE + 'JH2XYZ'] := CountAnswer(2);
+    Fake.Answers.Values[BASE + 'JH2XYZ&FC=4AF'] := CountAnswer(0);
+    Fake.Answers.Values[BASE + 'JH2XYZ&FC=4AM'] := CountAnswer(2);
+    Fake.Answers.Values[BASE + 'JR3QQQ'] := CountAnswer(0);
+    Fake.Answers.Values[BASE + 'JA1AB'] := CountAnswer(5);
+    Fake.Answers.Values[BASE + 'JE4MIX'] := CountAnswer(2);
+    Fake.Answers.Values[BASE + 'JE4MIX&FC=4AF'] := CountAnswer(1);
+    Fake.Answers.Values[BASE + 'JE4MIX&FC=4AM'] := CountAnswer(0);
+
+    { 既定は切。切っている間は何も送らない（FR-K.3）。
+      Off by default, and nothing is sent while off (FR-K.3). }
+    T := 0;
+    Got := Lookup.Lookup('JA1ABC', T);
+    Drain(T, 5);
+    Check('既定は切で、何も送らない（FR-K.3）',
+      (not Lookup.Enabled) and (Got.Verdict = lvNotAsked) and (Fake.Urls.Count = 0),
+      Format('(%d 回)', [Fake.Urls.Count]));
+
+    Lookup.Enabled := True;
+    Got := Lookup.Lookup('K1ABC', T);
+    Drain(T, 3);
+    Check('海外の局は有効でも送らない（FR-K.4）',
+      (Got.Verdict = lvNotAsked) and (Fake.Urls.Count = 0));
+
+    { 免許されている局。総数のあと、第四級の記号ごとに数える。
+      A licensed station: the total, then one count per fourth-class code. }
+    Got := Lookup.Lookup('JA1ABC/P', T);
+    Check('はじめは照会を待つ', Got.Verdict = lvPending);
+    Drain(T, 3);
+    Got := Lookup.Lookup('JA1ABC', T);
+    Check('免許されている（データ更新日つき）', (Got.Verdict = lvFound) and
+      not Got.FourthClass and (Got.DataDate = '2026-10-01'));
+    Check('照会は総数と第四級の 2 つの記号の 3 回',
+      (Fake.Urls.Count = 3) and (Fake.Urls[0] = BASE + 'JA1ABC') and
+      (Fake.Urls[1] = BASE + 'JA1ABC&FC=4AF') and (Fake.Urls[2] = BASE + 'JA1ABC&FC=4AM'),
+      Fake.Urls.CommaText);
+    Check('User-Agent を渡す', Fake.Agents[0] = 'DeepCW/test');
+
+    { 覚えた結果を使い回す（FR-K.6）。/ Results are reused (FR-K.6). }
+    Lookup.Lookup('JA1ABC', T + 100);
+    Drain(T, 3);
+    Check('同じ符号は照会し直さない（FR-K.6）', Fake.Urls.Count = 3,
+      Format('(%d 回)', [Fake.Urls.Count]));
+
+    { 全部が第四級なら「電信不可の疑い」（FR-K.8）。
+      All fourth class: telegraphy is doubtful (FR-K.8). }
+    Lookup.Lookup('JH2XYZ', T);
+    Drain(T, 3);
+    Got := Lookup.Lookup('JH2XYZ', T);
+    Check('当たった局がすべて第四級なら印を付ける（FR-K.8）',
+      (Got.Verdict = lvFound) and Got.FourthClass);
+    Check('すべて第四級と分かれば残りの記号は数えない',
+      Fake.Urls.IndexOf(BASE + 'JH2XYZ&FC=4AM') = Fake.Urls.Count - 1);
+    Lookup.Lookup('JE4MIX', T);
+    Drain(T, 3);
+    Got := Lookup.Lookup('JE4MIX', T);
+    Check('一部だけが第四級なら印を付けない', (Got.Verdict = lvFound) and
+      not Got.FourthClass);
+
+    { 見つからない・確かめられない。/ Not found, cannot be told. }
+    Count := Fake.Urls.Count;
+    Lookup.Lookup('JR3QQQ', T);
+    Lookup.Lookup('JA1AB', T);
+    Drain(T, 4);
+    Got := Lookup.Lookup('JR3QQQ', T);
+    Check('0 件は「見つからない」（誤りとは言わない）',
+      (Got.Verdict = lvNotFound) and (Got.DataDate = '2026-10-01'));
+    Got := Lookup.Lookup('JA1AB', T);
+    Check('後置符字 2 字は件数があっても「確かめられない」',
+      Got.Verdict = lvAmbiguous);
+    Check('見つからない・確かめられない符号は第四級を数えない',
+      Fake.Urls.Count = Count + 2, Format('(%d 回)', [Fake.Urls.Count - Count]));
+
+    { 間引き（FR-K.6）。/ Spacing (FR-K.6). }
+    Fake.Answers.Values[BASE + 'JF1AAA'] := CountAnswer(0);
+    Fake.Answers.Values[BASE + 'JF1AAB'] := CountAnswer(0);
+    Count := Fake.Urls.Count;
+    Lookup.Lookup('JF1AAA', T);
+    Lookup.Lookup('JF1AAB', T);
+    Lookup.Step(T);
+    Lookup.Step(T + 0.5);
+    Check('1 秒に 1 回を超えて送らない', Fake.Urls.Count = Count + 1,
+      Format('(%d 回)', [Fake.Urls.Count - Count]));
+    Lookup.Step(T + 1.0);
+    Check('1 秒たてば次を送る', Fake.Urls.Count = Count + 2);
+    T := T + 2;
+
+    { 混み合っている（429）なら待ち、待つ間は送らない。
+      Busy (429): wait, and send nothing meanwhile. }
+    Fake.Answers.Values[BASE + 'JG5BUS'] := '429|';
+    Lookup.Lookup('JG5BUS', T);
+    Lookup.Step(T);
+    Count := Fake.Urls.Count;
+    for I := 1 to 50 do
+      Lookup.Step(T + I);
+    Check('429 のあと待つ間は送らない', Fake.Urls.Count = Count,
+      Format('(%d 回)', [Fake.Urls.Count - Count]));
+    Got := Lookup.Lookup('JG5BUS', T + 1);
+    Check('待つ間は「照会できない」と理由を言う（FR-K.10）',
+      (Got.Verdict = lvUnavailable) and (Got.Problem = 'HTTP 429') and
+      (Lookup.LastProblem = 'HTTP 429'), Got.Problem);
+    Fake.Answers.Values[BASE + 'JG5BUS'] := CountAnswer(1);
+    Fake.Answers.Values[BASE + 'JG5BUS&FC=4AF'] := CountAnswer(0);
+    Fake.Answers.Values[BASE + 'JG5BUS&FC=4AM'] := CountAnswer(0);
+    T := T + LOOKUP_BACKOFF_SECONDS;
+    Drain(T, 3);
+    Got := Lookup.Lookup('JG5BUS', T);
+    Check('待ち終えたら続きを照会する', (Got.Verdict = lvFound) and
+      (Lookup.LastProblem = ''));
+
+    { 繋がらない・断られた。/ No answer, refused. }
+    Fake.Answers.Values[BASE + 'JH6NET'] := '!connection refused';
+    Lookup.Lookup('JH6NET', T);
+    Lookup.Step(T);
+    Got := Lookup.Lookup('JH6NET', T);
+    Check('繋がらなければ理由を返し、落ちない（FR-K.10）',
+      (Got.Verdict = lvUnavailable) and (Got.Problem = 'connection refused'),
+      Got.Problem);
+    Lookup.Enabled := False;
+    Lookup.Enabled := True;
+    T := T + LOOKUP_BACKOFF_MAX_SECONDS;
+    Fake.Answers.Values[BASE + 'JA7BAD'] := '400|{"err":[{"errCd":"EQ00043","errMsg":"x"}]}';
+    Lookup.Lookup('JA7BAD', T);
+    Lookup.Step(T);
+    Count := Fake.Urls.Count;
+    Lookup.Lookup('JA7BAD', T + 10);
+    Drain(T, 3);
+    Got := Lookup.Lookup('JA7BAD', T);
+    Check('断られた符号は繰り返さず、番号を言う',
+      (Fake.Urls.Count = Count) and (Got.Verdict = lvUnavailable) and
+      (Got.Problem = 'EQ00043'), Got.Problem);
+
+    { 個人情報を受け取っても残さない（FR-K.7）。件数取得 API は返さないが、
+      返ってきても読むのは件数と日付だけ。
+      Personal details are not kept even if they arrive (FR-K.7): the count
+      API sends none, and only the count and date would be read anyway. }
+    Fake.Answers.Values[BASE + 'JQ1PII'] := '200|{"musenInformation":' +
+      '{"lastUpdateDate":"2026-10-01","totalCount":"1"},"musen":[{"listInfo":' +
+      '{"name":"総務 太郎"},"detailInfo":{"address":"東京都千代田区"}}]}';
+    Fake.Answers.Values[BASE + 'JQ1PII&FC=4AF'] := CountAnswer(0);
+    Fake.Answers.Values[BASE + 'JQ1PII&FC=4AM'] := CountAnswer(0);
+    Lookup.Lookup('JQ1PII', T);
+    Drain(T, 3);
+    Got := Lookup.Lookup('JQ1PII', T);
+    Check('名前や住所が来ても結果に残らない（FR-K.7）',
+      (Got.Verdict = lvFound) and (Pos('総務', Got.Problem + Got.DataDate) = 0) and
+      (Pos('千代田', Got.Problem + Got.DataDate) = 0));
+
+    { 1 日たてば照会し直す（データ更新日は日ごと）。
+      After a day, query again (the data is dated by the day). }
+    Lookup.Enabled := True;
+    Count := Fake.Urls.Count;
+    Lookup.Lookup('JA1ABC', T + LOOKUP_KEEP_SECONDS + 1);
+    Drain(T, 1);
+    Check('1 日たてば照会し直す', Fake.Urls.Count = Count + 1);
+  finally
+    Lookup.Free;
+  end;
+
+  { 切ったら待っている照会は捨てる。入れ直しても送らない（FR-K.3）。
+    Switching off drops the queue; switching on again sends none of it
+    (FR-K.3). }
+  Fake := TFakeLookupTransport.Create;
+  Lookup := TLicenseLookup.Create(Fake, True);
+  try
+    Fake.Answers.Values[BASE + 'JS9OFF'] := CountAnswer(0);
+    T := 0;
+    Lookup.Enabled := True;
+    Lookup.Lookup('JS9OFF', T);
+    Lookup.Enabled := False;
+    Drain(T, 3);
+    Check('切ったら待っている照会も送らない', Fake.Urls.Count = 0);
+    Lookup.Enabled := True;
+    Drain(T, 3);
+    Check('入れ直しても、切る前に待っていた照会は送らない', Fake.Urls.Count = 0,
+      Fake.Urls.CommaText);
+  finally
+    Lookup.Free;
+  end;
+
+  { 作業スレッドが照会を進める。/ The worker thread moves the queue on. }
+  Fake := TFakeLookupTransport.Create;
+  Lookup := TLicenseLookup.Create(Fake, True);
+  Worker := nil;
+  try
+    Fake.Answers.Values[BASE + 'JR3QQQ'] := CountAnswer(0);
+    Lookup.Enabled := True;
+    Lookup.Lookup('JR3QQQ', GetTickCount64 / 1000);
+    Worker := TLicenseLookupThread.Create(Lookup);
+    Started := GetTickCount64;
+    repeat
+      Sleep(20);
+      Got := Lookup.Lookup('JR3QQQ', GetTickCount64 / 1000);
+    until (Got.Verdict = lvNotFound) or (GetTickCount64 - Started > 5000);
+    Check('作業スレッドが照会を進める', Got.Verdict = lvNotFound,
+      Format('(%d ms)', [GetTickCount64 - Started]));
+  finally
+    if Worker <> nil then
+    begin
+      Worker.Terminate;
+      Worker.WaitFor;
+      Worker.Free;
+    end;
+    Lookup.Free;
+  end;
+end;
+
 procedure TestPrefixTable;
 var
   Parsed: TCallsign;
@@ -6117,6 +6472,7 @@ begin
     TestReferences;
     TestRoster;
     TestPrefixTable;
+    TestLicenseLookup;
     TestLicences;
     TestWaitingForDevice;
     TestNearestBandwidth;
