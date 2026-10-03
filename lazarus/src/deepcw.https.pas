@@ -34,7 +34,6 @@ unit DeepCW.Https;
 {$mode objfpc}{$H+}
 {$IFDEF DARWIN}
 {$modeswitch objectivec1}
-{$modeswitch cblocks}
 {$ENDIF}
 
 interface
@@ -201,52 +200,77 @@ end;
 
 {$ELSEIF defined(DARWIN)}
 type
-  { 完了を受ける block。**大域の手続きから作ります**（Free Pascal 3.2.2 は、
-    大域の手続きなら静的な block にでき、`NSURLSession` が写しても壊れません）。
-    The block that receives completion. **It is made from a global procedure**:
-    Free Pascal 3.2.2 turns one into a static block, which survives
-    `NSURLSession` copying it. }
-  TSessionCompletion = reference to procedure(data: NSData;
-    response: NSURLResponse; error: NSError); cdecl; cblock;
+  { `NSURLSession` の知らせを受ける相手（delegate）。完了を C の block で受ける
+    形は、Free Pascal 3.2.2 が作る block を呼んだところで落ちた（CI、付録
+    CM.14）ので、Objective-C のクラスで受けます。
+    **ここの手続きは `NSURLSession` のスレッドで呼ばれます。**Pascal の文字列も
+    例外も使わず、Objective-C の呼び出しと整数の書き込みと出来事の合図だけに
+    します（Free Pascal が作っていないスレッドで、Pascal のヒープや例外の仕組み
+    に触れないため）。
+    The receiver (delegate) of `NSURLSession`'s reports. Taking completion
+    through a C block crashed where the block Free Pascal 3.2.2 generated was
+    invoked (CI, appendix CM.14), so an Objective-C class receives it instead.
+    **These methods run on `NSURLSession`'s thread.** They use no Pascal
+    strings and no exceptions -- only Objective-C calls, integer writes and the
+    event -- so a thread Free Pascal did not create never touches the Pascal
+    heap or exception machinery. }
+  TSessionReceiver = objcclass(NSObject, NSURLSessionDataDelegateProtocol)
+  public
+    procedure URLSession_dataTask_didReceiveData(session: NSURLSession;
+      dataTask: NSURLSessionDataTask; data: NSData);
+      message 'URLSession:dataTask:didReceiveData:';
+    procedure URLSession_task_didCompleteWithError(session: NSURLSession;
+      task: NSURLSessionTask; error: NSError);
+      message 'URLSession:task:didCompleteWithError:';
+  end;
 
 var
-  { 照会は一度に 1 つ。完了は `NSURLSession` の別のスレッドから届くので、
-    結果をここに置き、出来事で知らせます。
-    One request at a time. Completion arrives on another of `NSURLSession`'s
-    threads, so the result is left here and an event announces it. }
+  { 照会は一度に 1 つ。知らせは `NSURLSession` の別のスレッドから届くので、
+    受け取ったもの（Objective-C のもの）をここに置き、出来事で知らせます。
+    Pascal の文字列に直すのは、待っている側のスレッドです。
+    One request at a time. Reports arrive on another of `NSURLSession`'s
+    threads, so what arrives (Objective-C objects) is left here and an event
+    announces completion; the waiting thread turns it into Pascal strings. }
   GLock: TRTLCriticalSection;
   GDone: PRTLEvent;
-  GFinished, GAnswered, GLeftOver: Boolean;
-  GStatus: Integer;
-  GBody, GFailure: string;
+  GFinished, GLeftOver: Boolean;
+  GData: NSMutableData;
+  GResponse: NSURLResponse;
+  GError: NSError;
 
-procedure SessionDone(data: NSData; response: NSURLResponse; error: NSError);
-var
-  Count: Integer;
+procedure TSessionReceiver.URLSession_dataTask_didReceiveData(
+  session: NSURLSession; dataTask: NSURLSessionDataTask; data: NSData);
 begin
-  if (response <> nil) and response.isKindOfClass(NSHTTPURLResponse.classClass) then
-  begin
-    GAnswered := True;
-    GStatus := NSHTTPURLResponse(response).statusCode;
-    GBody := '';
-    if data <> nil then
-    begin
-      Count := data.length;
-      if Count > HTTPS_MAX_BODY_BYTES then
-        Count := HTTPS_MAX_BODY_BYTES;
-      SetString(GBody, PAnsiChar(data.bytes), Count);
-    end;
-  end
-  else
-  begin
-    GAnswered := False;
-    if error <> nil then
-      GFailure := string(error.localizedDescription.UTF8String)
-    else
-      GFailure := 'no answer';
-  end;
+  if (GData <> nil) and (GData.length < HTTPS_MAX_BODY_BYTES) then
+    GData.appendData(data);
+end;
+
+procedure TSessionReceiver.URLSession_task_didCompleteWithError(
+  session: NSURLSession; task: NSURLSessionTask; error: NSError);
+begin
+  GResponse := task.response;
+  if GResponse <> nil then
+    GResponse.retain;
+  GError := error;
+  if GError <> nil then
+    GError.retain;
   GFinished := True;
   RTLEventSetEvent(GDone);
+end;
+
+{ 前の照会で受け取ったものを手放します。/ Lets go of what the previous
+  request received. }
+procedure ReleaseReceived;
+begin
+  if GData <> nil then
+    GData.release;
+  if GResponse <> nil then
+    GResponse.release;
+  if GError <> nil then
+    GError.release;
+  GData := nil;
+  GResponse := nil;
+  GError := nil;
 end;
 
 function HttpsGet(const Url, UserAgent: string; TimeoutMs: Integer;
@@ -259,12 +283,12 @@ var
   Pool: NSAutoreleasePool;
   Address: NSURL;
   Config: NSURLSessionConfiguration;
+  Receiver: TSessionReceiver;
   Session: NSURLSession;
   Request: NSMutableURLRequest;
   Task: NSURLSessionDataTask;
-  Handler: TSessionCompletion;
   Host, Path: string;
-  Port: Integer;
+  Port, Count: Integer;
 begin
   Status := 0;
   Body := '';
@@ -278,10 +302,10 @@ begin
   EnterCriticalSection(GLock);
   try
     { 前の照会の完了がまだ届いていなければ、もう少し待ちます。届かないまま
-      次を始めると、前の完了が次の結果を上書きします。
+      次を始めると、前の知らせが次の結果に混ざります。
       If the previous request's completion has not arrived, wait a little
-      more: starting the next one regardless would let the old completion
-      overwrite the new result. }
+      more: starting the next one regardless would let the old reports mix
+      into the new result. }
     if GLeftOver then
     begin
       RTLEventWaitFor(GDone, CANCEL_WAIT_MS);
@@ -292,12 +316,9 @@ begin
       end;
       GLeftOver := False;
     end;
+    ReleaseReceived;
     RTLEventResetEvent(GDone);
     GFinished := False;
-    GAnswered := False;
-    GStatus := 0;
-    GBody := '';
-    GFailure := '';
 
     { 作業スレッドから呼ぶので、自動解放の池を自分で持ちます。
       Called from a worker thread, so it keeps its own autorelease pool. }
@@ -309,20 +330,24 @@ begin
         Failure := 'not an https URL';
         Exit;
       end;
+      GData := NSMutableData.alloc.init;
       { 記録を残さない設定（キャッシュ・クッキーをディスクに書かない）。
         An ephemeral configuration: no cache or cookies written to disk. }
       Config := NSURLSessionConfiguration.ephemeralSessionConfiguration;
       Config.setTimeoutIntervalForRequest(TimeoutMs / 1000);
       Config.setTimeoutIntervalForResource(TimeoutMs / 1000);
-      Session := NSURLSession.sessionWithConfiguration(Config);
+      Receiver := TSessionReceiver.alloc.init;
+      Session := NSURLSession.sessionWithConfiguration_delegate_delegateQueue(
+        Config, NSURLSessionDelegateProtocol(Receiver), nil);
+      { 会話は相手を握っているので、こちらの分は手放します。
+        The session holds on to its delegate, so our own claim is released. }
+      Receiver.release;
       Request := NSMutableURLRequest.requestWithURL_cachePolicy_timeoutInterval(
         Address, NSURLRequestReloadIgnoringLocalCacheData, TimeoutMs / 1000);
       Request.setValue_forHTTPHeaderField(
         NSString.stringWithUTF8String(PChar(UserAgent)),
         NSString.stringWithUTF8String('User-Agent'));
-      Handler := @SessionDone;
-      Task := Session.dataTaskWithRequest_completionHandler(Request,
-        OpaqueCBlock(Handler));
+      Task := Session.dataTaskWithRequest(Request);
       Task.resume;
       { 上限まで待ち、来なければ取り消して完了を待ちます。
         Wait up to the limit; if nothing came, cancel and wait for completion. }
@@ -339,10 +364,21 @@ begin
         Failure := 'timed out';
         Exit;
       end;
-      Status := GStatus;
-      Body := GBody;
-      Failure := GFailure;
-      Result := GAnswered;
+      if (GResponse <> nil) and
+         GResponse.isKindOfClass(NSHTTPURLResponse.classClass) and (GError = nil) then
+      begin
+        Status := NSHTTPURLResponse(GResponse).statusCode;
+        Count := GData.length;
+        if Count > HTTPS_MAX_BODY_BYTES then
+          Count := HTTPS_MAX_BODY_BYTES;
+        SetString(Body, PAnsiChar(GData.bytes), Count);
+        Result := True;
+      end
+      else if GError <> nil then
+        Failure := string(GError.localizedDescription.UTF8String)
+      else
+        Failure := 'no answer';
+      ReleaseReceived;
     finally
       Pool.release;
     end;
