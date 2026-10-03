@@ -45,7 +45,7 @@ unit DeepCW.LicenseLookup;
 interface
 
 uses
-  Classes, SysUtils, Math, fpjson, jsonparser, DeepCW.Callsign;
+  Classes, SysUtils, Math, fpjson, jsonparser, DeepCW.Callsign, DeepCW.Https;
 
 const
   { 件数取得 API（仕様書 Ver.1.6.0、条件一覧 Ver.1.3.0）。
@@ -77,6 +77,24 @@ const
     Ver.1.2.0), which may not operate telegraphy (open question #12,
     requirement FR-K.8). }
   LOOKUP_FOURTH_CLASS_CODES: array[0..1] of string = ('4AF', '4AM');
+  { 製品の版。**要件定義書の版と同じにします**（`dsp_check` が突き合わせます）。
+    The product version: **the same as the requirements document's**
+    (`dsp_check` compares them). }
+  DEEPCW_VERSION = '2.95';
+  { 照会に付ける User-Agent。2025-01 の刷新から、ブラウザらしい値でないと
+    断られたという報告があり（付録 CM.8）、互換の印のあとに製品名と版を名乗り
+    ます（利用者の判断、付録 CM.13）。
+    The User-Agent sent with queries. Since the 2025-01 renewal non-browser
+    values were reported refused (appendix CM.8), so the compatibility token is
+    followed by the product's name and version (the operator's decision,
+    appendix CM.13). }
+  LOOKUP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) DeepCW/' +
+    DEEPCW_VERSION;
+  { 1 回の照会を待つ上限（ミリ秒）。切ったり閉じたりするとき、作業スレッドの
+    終わりを待つのはこの長さまでです。
+    The longest one query may take, in milliseconds; switching off or closing
+    waits for the worker no longer than this. }
+  LOOKUP_TIMEOUT_MS = 5000;
 
 type
   { 照会の結果。/ What a query found. }
@@ -128,12 +146,10 @@ type
       out Body, Failure: string): Boolean; virtual; abstract;
   end;
 
-  { HTTPS の部品が入るまでの口（計画の段 3、付録 CM.10）。**何も送らず**、
-    「この版には通信の部品が無い」と答えます。
-    The transport until the HTTPS client arrives (stage 3 of the plan,
-    appendix CM.10). **It sends nothing** and answers that this version has no
-    client. }
-  TUnbuiltTransport = class(TLookupTransport)
+  { OS の HTTPS の仕組みで通信する口（`DeepCW.Https`、付録 CM.13）。
+    The transport over the system's HTTPS client (`DeepCW.Https`, appendix
+    CM.13). }
+  THttpsTransport = class(TLookupTransport)
   public
     function Get(const Url, UserAgent: string; out Status: Integer;
       out Body, Failure: string): Boolean; override;
@@ -222,11 +238,10 @@ type
     constructor Create(ALookup: TLicenseLookup);
   end;
 
-{ この版の通信の口と、それが実際に通信できるか。段 3 までは
-  `TUnbuiltTransport` と偽です。画面は偽の間、設定を選べなくします。
-  This version's transport and whether it can actually talk. Until stage 3,
-  `TUnbuiltTransport` and false; while false the screen does not offer the
-  setting. }
+{ この版の通信の口と、それが実際に通信できるか。偽の間、画面は設定を選べなく
+  します。
+  This version's transport and whether it can actually talk; while false the
+  screen does not offer the setting. }
 function NewLookupTransport: TLookupTransport;
 function LookupTransportBuilt: Boolean;
 
@@ -253,23 +268,20 @@ function ParseCountResponse(Status: Integer; const Body: string;
 
 implementation
 
-function TUnbuiltTransport.Get(const Url, UserAgent: string;
+function THttpsTransport.Get(const Url, UserAgent: string;
   out Status: Integer; out Body, Failure: string): Boolean;
 begin
-  Status := 0;
-  Body := '';
-  Failure := 'no HTTPS client in this version';
-  Result := False;
+  Result := HttpsGet(Url, UserAgent, LOOKUP_TIMEOUT_MS, Status, Body, Failure);
 end;
 
 function NewLookupTransport: TLookupTransport;
 begin
-  Result := TUnbuiltTransport.Create;
+  Result := THttpsTransport.Create;
 end;
 
 function LookupTransportBuilt: Boolean;
 begin
-  Result := False;
+  Result := True;
 end;
 
 function LookupKey(const Callsign: string; out Key: string;

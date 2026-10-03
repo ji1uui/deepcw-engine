@@ -2065,7 +2065,7 @@ begin
   FHistory := TAudioHistory.Create(REVIEW_DEFAULT_SECONDS, FCaptureRate);
   { 既定は切です（要件 FR-K.3）。/ Off by default (requirement FR-K.3). }
   FLicence := TLicenseLookup.Create(NewLookupTransport, True);
-  FLicence.UserAgent := 'DeepCW';
+  FLicence.UserAgent := LOOKUP_USER_AGENT;
   FJournal := TTranscriptJournal.Create(JournalDirectory);
   FLog := TContactLog.Create(LogFileName);
   FMode := rmContact;

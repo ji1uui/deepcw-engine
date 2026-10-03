@@ -28,7 +28,7 @@ uses
   DeepCW.Morse, DeepCW.Fist, DeepCW.FistLog, DeepCW.Diagnostics,
   DeepCW.Reference, DeepCW.Roster, DeepCW.Platform, DeepCW.TxMessage,
   DeepCW.NoiseReduction, DeepCW.Alphabet, DeepCW.TxGate, DeepCW.RigConfig,
-  DeepCW.Hamlib, DeepCW.LicenseLookup, FistCases;
+  DeepCW.Hamlib, DeepCW.LicenseLookup, DeepCW.Https, FistCases;
 
 var
   Meta: TDeepCWMetadata;
@@ -4499,6 +4499,83 @@ begin
   end;
 end;
 
+{ HTTPS の部品（付録 CM.13）。**照会先へは繋ぎません**（試験のたびに相手へ
+  負荷を掛けないため。CI からも繋がない）。URL の分け方と、繋がらないときに
+  理由を返して落ちないことを、この OS の部品そのもので確かめます。
+  The HTTPS client (appendix CM.13). **The remote service is never
+  contacted** (no load on it every test run, nor from CI). The URL split, and
+  that an unreachable address gives a reason rather than a crash, are checked
+  with this system's own client. }
+procedure TestHttps;
+var
+  Host, Path, Body, Failure, Line, Header: string;
+  Port, Status: Integer;
+  Answered: Boolean;
+  Started: QWord;
+  Doc: TStringList;
+  I: Integer;
+begin
+  WriteLn('DeepCW.Https（この OS の HTTPS の部品）');
+  Check('https の URL を分ける',
+    SplitHttpsUrl('https://www.tele.soumu.go.jp/musen/num?ST=1&OF=2', Host, Port, Path) and
+    (Host = 'www.tele.soumu.go.jp') and (Port = 443) and
+    (Path = '/musen/num?ST=1&OF=2'), Host + ' ' + Path);
+  Check('ポートを読む', SplitHttpsUrl('https://127.0.0.1:8443', Host, Port, Path) and
+    (Host = '127.0.0.1') and (Port = 8443) and (Path = '/'));
+  Check('https でなければ分けない',
+    not SplitHttpsUrl('http://www.tele.soumu.go.jp/', Host, Port, Path) and
+    not SplitHttpsUrl('https://user@host/', Host, Port, Path) and
+    not SplitHttpsUrl('https://:443/', Host, Port, Path));
+
+  { 誰も待っていない口（127.0.0.1 の 1 番）。すぐ断られるはず。
+    A port nobody listens on (127.0.0.1, port 1): refused at once. }
+  Started := GetTickCount64;
+  Answered := HttpsGet('https://127.0.0.1:1/', LOOKUP_USER_AGENT, 3000, Status,
+    Body, Failure);
+  Check('繋がらなければ偽と理由を返し、落ちない',
+    (not Answered) and (Failure <> '') and (Body = ''),
+    Format('(%s、%d ms)', [Failure, GetTickCount64 - Started]));
+  Check('繋がらないときも待ちは上限の内',
+    GetTickCount64 - Started < 10000, Format('(%d ms)', [GetTickCount64 - Started]));
+  Answered := HttpsGet('http://127.0.0.1/', LOOKUP_USER_AGENT, 3000, Status,
+    Body, Failure);
+  Check('https でない URL には繋がない', not Answered and (Failure = 'not an https URL'),
+    Failure);
+
+  { User-Agent は互換の印と製品名・版（利用者の判断、付録 CM.13）。版は
+    要件定義書の版と同じ。
+    The User-Agent carries the compatibility token, the product name and the
+    version (the operator's decision); the version matches the requirements
+    document. }
+  Check('User-Agent は互換の印と製品名・版',
+    (Pos('Mozilla/5.0 (Windows NT 10.0; Win64; x64)', LOOKUP_USER_AGENT) = 1) and
+    (Pos('DeepCW/' + DEEPCW_VERSION, LOOKUP_USER_AGENT) > 0), LOOKUP_USER_AGENT);
+  if FileExists('docs/requirements.md') then
+  begin
+    Doc := TStringList.Create;
+    try
+      Doc.LoadFromFile('docs/requirements.md');
+      Header := '';
+      for I := 0 to Min(Doc.Count - 1, 20) do
+      begin
+        Line := Doc[I];
+        if Pos('**版**: ', Line) = 1 then
+        begin
+          Header := Copy(Line, Length('**版**: ') + 1, MaxInt);
+          Header := Copy(Header, 1, Pos('（', Header) - 1);
+          Break;
+        end;
+      end;
+      Check('製品の版が要件定義書の版と同じ', Header = DEEPCW_VERSION,
+        Format('(文書 %s、コード %s)', [Header, DEEPCW_VERSION]));
+    finally
+      Doc.Free;
+    end;
+  end
+  else
+    WriteLn('  --   要件定義書が無いので、版の突き合わせはとばします');
+end;
+
 procedure TestPrefixTable;
 var
   Parsed: TCallsign;
@@ -6553,6 +6630,7 @@ begin
     TestRoster;
     TestPrefixTable;
     TestLicenseLookup;
+    TestHttps;
     TestLicences;
     TestWaitingForDevice;
     TestNearestBandwidth;
