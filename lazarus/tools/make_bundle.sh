@@ -144,9 +144,18 @@ copy_into() {
 # The command-line tools go inside the `.app` as well, to **avoid carrying
 # `model.onnx` twice**: from `Contents/MacOS/` they see the same
 # `Contents/Resources/`.
-copy_into "$here/app/deepcw_station" "$bin_dir"
-copy_into "$here/cli/decode_morse" "$bin_dir"
-copy_into "$here/cli/cw_devices" "$bin_dir"
+# Windows の実行ファイルには `.exe` が付きます。**付けずに探すと「見つかり
+# ません」で止まり、しかもそれは Windows でしか起きません**（CI の dsp_check の
+# 段と同じ理由）。
+# Windows executables carry `.exe`. **Looked for without it they are "not
+# found", and only on Windows** (the same reason as CI's dsp_check step).
+exe=''
+if [ "$platform" = windows ]; then
+  exe='.exe'
+fi
+copy_into "$here/app/deepcw_station$exe" "$bin_dir"
+copy_into "$here/cli/decode_morse$exe" "$bin_dir"
+copy_into "$here/cli/cw_devices$exe" "$bin_dir"
 copy_into "$root/model.onnx" "$res_dir"
 copy_into "$root/model.onnx.json" "$res_dir"
 

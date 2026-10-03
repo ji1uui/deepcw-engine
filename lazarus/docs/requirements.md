@@ -1,6 +1,10 @@
 # DeepCW GUI アプリケーション 要件定義書
 
 **対象**: `lazarus/` の Free Pascal / Lazarus デスクトップアプリケーション
+**版**: 3.00（2026-10-03）／ **Windows の配布物を CI で組むようにした（付録 CO）。ONNX Runtime（Microsoft の配布物）と PortAudio（vcpkg で原典から）を同梱し、組んだあと配布物の中の道具だけで試験の音を読めることを確かめてから zip を残す。Windows の外観と高 DPI のための manifest を入れ、配布物の組み立てが `.exe` を探すようにした。**
+
+---
+
 **版**: 2.99（2026-10-03）／ **送受信画面の構成を見直した（付録 CN、利用者が選んだ案 B）。上から 操作の 1 行 → 波形 → 受信テキスト（左）｜帯域の一覧（右）→ 記録の行 → 送信欄。一覧と受信テキストがモードで入れ替わらず、どちらも常に見える。受信テキストは既定の窓で約 80 → 約 145 画素。交信モードの一覧は最後の状態で止めて「止まっています（時刻）」と言う（利用者の判断、CPU は増やさない）。入力装置・文字が決まるまで・帯域外の雑音は設定タブへ移し、装置を待つあいだだけ送受信画面に「入力の設定...」を出す。**
 
 ---
@@ -12908,4 +12912,56 @@ CM.13・CM.14 の「確かめていないこと」のうち、**Windows・macOS 
   紛らわしいかもしれない
 - 組み方の検査は、窓の大きさを前の場合から引き継いでいる（1400×950・100 dpi が 1125×688 になる）。
   **この版より前から**同じ（前の版の組み立てで同じ値を確かめた）
+
+
+## 付録 CO：Windows の配布物（版 3.00）
+
+### CO.1 なぜ
+
+利用者の依頼「Windows で稼働するパッケージを作って」による。配布物を組む道具（`tools/make_bundle.sh`、
+付録 BJ）は Windows の並びを持っていたが、**Windows で走らせたことが無く**、読んでみると次の穴が
+あった:
+
+| 穴 | 起きること |
+| --- | --- |
+| 実行ファイルを `.exe` 無しで探していた | Windows では「見つかりません」で止まる（Windows でしか起きない） |
+| Windows 用の ONNX Runtime・PortAudio をどこから持ってくるかが決まっていなかった | 同梱できない |
+| 画面のアプリに manifest が無かった（`.lpi` に `UseXPManifest` が無い） | Windows の外観（visual styles）が効かず古い見た目になり、拡大表示（125% など）では OS が画像として引き伸ばしてぼやける |
+
+この作業環境（Linux）では Windows 用に組めない（交差コンパイラが無い）ので、**CI の Windows（x86_64）で
+組み、確かめ、zip を残す。**
+
+### CO.2 変えたこと
+
+- `tools/make_bundle.sh`: Windows では `.exe` を付けて探す
+- `app/deepcw_station.lpi`: `UseXPManifest`（外観）と `DpiAware=True`（システムの拡大率で描く）。綴りは
+  Lazarus の原典（`ide/w32manifest.pas` の `ManifestDpiAwareValues`）で確かめた。モニターごとの拡大率
+  （`True/PM_V2`）は、窓を別の拡大率のモニターへ移したときの組み直しを試していないので入れていない
+- CI（Windows）に段を足した:
+  1. ONNX Runtime: Microsoft の GitHub の release（`onnxruntime-win-x64-1.30.0.zip`）。Linux の試験と
+     同じ版。条項は zip の中の `LICENSE`・`ThirdPartyNotices.txt`
+  2. PortAudio: 公式の Windows 用配布物が無いので、vcpkg で原典から組む（`portaudio:x64-windows`）。
+     条項は vcpkg が置く `copyright`
+  3. `make_bundle.sh` で組む（条項がそろわなければ止まる。付録 BJ のまま）
+  4. **配布物の中の道具だけで確かめる**: 環境変数でライブラリを指さず、配布物の外のフォルダから
+     `cw_devices.exe`（PortAudio が読めるか）と `decode_morse.exe`（ONNX Runtime とモデルで試験の音
+     `CQ CQ DE JA1ABC JA1ABC K` を読めるか）を呼ぶ。置き場所を誤れば、ここで落ちる
+  5. zip にして成果物（artifact）として 30 日残す
+- 試験の音は `tools/make_test_wav.py`（標準ライブラリだけ。Windows の CI の Python に numpy があるとは
+  限らない）
+- `はじめに.txt` に Windows の節: 展開してから起動する、SmartScreen（署名が無い）、マイクの許可、
+  Visual C++ 再頒布可能パッケージ。画面の説明を版 2.99 の構成に合わせた
+
+### CO.3 確かめたこと
+
+- Linux: `make_bundle.sh` で組んだ配布物の `decode_morse` が、環境変数なしで試験の音を
+  `CQ CQ DE JA1ABC JA1ABC K` と読んだ（`make_test_wav.py` の音）
+- Windows: CI の結果を CO.4 に書く
+
+### CO.4 確かめていないこと（NOT VERIFIED）
+
+- **実機の Windows で画面のアプリを起動して受信すること。**CI の Windows には音声装置も画面も無い
+- Visual C++ 再頒布可能パッケージが入っていない Windows での起動（ONNX Runtime と vcpkg の PortAudio は
+  これを使う。CI の機械には入っている）
+- Windows ARM64（CI は x86_64 だけ）。署名・インストーラ（無い）
 

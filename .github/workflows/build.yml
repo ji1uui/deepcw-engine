@@ -385,6 +385,87 @@ jobs:
             "$app/Contents/Info.plist"
 
 
+      # Windows の配布物（付録 CO）。**展開して起動するだけで受信できる形**を
+      # 組み、zip にして残します（要件 FR-A.1）。
+      #
+      # - ONNX Runtime は Microsoft の配布物（GitHub の release）をそのまま使い
+      #   ます。版は Linux で試験している版と同じにそろえます
+      # - PortAudio は Windows 用の配布物が公式に無いので、vcpkg で原典から組み
+      #   ます。条項は vcpkg が置く `copyright` を使います
+      # - **組んだあと、配布物の中の道具だけで読めるかを確かめます。**環境変数で
+      #   ライブラリを指さず、配布物の外のフォルダから呼びます。置き場所を誤れば
+      #   ここで落ちます
+      #
+      # 署名はしていません（証明書がありません）。初めて開くとき SmartScreen が
+      # 止めることがあります（はじめに.txt に書いた）。
+      #
+      # The Windows package (appendix CO): **unpack and start, and it receives**
+      # (requirement FR-A.1), kept as a zip. ONNX Runtime is Microsoft's own
+      # release, at the same version the Linux tests run; PortAudio has no
+      # official Windows binary, so vcpkg builds it from source and its
+      # `copyright` is the licence text. **Afterwards the tools inside the
+      # package must read a test tone with nothing but what is bundled** -- no
+      # library is pointed at by environment, and they are called from outside
+      # the package, so a misplaced file fails here. Unsigned (no certificate):
+      # SmartScreen may stop the first start (said in はじめに.txt).
+      - name: Windows の配布物を組んで、中の道具で読めるか確かめる
+        if: runner.os == 'Windows'
+        working-directory: lazarus
+        env:
+          ORT_VERSION: 1.30.0
+        run: |
+          set -eo pipefail
+          # 作業場所は bash の綴りに直します（`D:\a\_temp` のままでは扱いにくい）。
+          # The work place in bash's spelling (`D:\a\_temp` is awkward as is).
+          tmp=$(cygpath -u "$RUNNER_TEMP")
+          deps="$tmp/deps"
+          mkdir -p "$deps"
+          echo "== ONNX Runtime $ORT_VERSION =="
+          curl -fsSL -o "$deps/ort.zip" \
+            "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/onnxruntime-win-x64-$ORT_VERSION.zip"
+          unzip -q "$deps/ort.zip" -d "$deps"
+          ort="$deps/onnxruntime-win-x64-$ORT_VERSION"
+          ls "$ort" "$ort/lib"
+          echo "== PortAudio（vcpkg） =="
+          vcpkg_root=$(cygpath -u "$VCPKG_INSTALLATION_ROOT")
+          "$vcpkg_root/vcpkg.exe" install portaudio:x64-windows
+          pa="$vcpkg_root/installed/x64-windows"
+          ls "$pa/bin"
+          pa_dll=$(ls "$pa/bin"/portaudio*.dll | head -1)
+          [ -n "$pa_dll" ] || { echo "PortAudio の DLL がありません"; exit 1; }
+          echo "== 組み立て =="
+          DEEPCW_ONNXRUNTIME="$ort/lib/onnxruntime.dll" \
+          DEEPCW_PORTAUDIO="$pa_dll" \
+          DEEPCW_PORTAUDIO_LICENCE="$pa/share/portaudio/copyright" \
+            ./tools/make_bundle.sh "$PWD/dist"
+          stage="$PWD/dist/deepcw-station-windows-x86_64"
+          [ -f "$stage/deepcw_station.exe" ] || { echo "deepcw_station.exe がありません"; exit 1; }
+          echo "== 配布物の中の道具で読む =="
+          # Windows の道具には Windows の綴りで渡します。
+          # Windows tools are given Windows spellings.
+          wav=$(cygpath -w "$tmp/test.wav")
+          python tools/make_test_wav.py "$wav"
+          cd "$tmp"
+          env -u DEEPCW_ONNXRUNTIME -u DEEPCW_PORTAUDIO \
+            "$stage/cw_devices.exe" | tee devices.txt
+          grep -q "PortAudio V" devices.txt
+          env -u DEEPCW_ONNXRUNTIME -u DEEPCW_PORTAUDIO \
+            "$stage/decode_morse.exe" --wav "$wav" | tee decoded.txt
+          grep -q "CQ CQ DE JA1ABC JA1ABC K" decoded.txt
+          echo "== zip =="
+          cd "$(dirname "$stage")"
+          7z a -tzip -bd deepcw-station-windows-x86_64.zip deepcw-station-windows-x86_64 >/dev/null
+          ls -l deepcw-station-windows-x86_64.zip
+
+      - name: Windows の配布物を残す
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepcw-station-windows-x86_64
+          path: lazarus/dist/deepcw-station-windows-x86_64.zip
+          if-no-files-found: error
+          retention-days: 30
+
       # **地方時が OS（`date`）と一致するか**（未解決 #20、付録 BW.4）。FPC の
       # Unix の RTL は時差を自前で読み、`TZ=Asia/Tokyo` や「slim」形式の
       # 時間帯ファイルで UTC になります。`struct tm` の並びを読むので、**macOS
