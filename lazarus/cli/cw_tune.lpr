@@ -834,13 +834,18 @@ procedure RunWide(const TONES: array of Double; const Title: string);
 const
   CAPTURE_RATE = 8000;
   WIDTHS: array[0..5] of Double = (0, 250, 175, 125, 87.5, 50);
+  { 費用を比べるとき、2 つの経路をそれぞれ測る回数（付録 CO）。
+    How many times each of the two paths is timed when their costs are
+    compared (appendix CO). }
+  TIMING_ROUNDS = 5;
 var
-  I, J, Station, WideRate, Total: Integer;
+  I, J, Station, WideRate, Total, Round_: Integer;
   Mixed, Audio, Prepared: TSingleArray;
   Wide, Slice: TSpectrogram;
   Reference, Sliced, Tuned: string;
   Seconds, Started, SharedMs, PerStationMs, TunedMs: Double;
-  Begun: TDateTime;
+  SplitMs, RoundSplitMs, RoundTunedMs, SlowestSplitMs, SlowestTunedMs: Double;
+  RoundPieceMs, BestPieceMs: array of Double;
   Failures, Unlimited, Narrowest: Integer;
 
   { 通らなかったものを数えたうえで書き出します。
@@ -854,6 +859,50 @@ var
       WriteLn('  NG   ', What, '  ', Detail);
       Inc(Failures);
     end;
+  end;
+
+  { 広帯域の経路を 1 回測ります。区切りは変更前と同じで、APieces[0] が共通の
+    変換、APieces[1..局数] が局ごとに最も狭い幅で切り出して読む時間です。配列は
+    この中だけで持つので、前の回の配列を手放す時間は入りません。
+    Times the wide path once, split as before: APieces[0] is the shared
+    transform, APieces[1..stations] cutting out and reading each station at the
+    narrowest width. The arrays live only in here, so no run pays for releasing
+    the previous run's. }
+  procedure TimeSplit(var APieces: array of Double);
+  var
+    K: Integer;
+    Samples: TSingleArray;
+    Band, Part: TSpectrogram;
+    Begun: TDateTime;
+  begin
+    Begun := Now;
+    Samples := ResampleBandLimited(Mixed, CAPTURE_RATE, WideRate);
+    Band := ComputeWideSpectrogram(Samples, WideRate, Decoder.Metadata);
+    APieces[0] := MilliSecondSpan(Now, Begun);
+    for K := 0 to High(TONES) do
+    begin
+      Begun := Now;
+      Part := SliceSpectrogram(Band,
+        WideBinFor(TONES[K], WideRate, Decoder.Metadata.FFTLength * 2),
+        Decoder.Metadata);
+      MaskSpectrogram(Part, WIDTHS[High(WIDTHS)], Decoder.Metadata);
+      Sliced := Trim(DecodedText(Decoder.DecodeSpectrogramTimed(Part, Seconds)));
+      APieces[K + 1] := MilliSecondSpan(Now, Begun);
+    end;
+  end;
+
+  { 同調経路（時間領域のフィルタ）で 1 局を読む時間を 1 回測ります。
+    Times reading one station through the tuned, time-domain path once. }
+  function TimeTuned: Double;
+  var
+    Samples: TSingleArray;
+    Begun: TDateTime;
+  begin
+    Begun := Now;
+    Samples := ToModelRate(FrequencyShift(Mixed, CAPTURE_RATE,
+      TONES[0] - TUNER_TARGET_TONE_HZ), CAPTURE_RATE, BandwidthHalfWidth(tbAuto));
+    Tuned := Trim(Decoder.DecodeLongSamples(Samples, Decoder.Metadata.SampleRate));
+    Result := MilliSecondSpan(Now, Begun);
   end;
 
 begin
@@ -900,10 +949,8 @@ begin
   WriteLn(Format('  長さ %.1f 秒。', [Seconds]));
 
   { 広帯域の変換は 1 度だけ。/ The wide transform runs once. }
-  Begun := Now;
   Prepared := ResampleBandLimited(Mixed, CAPTURE_RATE, WideRate);
   Wide := ComputeWideSpectrogram(Prepared, WideRate, Decoder.Metadata);
-  SharedMs := MilliSecondsBetween(Now, Begun);
 
   { 切り出したあと、中心の周りだけを残す幅を変えて比べます。隣の局を絵から
     追い出せるかどうかが、コンテストモードが成り立つかを決めます。
@@ -913,19 +960,16 @@ begin
   for I := 0 to High(WIDTHS) do
   begin
     Total := 0;
-    PerStationMs := 0;
     Sliced := '';
     for Station := 0 to High(TONES) do
     begin
       Reference := NormalizeText(MESSAGES[Station mod Length(MESSAGES)]);
-      Begun := Now;
       Slice := SliceSpectrogram(Wide,
         WideBinFor(TONES[Station], WideRate, Decoder.Metadata.FFTLength * 2),
         Decoder.Metadata);
       if WIDTHS[I] > 0 then
         MaskSpectrogram(Slice, WIDTHS[I], Decoder.Metadata);
       Tuned := Trim(DecodedText(Decoder.DecodeSpectrogramTimed(Slice, Seconds)));
-      PerStationMs := PerStationMs + MilliSecondsBetween(Now, Begun);
       if Tuned = Reference then
         Inc(Total);
       if Station = 0 then
@@ -942,19 +986,83 @@ begin
     Narrowest := Total;
   end;
 
-  { 同調経路（時間領域のフィルタ）との比較を 1 局ぶんだけ取ります。
-    One station's worth of comparison against the tuned, time-domain path. }
-  Begun := Now;
-  Audio := ToModelRate(FrequencyShift(Mixed, CAPTURE_RATE,
-    TONES[0] - TUNER_TARGET_TONE_HZ), CAPTURE_RATE, BandwidthHalfWidth(tbAuto));
-  Tuned := Trim(Decoder.DecodeLongSamples(Audio, Decoder.Metadata.SampleRate));
-  TunedMs := MilliSecondsBetween(Now, Begun);
+  { 同調経路（時間領域のフィルタ）との費用の比較を 1 局ぶんだけ取ります。
+    One station's worth of cost comparison against the tuned, time-domain path.
+
+    **1 回ずつ測った時間を比べると、揺れで判定が入れ替わりました**（付録 CN.4
+    では 389 ms / 385 ms で落ち、同じコードを単独で走らせると通った）。時間を
+    揺らすもの——割り込み、ほかのプロセス、追い出されたキャッシュ、下がった
+    クロック——は、**仕事そのものの時間に足されるばかりで、引くものはありま
+    せん。**そこで 2 つの経路を交互に TIMING_ROUNDS 回ずつ測り、区間（共通の
+    変換、局ごとの切り出しと読み取り、同調経路の 1 局）ごとに最速の回を取り
+    ます。最速は仕事そのものの時間へ上から近づき、**どの区間も実際の費用より
+    小さくはなりません**——広帯域の側が本当に高くなれば、検査は落ちます。区切り
+    は変更前と同じで、どれも 1 局ぶんの仕事か共通の変換なので、両側が揺れに
+    同じだけさらされます（広帯域の側を通しの 1 つの時間にすると、約 3 倍長く
+    揺れにさらされ、それだけで不利になった。付録 CO.4）。交互に（先に測る側も
+    入れ替えて）測るのは、機械の速さが途中で変わっても、両側が同じ時期に測ら
+    れるようにするためです。判定の式も、許す幅も変えていません。
+
+    **Comparing one timing of each made the verdict flip on noise** (appendix
+    CN.4: it failed at 389 ms / 385 ms, and the same code passed run alone).
+    What disturbs a timing (interrupts, other processes, evicted caches, a
+    lowered clock) **only ever adds to the work's own time, never takes from
+    it.** So the two paths are timed alternately, TIMING_ROUNDS times each, and
+    the fastest run of each piece is taken: the shared transform, cutting out
+    and reading each station, and the tuned path's one station. The fastest run
+    approaches the work's own cost from above, so **no piece comes out below
+    what it really costs**: if the wide side truly becomes dearer, the check
+    fails. The pieces are those of before, each one station's work or the
+    shared transform, so both sides are equally exposed to noise (timing the
+    wide side as one span left it exposed about three times as long, which
+    alone put it at a disadvantage; appendix CO.4). Alternating (and swapping
+    which goes first) keeps both measured over the same stretch even if the
+    machine's speed drifts. Neither the condition nor any allowance changed. }
+  RoundPieceMs := nil;
+  BestPieceMs := nil;
+  SetLength(RoundPieceMs, Length(TONES) + 1);
+  SetLength(BestPieceMs, Length(TONES) + 1);
+  for I := 0 to High(BestPieceMs) do
+    BestPieceMs[I] := MaxDouble;
+  TunedMs := MaxDouble;
+  SlowestSplitMs := 0;
+  SlowestTunedMs := 0;
+  for Round_ := 1 to TIMING_ROUNDS do
+  begin
+    if Odd(Round_) then
+    begin
+      TimeSplit(RoundPieceMs);
+      RoundTunedMs := TimeTuned;
+    end
+    else
+    begin
+      RoundTunedMs := TimeTuned;
+      TimeSplit(RoundPieceMs);
+    end;
+    RoundSplitMs := 0;
+    for I := 0 to High(RoundPieceMs) do
+    begin
+      BestPieceMs[I] := Min(BestPieceMs[I], RoundPieceMs[I]);
+      RoundSplitMs := RoundSplitMs + RoundPieceMs[I];
+    end;
+    TunedMs := Min(TunedMs, RoundTunedMs);
+    SlowestSplitMs := Max(SlowestSplitMs, RoundSplitMs);
+    SlowestTunedMs := Max(SlowestTunedMs, RoundTunedMs);
+  end;
+  SharedMs := BestPieceMs[0];
+  SplitMs := 0;
+  for I := 0 to High(BestPieceMs) do
+    SplitMs := SplitMs + BestPieceMs[I];
+  PerStationMs := (SplitMs - SharedMs) / Length(TONES);
   WriteLn(Format('  同調経路(±250)  %s   %s',
     [BoolToStr(Tuned = NormalizeText(MESSAGES[0]), '一致', '不一致'),
      Copy(Tuned, 1, 44)]));
 
-  WriteLn(Format('  共通の変換 %.0f ms / 1 局あたり 切り出し %.0f ms・同調経路 %.0f ms',
-    [SharedMs, PerStationMs / Length(TONES), TunedMs]));
+  WriteLn(Format('  共通の変換 %.0f ms / 1 局あたり 切り出し %.0f ms・同調経路 %.0f ms' +
+    '（%d 回ずつ測り、区間ごとに最速）',
+    [SharedMs, PerStationMs, TunedMs, TIMING_ROUNDS]));
+  WriteLn(Format('  それぞれの最も遅い回: 1 局あたり 切り出し（共通の変換を含む）%.0f ms・同調経路 %.0f ms',
+    [SlowestSplitMs / Length(TONES), SlowestTunedMs]));
 
   { ここまでは表でした。**表は、壊れても表のままです。**この機能が成り立つ
     条件を、そのまま検査にします。
@@ -976,9 +1084,8 @@ begin
   Verdict('幅を制限したほうが読める', Narrowest > Unlimited,
     Format('(制限なし %d / 最も狭い %d)', [Unlimited, Narrowest]));
   Verdict('切り出しは局ごとの同調経路より高くない',
-    PerStationMs / Length(TONES) + SharedMs / Length(TONES) <= TunedMs,
-    Format('(%.0f ms / %.0f ms)',
-      [PerStationMs / Length(TONES) + SharedMs / Length(TONES), TunedMs]));
+    SplitMs / Length(TONES) <= TunedMs,
+    Format('(%.0f ms / %.0f ms)', [SplitMs / Length(TONES), TunedMs]));
   Summary(Failures);
 end;
 
