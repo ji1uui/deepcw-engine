@@ -12956,7 +12956,16 @@ CM.13・CM.14 の「確かめていないこと」のうち、**Windows・macOS 
 
 - Linux: `make_bundle.sh` で組んだ配布物の `decode_morse` が、環境変数なしで試験の音を
   `CQ CQ DE JA1ABC JA1ABC K` と読んだ（`make_test_wav.py` の音）
-- Windows: CI の結果を CO.4 に書く
+- **Windows（CI run 37118858443、windows-latest）**: 組み立て・確かめ・zip がすべて通った
+  - ONNX Runtime 1.30.0（Microsoft の release）、PortAudio 19.7（vcpkg、MSVC 14.51 で組んだ）
+  - 配布物の中身: `deepcw_station.exe`・`decode_morse.exe`・`cw_devices.exe`・`onnxruntime.dll`・
+    `portaudio.dll`・`model.onnx`・`model.onnx.json`・`languages/`・`licences/`（ONNX Runtime の
+    `LICENSE`・`ThirdPartyNotices.txt`、PortAudio の `copyright`）・`LICENSE`・
+    `THIRD-PARTY-NOTICES.md`・`はじめに.txt`
+  - 配布物の外から、環境変数なしで: `cw_devices.exe` が**配布物の中の** `portaudio.dll` を読んだ
+    （`PortAudio V19.7.0-devel`。CI の機械に録音装置は無い）。`decode_morse.exe` が試験の音を
+    `CQ CQ DE JA1ABC JA1ABC K` と読んだ
+  - zip は 27.9 MB。成果物 `deepcw-station-windows-x86_64` として 30 日残る
 
 ### CO.4 確かめていないこと（NOT VERIFIED）
 
