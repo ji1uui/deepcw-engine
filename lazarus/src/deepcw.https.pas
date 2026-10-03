@@ -70,7 +70,10 @@ function WinHttpSetTimeouts(hInternet: HINTERNET; nResolveTimeout,
   external 'winhttp.dll';
 {$ELSEIF defined(DARWIN)}
 uses
-  CocoaAll, objc;
+  { Objective-C の実行時の仕組み（`objc`）は、モードの切り替えで既に見えています。
+    The Objective-C runtime (`objc`) is already in scope through the mode
+    switch. }
+  CocoaAll;
 {$ELSE}
 uses
   fphttpclient, opensslsockets;
@@ -311,7 +314,7 @@ var
   Pool: NSAutoreleasePool;
   Address: NSURL;
   Config: NSURLSessionConfiguration;
-  Receiver: NSObject;
+  Receiver: id;
   Session: NSURLSession;
   Request: NSMutableURLRequest;
   Task: NSURLSessionDataTask;
@@ -369,7 +372,7 @@ begin
         Config, NSURLSessionDelegateProtocol(Receiver), nil);
       { 会話は相手を握っているので、こちらの分は手放します。
         The session holds on to its delegate, so our own claim is released. }
-      Receiver.release;
+      NSObject(Receiver).release;
       Request := NSMutableURLRequest.requestWithURL_cachePolicy_timeoutInterval(
         Address, NSURLRequestReloadIgnoringLocalCacheData, TimeoutMs / 1000);
       Request.setValue_forHTTPHeaderField(
