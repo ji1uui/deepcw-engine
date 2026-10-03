@@ -834,9 +834,9 @@ procedure RunWide(const TONES: array of Double; const Title: string);
 const
   CAPTURE_RATE = 8000;
   WIDTHS: array[0..5] of Double = (0, 250, 175, 125, 87.5, 50);
-  { 費用を比べるとき、2 つの経路をそれぞれ測る回数（付録 CP）。
+  { 費用を比べるとき、2 つの経路をそれぞれ測る回数（付録 CQ）。
     How many times each of the two paths is timed when their costs are
-    compared (appendix CP). }
+    compared (appendix CQ). }
   TIMING_ROUNDS = 5;
 var
   I, J, Station, WideRate, Total, Round_: Integer;
@@ -999,7 +999,7 @@ begin
     小さくはなりません**——広帯域の側が本当に高くなれば、検査は落ちます。区切り
     は変更前と同じで、どれも 1 局ぶんの仕事か共通の変換なので、両側が揺れに
     同じだけさらされます（広帯域の側を通しの 1 つの時間にすると、約 3 倍長く
-    揺れにさらされ、それだけで不利になった。付録 CP.4）。交互に（先に測る側も
+    揺れにさらされ、それだけで不利になった。付録 CQ.4）。交互に（先に測る側も
     入れ替えて）測るのは、機械の速さが途中で変わっても、両側が同じ時期に測ら
     れるようにするためです。判定の式も、許す幅も変えていません。
 
@@ -1015,7 +1015,7 @@ begin
     fails. The pieces are those of before, each one station's work or the
     shared transform, so both sides are equally exposed to noise (timing the
     wide side as one span left it exposed about three times as long, which
-    alone put it at a disadvantage; appendix CP.4). Alternating (and swapping
+    alone put it at a disadvantage; appendix CQ.4). Alternating (and swapping
     which goes first) keeps both measured over the same stretch even if the
     machine's speed drifts. Neither the condition nor any allowance changed. }
   RoundPieceMs := nil;
