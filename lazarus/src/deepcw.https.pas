@@ -4,7 +4,7 @@ unit DeepCW.Https;
   （計画の段 3、付録 CM.13）。
 
   - Windows: WinHTTP（OS の部品。証明書も代理サーバも OS の設定に従う）
-  - macOS: Foundation の URL 読み込み（`NSURLConnection`。OS の部品で、
+  - macOS: Foundation の URL 読み込み（`NSURLSession`。OS の部品で、
     証明書も代理サーバも OS の設定に従う）
   - Linux: Free Pascal の `fphttpclient` と、OS に入っている OpenSSL
     （Linux には HTTPS の OS の部品が無いため）
@@ -20,7 +20,7 @@ unit DeepCW.Https;
 
   - Windows: WinHTTP, the system's own client (certificates and proxies follow
     the system's settings)
-  - macOS: Foundation's URL loading (`NSURLConnection`), the system's own
+  - macOS: Foundation's URL loading (`NSURLSession`), the system's own
     client (certificates and proxies follow the system's settings)
   - Linux: Free Pascal's `fphttpclient` with the system's OpenSSL (Linux has
     no system HTTPS client)
@@ -34,6 +34,7 @@ unit DeepCW.Https;
 {$mode objfpc}{$H+}
 {$IFDEF DARWIN}
 {$modeswitch objectivec1}
+{$modeswitch cblocks}
 {$ENDIF}
 
 interface
@@ -199,17 +200,71 @@ begin
 end;
 
 {$ELSEIF defined(DARWIN)}
+type
+  { 完了を受ける block。**大域の手続きから作ります**（Free Pascal 3.2.2 は、
+    大域の手続きなら静的な block にでき、`NSURLSession` が写しても壊れません）。
+    The block that receives completion. **It is made from a global procedure**:
+    Free Pascal 3.2.2 turns one into a static block, which survives
+    `NSURLSession` copying it. }
+  TSessionCompletion = reference to procedure(data: NSData;
+    response: NSURLResponse; error: NSError); cblock;
+
+var
+  { 照会は一度に 1 つ。完了は `NSURLSession` の別のスレッドから届くので、
+    結果をここに置き、出来事で知らせます。
+    One request at a time. Completion arrives on another of `NSURLSession`'s
+    threads, so the result is left here and an event announces it. }
+  GLock: TRTLCriticalSection;
+  GDone: PRTLEvent;
+  GFinished, GAnswered, GLeftOver: Boolean;
+  GStatus: Integer;
+  GBody, GFailure: string;
+
+procedure SessionDone(data: NSData; response: NSURLResponse; error: NSError);
+var
+  Count: Integer;
+begin
+  if (response <> nil) and response.isKindOfClass(NSHTTPURLResponse.classClass) then
+  begin
+    GAnswered := True;
+    GStatus := NSHTTPURLResponse(response).statusCode;
+    GBody := '';
+    if data <> nil then
+    begin
+      Count := data.length;
+      if Count > HTTPS_MAX_BODY_BYTES then
+        Count := HTTPS_MAX_BODY_BYTES;
+      SetString(GBody, PAnsiChar(data.bytes), Count);
+    end;
+  end
+  else
+  begin
+    GAnswered := False;
+    if error <> nil then
+      GFailure := string(error.localizedDescription.UTF8String)
+    else
+      GFailure := 'no answer';
+  end;
+  GFinished := True;
+  RTLEventSetEvent(GDone);
+end;
+
 function HttpsGet(const Url, UserAgent: string; TimeoutMs: Integer;
   out Status: Integer; out Body, Failure: string): Boolean;
+const
+  { 取り消したあと、完了が届くのを待つ長さ。/ How long to wait for completion
+    after cancelling. }
+  CANCEL_WAIT_MS = 5000;
 var
   Pool: NSAutoreleasePool;
   Address: NSURL;
+  Config: NSURLSessionConfiguration;
+  Session: NSURLSession;
   Request: NSMutableURLRequest;
-  Response: NSURLResponse;
-  Error: NSError;
-  Data: NSData;
+  Task: NSURLSessionDataTask;
+  Handler: TSessionCompletion;
   Host, Path: string;
-  Port, Count: Integer;
+  Port: Integer;
 begin
   Status := 0;
   Body := '';
@@ -220,51 +275,79 @@ begin
     Failure := 'not an https URL';
     Exit;
   end;
-  { 作業スレッドから呼ぶので、自動解放の池を自分で持ちます。
-    Called from a worker thread, so it keeps its own autorelease pool. }
-  Pool := NSAutoreleasePool.alloc.init;
+  EnterCriticalSection(GLock);
   try
-    Address := NSURL.URLWithString(NSString.stringWithUTF8String(PChar(Url)));
-    if Address = nil then
+    { 前の照会の完了がまだ届いていなければ、もう少し待ちます。届かないまま
+      次を始めると、前の完了が次の結果を上書きします。
+      If the previous request's completion has not arrived, wait a little
+      more: starting the next one regardless would let the old completion
+      overwrite the new result. }
+    if GLeftOver then
     begin
-      Failure := 'not an https URL';
-      Exit;
+      RTLEventWaitFor(GDone, CANCEL_WAIT_MS);
+      if not GFinished then
+      begin
+        Failure := 'previous request still running';
+        Exit;
+      end;
+      GLeftOver := False;
     end;
-    Request := NSMutableURLRequest.requestWithURL_cachePolicy_timeoutInterval(
-      Address, NSURLRequestReloadIgnoringLocalCacheData, TimeoutMs / 1000);
-    Request.setValue_forHTTPHeaderField(
-      NSString.stringWithUTF8String(PChar(UserAgent)),
-      NSString.stringWithUTF8String('User-Agent'));
-    Response := nil;
-    Error := nil;
-    { `NSURLConnection` の同期の呼び出しは非推奨（macOS 10.11 から）ですが、
-      今も OS に入っています。`NSURLSession` は完了を C の block で受けるため、
-      macOS の実機で確かめられるまでこちらを使います（付録 CM.13）。
-      The synchronous `NSURLConnection` call is deprecated (since macOS 10.11)
-      but still ships with the system. `NSURLSession` reports completion
-      through a C block, so this is used until that can be checked on a real
-      Mac (appendix CM.13). }
-    Data := NSURLConnection.sendSynchronousRequest_returningResponse_error(
-      Request, @Response, @Error);
-    if (Response = nil) or not Response.isKindOfClass(NSHTTPURLResponse.classClass) then
-    begin
-      if Error <> nil then
-        Failure := string(Error.localizedDescription.UTF8String)
-      else
-        Failure := 'no answer';
-      Exit;
+    RTLEventResetEvent(GDone);
+    GFinished := False;
+    GAnswered := False;
+    GStatus := 0;
+    GBody := '';
+    GFailure := '';
+
+    { 作業スレッドから呼ぶので、自動解放の池を自分で持ちます。
+      Called from a worker thread, so it keeps its own autorelease pool. }
+    Pool := NSAutoreleasePool.alloc.init;
+    try
+      Address := NSURL.URLWithString(NSString.stringWithUTF8String(PChar(Url)));
+      if Address = nil then
+      begin
+        Failure := 'not an https URL';
+        Exit;
+      end;
+      { 記録を残さない設定（キャッシュ・クッキーをディスクに書かない）。
+        An ephemeral configuration: no cache or cookies written to disk. }
+      Config := NSURLSessionConfiguration.ephemeralSessionConfiguration;
+      Config.setTimeoutIntervalForRequest(TimeoutMs / 1000);
+      Config.setTimeoutIntervalForResource(TimeoutMs / 1000);
+      Session := NSURLSession.sessionWithConfiguration(Config);
+      Request := NSMutableURLRequest.requestWithURL_cachePolicy_timeoutInterval(
+        Address, NSURLRequestReloadIgnoringLocalCacheData, TimeoutMs / 1000);
+      Request.setValue_forHTTPHeaderField(
+        NSString.stringWithUTF8String(PChar(UserAgent)),
+        NSString.stringWithUTF8String('User-Agent'));
+      Handler := @SessionDone;
+      Task := Session.dataTaskWithRequest_completionHandler(Request,
+        OpaqueCBlock(Handler));
+      Task.resume;
+      { 上限まで待ち、来なければ取り消して完了を待ちます。
+        Wait up to the limit; if nothing came, cancel and wait for completion. }
+      RTLEventWaitFor(GDone, TimeoutMs + 1000);
+      if not GFinished then
+      begin
+        Task.cancel;
+        RTLEventWaitFor(GDone, CANCEL_WAIT_MS);
+      end;
+      Session.finishTasksAndInvalidate;
+      if not GFinished then
+      begin
+        GLeftOver := True;
+        Failure := 'timed out';
+        Exit;
+      end;
+      Status := GStatus;
+      Body := GBody;
+      Failure := GFailure;
+      Result := GAnswered;
+    finally
+      Pool.release;
     end;
-    Status := NSHTTPURLResponse(Response).statusCode;
-    if Data <> nil then
-    begin
-      Count := Data.length;
-      if Count > HTTPS_MAX_BODY_BYTES then
-        Count := HTTPS_MAX_BODY_BYTES;
-      SetString(Body, PAnsiChar(Data.bytes), Count);
-    end;
-    Result := True;
   finally
-    Pool.release;
+    LeaveCriticalSection(GLock);
   end;
 end;
 
@@ -311,6 +394,16 @@ begin
     Client.Free;
   end;
 end;
+{$ENDIF}
+
+{$IFDEF DARWIN}
+initialization
+  InitCriticalSection(GLock);
+  GDone := RTLEventCreate;
+
+finalization
+  RTLEventDestroy(GDone);
+  DoneCriticalSection(GLock);
 {$ENDIF}
 
 end.

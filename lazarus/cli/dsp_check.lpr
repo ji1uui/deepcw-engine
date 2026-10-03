@@ -4537,6 +4537,17 @@ begin
     Format('(%s、%d ms)', [Failure, GetTickCount64 - Started]));
   Check('繋がらないときも待ちは上限の内',
     GetTickCount64 - Started < 10000, Format('(%d ms)', [GetTickCount64 - Started]));
+  { 続けてもう一度。前の照会の完了が次の結果に混ざらないこと（macOS は完了を
+    別のスレッドから受け取る）。
+    Once more in a row: the previous completion must not leak into the next
+    result (macOS receives completion on another thread). }
+  Started := GetTickCount64;
+  Answered := HttpsGet('https://127.0.0.1:1/again', LOOKUP_USER_AGENT, 3000,
+    Status, Body, Failure);
+  Check('続けて照会しても、それぞれ理由を返す',
+    (not Answered) and (Failure <> '') and (Status = 0) and (Body = '') and
+    (GetTickCount64 - Started < 10000),
+    Format('(%s、%d ms)', [Failure, GetTickCount64 - Started]));
   Answered := HttpsGet('http://127.0.0.1/', LOOKUP_USER_AGENT, 3000, Status,
     Body, Failure);
   Check('https でない URL には繋がない', not Answered and (Failure = 'not an https URL'),
