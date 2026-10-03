@@ -386,7 +386,7 @@ jobs:
 
 
       # Windows の配布物（付録 CO）。**展開して起動するだけで受信できる形**を
-      # 組み、zip にして残します（要件 FR-A.1）。
+      # 組み、成果物として残します（要件 FR-A.1）。
       #
       # - ONNX Runtime は Microsoft の配布物（GitHub の release）をそのまま使い
       #   ます。版は Linux で試験している版と同じにそろえます
@@ -395,12 +395,13 @@ jobs:
       # - **組んだあと、配布物の中の道具だけで読めるかを確かめます。**環境変数で
       #   ライブラリを指さず、配布物の外のフォルダから呼びます。置き場所を誤れば
       #   ここで落ちます
+      # - 成果物はフォルダのまま残します（下の段）
       #
       # 署名はしていません（証明書がありません）。初めて開くとき SmartScreen が
       # 止めることがあります（はじめに.txt に書いた）。
       #
       # The Windows package (appendix CO): **unpack and start, and it receives**
-      # (requirement FR-A.1), kept as a zip. ONNX Runtime is Microsoft's own
+      # (requirement FR-A.1), kept as an artifact. ONNX Runtime is Microsoft's own
       # release, at the same version the Linux tests run; PortAudio has no
       # official Windows binary, so vcpkg builds it from source and its
       # `copyright` is the licence text. **Afterwards the tools inside the
@@ -452,17 +453,24 @@ jobs:
           env -u DEEPCW_ONNXRUNTIME -u DEEPCW_PORTAUDIO \
             "$stage/decode_morse.exe" --wav "$wav" | tee decoded.txt
           grep -q "CQ CQ DE JA1ABC JA1ABC K" decoded.txt
-          echo "== zip =="
-          cd "$(dirname "$stage")"
-          7z a -tzip -bd deepcw-station-windows-x86_64.zip deepcw-station-windows-x86_64 >/dev/null
-          ls -l deepcw-station-windows-x86_64.zip
 
+      # **フォルダのまま渡します**（GitHub が 1 つの zip にして配ります）。
+      # 版 3.00 の初めは zip を作って渡したので、落とすと zip の中に zip が
+      # あり、利用者の Windows の展開で「パスワードで保護されています」と出た
+      # （付録 CO.5）。2 重をやめ、展開は 1 回で済むようにします。
+      # `dist/` を渡すので、zip の中は `deepcw-station-windows-x86_64/` の
+      # フォルダ 1 つです。
+      # **Handed over as a folder** (GitHub serves it as one zip). Early in
+      # 3.00 a zip was uploaded, so the download held a zip inside a zip, and
+      # the operator's Windows extraction asked for a password (appendix CO.5).
+      # No more nesting: one extraction. `dist/` is given, so the zip holds a
+      # single `deepcw-station-windows-x86_64/` folder.
       - name: Windows の配布物を残す
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: deepcw-station-windows-x86_64
-          path: lazarus/dist/deepcw-station-windows-x86_64.zip
+          path: lazarus/dist/
           if-no-files-found: error
           retention-days: 30
 

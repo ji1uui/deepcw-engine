@@ -12946,7 +12946,7 @@ CM.13・CM.14 の「確かめていないこと」のうち、**Windows・macOS 
   4. **配布物の中の道具だけで確かめる**: 環境変数でライブラリを指さず、配布物の外のフォルダから
      `cw_devices.exe`（PortAudio が読めるか）と `decode_morse.exe`（ONNX Runtime とモデルで試験の音
      `CQ CQ DE JA1ABC JA1ABC K` を読めるか）を呼ぶ。置き場所を誤れば、ここで落ちる
-  5. zip にして成果物（artifact）として 30 日残す
+  5. 成果物（artifact）として 30 日残す（初めは zip にして渡していた。CO.5）
 - 試験の音は `tools/make_test_wav.py`（標準ライブラリだけ。Windows の CI の Python に numpy があるとは
   限らない）
 - `はじめに.txt` に Windows の節: 展開してから起動する、SmartScreen（署名が無い）、マイクの許可、
@@ -12973,4 +12973,22 @@ CM.13・CM.14 の「確かめていないこと」のうち、**Windows・macOS 
 - Visual C++ 再頒布可能パッケージが入っていない Windows での起動（ONNX Runtime と vcpkg の PortAudio は
   これを使う。CI の機械には入っている）
 - Windows ARM64（CI は x86_64 だけ）。署名・インストーラ（無い）
+- 2 重をやめた成果物を、利用者の Windows の標準の展開で開けるか（CO.5）
 
+### CO.5 展開で「パスワードで保護されています」と出た
+
+利用者が成果物を落として Windows の標準の展開を使うと、「ファイル
+'deepcw-station-windows-x86_64.zip' はパスワードで保護されています」と訊かれた。**パスワードは
+掛けていない**（CI は `7z a -tzip` で、暗号化の指定は無い）。
+
+- 成果物は **zip の中に zip** だった（CI が作った zip を、GitHub がさらに zip にして配る）。外側と内側が
+  同じ名前なので、どちらで訊かれたのかも利用者には分からない
+- GitHub が外側の zip を作るのと同じ部品（`archiver` 7、圧縮 6）で手元に作り、`zipinfo` で見ると
+  「not encrypted」・deflate・データ記述子つき（長さを後ろに書く形）だった。**暗号化の印は立って
+  いない。**Windows の展開がなぜ訊くのかは、この作業環境（Windows が無い）では確かめられない
+- 当座の回避: PowerShell の `Expand-Archive`、または 7-Zip で展開する（利用者に案内した）
+- 直し方は利用者が選んだ: **Actions の成果物のまま、2 重をやめる。**CI は zip を作らず、配布物の
+  フォルダをそのまま渡す。GitHub が 1 つの zip にし、中は `deepcw-station-windows-x86_64/` の
+  フォルダ 1 つになる
+- **外側の zip は GitHub が作るので、同じ訊き方が残るかもしれない。**残るなら、Windows 標準の作り方で
+  作った zip を Releases に置く案がある（公開になるので利用者の判断を待つ）
