@@ -207,7 +207,7 @@ type
     Free Pascal 3.2.2 turns one into a static block, which survives
     `NSURLSession` copying it. }
   TSessionCompletion = reference to procedure(data: NSData;
-    response: NSURLResponse; error: NSError); cblock;
+    response: NSURLResponse; error: NSError); cdecl; cblock;
 
 var
   { 照会は一度に 1 つ。完了は `NSURLSession` の別のスレッドから届くので、
