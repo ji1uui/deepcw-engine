@@ -70,7 +70,7 @@ function WinHttpSetTimeouts(hInternet: HINTERNET; nResolveTimeout,
   external 'winhttp.dll';
 {$ELSEIF defined(DARWIN)}
 uses
-  CocoaAll;
+  CocoaAll, objc;
 {$ELSE}
 uses
   fphttpclient, opensslsockets;
@@ -199,30 +199,26 @@ begin
 end;
 
 {$ELSEIF defined(DARWIN)}
-type
-  { `NSURLSession` の知らせを受ける相手（delegate）。完了を C の block で受ける
-    形は、Free Pascal 3.2.2 が作る block を呼んだところで落ちた（CI、付録
-    CM.14）ので、Objective-C のクラスで受けます。
-    **ここの手続きは `NSURLSession` のスレッドで呼ばれます。**Pascal の文字列も
-    例外も使わず、Objective-C の呼び出しと整数の書き込みと出来事の合図だけに
-    します（Free Pascal が作っていないスレッドで、Pascal のヒープや例外の仕組み
-    に触れないため）。
-    The receiver (delegate) of `NSURLSession`'s reports. Taking completion
-    through a C block crashed where the block Free Pascal 3.2.2 generated was
-    invoked (CI, appendix CM.14), so an Objective-C class receives it instead.
-    **These methods run on `NSURLSession`'s thread.** They use no Pascal
-    strings and no exceptions -- only Objective-C calls, integer writes and the
-    event -- so a thread Free Pascal did not create never touches the Pascal
-    heap or exception machinery. }
-  TSessionReceiver = objcclass(NSObject, NSURLSessionDataDelegateProtocol)
-  public
-    procedure URLSession_dataTask_didReceiveData(session: NSURLSession;
-      dataTask: NSURLSessionDataTask; data: NSData);
-      message 'URLSession:dataTask:didReceiveData:';
-    procedure URLSession_task_didCompleteWithError(session: NSURLSession;
-      task: NSURLSessionTask; error: NSError);
-      message 'URLSession:task:didCompleteWithError:';
-  end;
+{ `NSURLSession` の知らせを受ける相手（delegate）は、**実行時に Objective-C の
+  仕組みでクラスを組み立てて作ります**（付録 CM.14）。Free Pascal 3.2.2 では、
+  完了を受ける C の block は呼ばれたところで落ち（CI）、コンパイラが書き出す
+  Objective-C のクラスは今の Apple のリンカが受け付けない（未解決 #25 と同じ
+  `malformed method list`）。実行時に組めば、どちらも通りません。
+  **下の 2 つの手続きは `NSURLSession` のスレッドで呼ばれます。**Pascal の文字列
+  も例外も使わず、Objective-C の呼び出しと整数の書き込みと出来事の合図だけに
+  します（Free Pascal が作っていないスレッドで、Pascal のヒープや例外の仕組みに
+  触れないため）。
+
+  The receiver (delegate) of `NSURLSession`'s reports is **a class assembled at
+  run time through the Objective-C runtime** (appendix CM.14). With Free
+  Pascal 3.2.2 a completion C block crashed where it was invoked (CI), and the
+  Objective-C classes the compiler emits are rejected by the current Apple
+  linker (`malformed method list`, as in open question #25). Built at run
+  time, neither is involved.
+  **The two procedures below run on `NSURLSession`'s thread.** They use no
+  Pascal strings and no exceptions -- only Objective-C calls, integer writes
+  and the event -- so a thread Free Pascal did not create never touches the
+  Pascal heap or exception machinery. }
 
 var
   { 照会は一度に 1 つ。知らせは `NSURLSession` の別のスレッドから届くので、
@@ -237,16 +233,19 @@ var
   GData: NSMutableData;
   GResponse: NSURLResponse;
   GError: NSError;
+  GReceiverClass: pobjc_class;
 
-procedure TSessionReceiver.URLSession_dataTask_didReceiveData(
-  session: NSURLSession; dataTask: NSURLSessionDataTask; data: NSData);
+{ URLSession:dataTask:didReceiveData: }
+procedure ReceiverDidReceiveData(Receiver: id; Cmd: SEL; session: id;
+  dataTask: id; data: NSData); cdecl;
 begin
   if (GData <> nil) and (GData.length < HTTPS_MAX_BODY_BYTES) then
     GData.appendData(data);
 end;
 
-procedure TSessionReceiver.URLSession_task_didCompleteWithError(
-  session: NSURLSession; task: NSURLSessionTask; error: NSError);
+{ URLSession:task:didCompleteWithError: }
+procedure ReceiverDidComplete(Receiver: id; Cmd: SEL; session: id;
+  task: NSURLSessionTask; error: NSError); cdecl;
 begin
   GResponse := task.response;
   if GResponse <> nil then
@@ -256,6 +255,35 @@ begin
     GError.retain;
   GFinished := True;
   RTLEventSetEvent(GDone);
+end;
+
+{ 受け手のクラスを（初めの 1 回だけ）組み立てます。排他の中で呼びます。
+  Assembles the receiver class, once; called under the lock. }
+function ReceiverClass: pobjc_class;
+const
+  NAME = 'DeepCWSessionReceiver';
+begin
+  if GReceiverClass = nil then
+  begin
+    GReceiverClass := objc_allocateClassPair(NSObject.classClass, NAME, 0);
+    if GReceiverClass <> nil then
+    begin
+      { 型の印: 戻り値 void、self、_cmd、引数 3 つ（どれもオブジェクト）。
+        Type encoding: void return, self, _cmd and three object arguments. }
+      class_addMethod(GReceiverClass,
+        sel_registerName('URLSession:dataTask:didReceiveData:'),
+        IMP(@ReceiverDidReceiveData), 'v@:@@@');
+      class_addMethod(GReceiverClass,
+        sel_registerName('URLSession:task:didCompleteWithError:'),
+        IMP(@ReceiverDidComplete), 'v@:@@@');
+      objc_registerClassPair(GReceiverClass);
+    end
+    else
+      { 同じ名前がすでにある（同じプロセスで組んだもの）。
+        The name already exists (assembled earlier in this process). }
+      GReceiverClass := pobjc_class(objc_getClass(NAME));
+  end;
+  Result := GReceiverClass;
 end;
 
 { 前の照会で受け取ったものを手放します。/ Lets go of what the previous
@@ -283,7 +311,7 @@ var
   Pool: NSAutoreleasePool;
   Address: NSURL;
   Config: NSURLSessionConfiguration;
-  Receiver: TSessionReceiver;
+  Receiver: NSObject;
   Session: NSURLSession;
   Request: NSMutableURLRequest;
   Task: NSURLSessionDataTask;
@@ -336,7 +364,7 @@ begin
       Config := NSURLSessionConfiguration.ephemeralSessionConfiguration;
       Config.setTimeoutIntervalForRequest(TimeoutMs / 1000);
       Config.setTimeoutIntervalForResource(TimeoutMs / 1000);
-      Receiver := TSessionReceiver.alloc.init;
+      Receiver := NSObject(class_createInstance(ReceiverClass, 0)).init;
       Session := NSURLSession.sessionWithConfiguration_delegate_delegateQueue(
         Config, NSURLSessionDelegateProtocol(Receiver), nil);
       { 会話は相手を握っているので、こちらの分は手放します。
