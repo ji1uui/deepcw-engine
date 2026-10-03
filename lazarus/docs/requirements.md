@@ -12667,6 +12667,8 @@ CM.5 の確認（手元の `curl`）と、第 8・9 条・User-Agent の扱い�
 - `dsp_check` に 8 件: URL の分け方 3、**誰も待っていない口（127.0.0.1 の 1 番）へ繋いで偽と理由を
   返し、落ちず、上限の内に返る**こと（**CI では WinHTTP と macOS の仕組みそのものがこれを通る**）、
   https でない URL に繋がないこと、User-Agent の形、版の突き合わせ
+- CI（run 63）で、Windows x86_64 は WinHTTP、macOS ARM64 は `NSURLConnection` で上の 8 件が通った
+  （Windows の繋がらない場合は約 2 秒で理由を返した）。macOS の組み立てに `deepcw.https.pas` の警告は無い
 - Linux で、照会先とは別の相手（`https://pypi.org/`）に実際に繋ぎ、状態 200 と本文（64 KB で
   打ち切り）を受け取った
 - 照会先（`www.tele.soumu.go.jp`）へは、この作業環境の出口で 403（「Host not in allowlist」）に
