@@ -41,7 +41,7 @@ uses
   DeepCW.Alphabet, DeepCW.TxGate, DeepCW.RigConfig,
   DeepCW.Platform,
   TranscriptView, WaterfallView, BandMapView, TrendView, HistogramView,
-  ViewColors, LayoutCheck, TextCheck, UiText, UiLang;
+  ViewColors, LayoutCheck, TextCheck, UiText, UiLang, AboutWindow;
 
 type
   { 受信のしかた（要件 FR-I.6）。
@@ -608,6 +608,13 @@ type
       the list is frozen in the contact mode), and the button to the input
       settings (appendix CN). }
     FLogRow: TPanel;
+    { 設定の小さなタブと、版と許諾条項の窓（付録 CP）。/ The settings' small
+      tabs and the version and licence window (appendix CP). }
+    FSetPages: TPageControl;
+    FSetPageRx: TTabSheet;
+    FSetPageAdvanced: TTabSheet;
+    FSetAbout: TButton;
+    FAbout: TAboutWindow;
     FRxMiddle: TPanel;
     FRxBandPane: TPanel;
     FRxBandNote: TLabel;
@@ -1045,6 +1052,8 @@ type
     procedure UpdateBandNote;
     procedure RxMiddleResized(Sender: TObject);
     procedure BuildReceiveInputGroup(Host: TWinControl);
+    procedure SetPagesChanged(Sender: TObject);
+    procedure AboutClick(Sender: TObject);
     procedure RefreshDeviceList(const Preferred: string);
     function SelectedDeviceIndex: Integer;
     function SelectedDeviceName: string;
@@ -1163,6 +1172,15 @@ resourcestring
   RsRxBandIdle = '待機モードにすると、帯域内の局がここに並びます。';
   RsRxPickFromList = '一覧から局を選ぶと、ここで読みます。';
   RsRxInputSettings = '入力の設定...';
+  RsSetPageRx = '受信';
+  RsSetPageLog = '記録と照合';
+  RsSetPageRig = '無線機';
+  RsSetPageScreen = '画面と音';
+  RsSetPageAdvanced = '詳細・診断';
+  RsSetRecordGroup = '記録';
+  RsSetCallCheckGroup = '呼出符号の確かめ';
+  RsSetScreenGroup = '画面';
+  RsSetAbout = 'このアプリについて...';
   RsRxDenoise = '帯域外の雑音を抑える';
   RsRxTuneHint = '読みたい信号をクリック。ホイールで微調整。';
   RsRxUntune = '同調を解除';
@@ -1265,7 +1283,6 @@ resourcestring
 
   { 設定タブ / the settings tab }
   RsSetTab = '設定';
-  RsSetOperating = '運用設定';
   { PC で鳴らす音だけに効きます。無線機の側音は無線機が決めます。
     Affects only the sound played on the PC; the rig decides its own
     sidetone. }
@@ -3149,51 +3166,6 @@ begin
   SendPanel.TabOrder := FRxContent.ControlCount - 1;
 end;
 
-{ 受信の入力の設定（設定タブ。付録 CN）。版 2.98 までは送受信画面の上段に
-  ありました。**部品も設定ファイルの鍵も同じで、置き場所だけを移しました。**
-  変えればすぐ効きます（適用の釦は要りません）。
-  The receive input settings (settings tab; appendix CN). Up to 2.98 they sat
-  in the operating screen's top group. **The controls and the settings keys
-  are the same; only their place moved.** A change takes effect at once (no
-  apply button needed). }
-procedure TMainForm.BuildReceiveInputGroup(Host: TWinControl);
-var
-  Group: TGroupBox;
-begin
-  Group := TGroupBox.Create(Host);
-  Group.Parent := Host;
-  Group.Height := 104;
-  RegisterCaption(Group, @RsRxFromInput);
-  Stretch(Group, alTop);
-
-  AddLabel(Group, @RsRxDevice, 14, 10);
-  FRxDevice := TComboBox.Create(Group);
-  FRxDevice.Parent := Group;
-  FRxDevice.SetBounds(150, 6, 380, 28);
-  FRxDevice.Style := csDropDownList;
-  FRxDevice.OnChange := @RxConfirmSpeedChanged;
-  FRxDeviceRefresh := AddButton(Group, @RsRxRescan, 538, 5, 80,
-    @RxDeviceRefreshClick);
-
-  AddLabel(Group, @RsRxSettleLabel, 14, 46);
-  FRxConfirmSpeed := TComboBox.Create(Group);
-  FRxConfirmSpeed.Parent := Group;
-  FRxConfirmSpeed.SetBounds(150, 42, 150, 28);
-  FRxConfirmSpeed.Style := csDropDownList;
-  RegisterItem(FRxConfirmSpeed, 0, @RsRxSettleFast);
-  RegisterItem(FRxConfirmSpeed, 1, @RsRxSettleNormal);
-  RegisterItem(FRxConfirmSpeed, 2, @RsRxSettleSure);
-  FRxConfirmSpeed.ItemIndex := 1;
-  FRxConfirmSpeed.OnChange := @RxConfirmSpeedChanged;
-
-  FRxAntiAlias := TCheckBox.Create(Group);
-  FRxAntiAlias.Parent := Group;
-  FRxAntiAlias.SetBounds(320, 44, 220, 24);
-  RegisterCaption(FRxAntiAlias, @RsRxDenoise);
-  FRxAntiAlias.Checked := True;
-  FRxAntiAlias.OnChange := @RxConfirmSpeedChanged;
-end;
-
 { 受信練習のタブ（要件 FR-F.3）。
 
   **出題は画面に出しません。**見えていれば練習になりません。答え合わせを押した
@@ -4338,36 +4310,204 @@ begin
   FtShowTrend(LoadFistRecords(FistLogFileName));
 end;
 
+{ 設定の枠の並べ方（付録 CP）。**左から右へ「見出し → 操作 → 説明」**の順に
+  読めるよう、どの枠も同じ桁にそろえます: 見出しは左端（`SET_LABEL_X`）、操作は
+  見出しの桁の右（`SET_CONTROL_X`）、行の間隔は `SET_ROW_PITCH`。見出しは操作の
+  縦の中ほどに来るよう 5 画素下げます。版 2.99 までは枠ごとに置き場所を手で
+  決めていて、見出しと操作の左端も、説明の始まりも枠ごとにずれていました。
+  How the settings groups are laid out (appendix CP): every group shares the
+  same columns so each row reads **left to right as heading, control,
+  explanation**. Headings at the left edge (`SET_LABEL_X`), controls in the
+  column to their right (`SET_CONTROL_X`), rows `SET_ROW_PITCH` apart, and the
+  heading 5 pixels down so it sits at the control's middle. Up to 2.99 each
+  group placed things by hand, and the headings, controls and explanations
+  started at different places in every group. }
+const
+  SET_LABEL_X = 14;
+  SET_CONTROL_X = 194;
+  SET_ROW_TOP = 8;
+  SET_ROW_PITCH = 36;
+  { 見出しの帯と下の縁のぶん。/ The caption band and the bottom edge. }
+  SET_GROUP_FRAME = 26;
+  { つまみ（`TTrackBar`）の行が余分に取る高さ。つまみは値を上に出すので、
+    棒は行の下寄りに来ます。/ The extra height a slider row takes: the
+    slider shows its value above, so the bar sits low in the row. }
+  SET_SLIDER_EXTRA = 12;
+
+function SetRowTop(Row: Integer): Integer;
+begin
+  Result := SET_ROW_TOP + Row * SET_ROW_PITCH;
+end;
+
+{ 行の見出し。/ A row's heading. }
+function AddRowLabel(Parent: TWinControl; Text: PResString; Row: Integer;
+  Left: Integer = SET_LABEL_X; Down: Integer = 0): TLabel;
+begin
+  Result := AddLabel(Parent, Text, Left, SetRowTop(Row) + 5 + Down);
+end;
+
+{ つまみの行の見出し。**棒の高さにそろえます**——値の数字にそろえると、
+  見出しが棒より上に浮いて見えます。
+  A slider row's heading, **level with the bar**: level with the value above
+  it, the heading floats over the bar. }
+function AddSliderLabel(Parent: TWinControl; Text: PResString; Row: Integer): TLabel;
+begin
+  Result := AddLabel(Parent, Text, SET_LABEL_X, SetRowTop(Row) + 5 + SET_SLIDER_EXTRA);
+end;
+
+{ 行の説明（操作の右の桁）。/ A row's explanation, in the column right of the
+  controls. }
+function AddRowNote(Parent: TWinControl; Text: PResString; Row, Left: Integer): TLabel;
+begin
+  Result := AddLabel(Parent, Text, Left, SetRowTop(Row) + 5);
+end;
+
+{ 印の初めの状態は、通知を繋ぐ**前に**決めます。後で入れると、ほかの部品が
+  まだ無いうちに通知が走ります（起動時に落ちた）。
+  The initial state is set **before** the notification is attached; set
+  afterwards, the handler runs while other controls do not exist yet (it
+  crashed at startup). }
+function AddRowCheck(Parent: TWinControl; Text: PResString; Row: Integer;
+  Left, Width: Integer; Checked: Boolean; OnChange: TNotifyEvent): TCheckBox;
+begin
+  Result := TCheckBox.Create(Parent);
+  Result.Parent := Parent;
+  Result.SetBounds(Left, SetRowTop(Row) + 4, Width, 22);
+  RegisterCaption(Result, Text);
+  Result.Checked := Checked;
+  Result.OnChange := OnChange;
+end;
+
+function AddRowCombo(Parent: TWinControl; Row, Left, Width: Integer): TComboBox;
+begin
+  Result := TComboBox.Create(Parent);
+  Result.Parent := Parent;
+  Result.SetBounds(Left, SetRowTop(Row) + 1, Width, 28);
+  Result.Style := csDropDownList;
+end;
+
+{ 行の数から枠の高さを決めます。**手で足し算しない**——版 2.42〜2.94 のあいだ
+  に何度も、行を足して高さを直し忘れ、最後の行が枠の外へ出ました（教訓
+  10.42・10.36）。/ A group's height from its row count. **Not added up by
+  hand**: between 2.42 and 2.94 rows were added and the height left as it was,
+  time and again, and the last row fell outside the box (lessons 10.42,
+  10.36). }
+function SetGroupHeight(Rows: Integer; Extra: Integer = 0): Integer;
+begin
+  Result := SetRowTop(Rows) + Extra + SET_GROUP_FRAME;
+end;
+
+function AddSettingsGroup(Host: TWinControl; Caption: PResString;
+  Height: Integer): TGroupBox;
+begin
+  Result := TGroupBox.Create(Host);
+  Result.Parent := Host;
+  Result.Height := Height;
+  RegisterCaption(Result, Caption);
+  Stretch(Result, alTop);
+end;
+
+{ 受信の入力（設定の「受信」の先頭。付録 CN・CP）。版 2.98 までは送受信画面の
+  上段にありました。**部品も設定ファイルの鍵も同じで、置き場所だけを移しました。**
+  変えればすぐ効きます（適用の釦は要りません）。
+  The receive input (top of the settings' "Receive" page; appendices CN, CP).
+  Up to 2.98 it sat in the operating screen's top group. **The controls and
+  the settings keys are the same; only their place moved.** A change takes
+  effect at once (no apply button needed). }
+procedure TMainForm.BuildReceiveInputGroup(Host: TWinControl);
+var
+  Group: TGroupBox;
+begin
+  Group := AddSettingsGroup(Host, @RsRxFromInput, SetGroupHeight(4));
+
+  AddRowLabel(Group, @RsRxDevice, 0);
+  FRxDevice := AddRowCombo(Group, 0, SET_CONTROL_X, 400);
+  FRxDevice.OnChange := @RxConfirmSpeedChanged;
+  FRxDeviceRefresh := AddButton(Group, @RsRxRescan, SET_CONTROL_X + 408,
+    SetRowTop(0), 80, @RxDeviceRefreshClick);
+
+  AddRowLabel(Group, @RsSetCaptureRate, 1);
+  FSetCaptureRate := AddRowCombo(Group, 1, SET_CONTROL_X, 200);
+  RegisterItem(FSetCaptureRate, 0, @RsSetRate8000);
+  FSetCaptureRate.Items.Add('11025 Hz');
+  FSetCaptureRate.Items.Add('16000 Hz');
+  FSetCaptureRate.Items.Add('22050 Hz');
+  FSetCaptureRate.Items.Add('44100 Hz');
+  FSetCaptureRate.Items.Add('48000 Hz');
+  FSetCaptureRate.ItemIndex := 0;
+  AddRowNote(Group, @RsSetCaptureNote, 1, SET_CONTROL_X + 216);
+
+  AddRowLabel(Group, @RsRxSettleLabel, 2);
+  FRxConfirmSpeed := AddRowCombo(Group, 2, SET_CONTROL_X, 200);
+  RegisterItem(FRxConfirmSpeed, 0, @RsRxSettleFast);
+  RegisterItem(FRxConfirmSpeed, 1, @RsRxSettleNormal);
+  RegisterItem(FRxConfirmSpeed, 2, @RsRxSettleSure);
+  FRxConfirmSpeed.ItemIndex := 1;
+  FRxConfirmSpeed.OnChange := @RxConfirmSpeedChanged;
+  FRxAntiAlias := AddRowCheck(Group, @RsRxDenoise, 2, SET_CONTROL_X + 216, 260,
+    True, @RxConfirmSpeedChanged);
+
+  AddRowLabel(Group, @RsSetRetention, 3);
+  FSetRetention := AddRowCombo(Group, 3, SET_CONTROL_X, 200);
+  RegisterItem(FSetRetention, 0, @RsSetRetention5);
+  RegisterItem(FSetRetention, 1, @RsSetRetention10);
+  RegisterItem(FSetRetention, 2, @RsSetRetention20);
+  RegisterItem(FSetRetention, 3, @RsSetRetention30);
+  FSetRetention.ItemIndex := 1;
+  FSetRetention.OnChange := @RxRetentionChanged;
+  AddRowNote(Group, @RsSetRetentionNote, 3, SET_CONTROL_X + 216);
+end;
+
+{ 設定のタブ（付録 CP、版 3.01）。**5 つの小さなタブに分けました**: 受信・記録と
+  照合・無線機・画面と音・詳細・診断。版 3.00 までは 1 枚に 8 つの枠を積み、
+  既定の窓で約 3 画面ぶん巻き取る必要がありました（約 1850 画素）。巻き取りの
+  途中で選択欄の上をホイールが通ると、値が変わってしまうこともありました。
+  分けた後は、詳細・診断を除き既定の窓で巻き取りが要りません。
+
+  **部品・処理・設定ファイルの鍵は変えていません。**置き場所と並びだけです。
+
+  The settings tab (appendix CP, version 3.01), **split into five small tabs**:
+  receive, logging and checks, rig, screen and sound, advanced and
+  diagnostics. Up to 3.00 eight groups were stacked on one page that took
+  about three screens of scrolling at the default window (about 1850 pixels),
+  and the wheel passing over a choice on the way changed its value. Split,
+  nothing but the advanced page needs scrolling at the default window.
+
+  **No control, behaviour or settings key changed**: only where things sit
+  and in what order. }
 function TMainForm.BuildSettingsTab: TTabSheet;
 var
   Sheet: TTabSheet;
-  Scroller: TScrollBox;
-  Operating, Advanced, RigGroup, RigAdvGroup, ExtGroup: TGroupBox;
-  SoundGroup, DisplayGroup: TGroupBox;
-  Row, Apply: TPanel;
+  PageRx, PageLog, PageRig, PageScreen, PageAdvanced: TScrollBox;
+  Advanced, RigGroup, RigAdvGroup, ExtGroup: TGroupBox;
+  SoundGroup, DisplayGroup, RecordGroup, CheckGroup, ScreenGroup: TGroupBox;
+  Row: TPanel;
   Choice: TTunerBandwidth;
   Language_: Integer;
 
   { 詳しい接続設定の選択肢。先頭は「機種の既定」（要件 FR-T.5）。
     A choice of the detailed settings; the first item is "the model's default"
     (FR-T.5). }
-  function AddChoice(Parent: TWinControl; Left, Top, Width: Integer): TComboBox;
+  function AddChoice(Parent: TWinControl; Left, Row_, Width: Integer): TComboBox;
   begin
-    Result := TComboBox.Create(Parent);
-    Result.Parent := Parent;
-    Result.SetBounds(Left, Top, Width, 28);
-    Result.Style := csDropDownList;
+    Result := AddRowCombo(Parent, Row_, Left, Width);
     RegisterItem(Result, 0, @RsSetRigBaudDefault);
     Result.ItemIndex := 0;
     Result.OnChange := @SettingChanged;
   end;
 
-  { 技術的な設定は「詳細・診断」側にだけ置きます（要件 FR-G.1）。
-    Technical settings live only under the advanced group (FR-G.1). }
-  { 見出しも控えに載せます（要件 NFR-7.6）。**載せないと、この 4 行だけが
-    前の言語のまま残ります。**
-    The heading is noted down too (NFR-7.6): **without it these four rows alone
-    would stay in the old language.** }
+  function AddRowSpin(Parent: TWinControl; Left, Row_, Min, Max, Value: Integer;
+    OnChange: TNotifyEvent): TSpinEdit;
+  begin
+    Result := AddSpin(Parent, Left, SetRowTop(Row_) + 1, Min, Max, Value, OnChange);
+  end;
+
+  { 技術的な設定は「詳細・診断」側にだけ置きます（要件 FR-G.1）。見出しも控えに
+    載せます（要件 NFR-7.6）。**載せないと、この 4 行だけが前の言語のまま残り
+    ます。**
+    Technical settings live only under the advanced page (FR-G.1). The heading
+    is noted down too (NFR-7.6): **without it these four rows alone would stay
+    in the old language.** }
   function AddPathEdit(Parent: TWinControl; Caption: PResString;
     const Value: string): TEdit;
   begin
@@ -4378,332 +4518,165 @@ var
     Stretch(Result, alTop);
   end;
 
+  { 小さなタブを 1 枚作ります。中身は**巻き取れる欄**に載せます（要件 FR-G.3・
+    教訓 10.36）。窓が小さいときだけ巻き取りが出ます。
+    One small tab. Its content rides in **a scrolling area** (requirement
+    FR-G.3, lesson 10.36); it scrolls only when the window is small. }
+  function AddPage(Caption: PResString; out Page: TTabSheet): TScrollBox;
+  begin
+    Page := FSetPages.AddTabSheet;
+    RegisterCaption(Page, Caption);
+    Result := TScrollBox.Create(Page);
+    Result.Parent := Page;
+    Result.Align := alClient;
+    Result.BorderStyle := bsNone;
+    Result.HorzScrollBar.Visible := False;
+  end;
+
+var
+  Dummy: TTabSheet;
 begin
   Sheet := FPages.AddTabSheet;
   RegisterCaption(Sheet, @RsSetTab);
   Result := Sheet;
 
-  { 設定は**巻き取れる欄**に載せます（要件 FR-G.3・教訓 10.36）。
+  FSetPages := TPageControl.Create(Sheet);
+  FSetPages.Parent := Sheet;
+  FSetPages.Align := alClient;
+  FSetPages.OnChange := @SetPagesChanged;
 
-    運用設定の枠は、設定を足すたびに背が伸びます。版 2.42 から 2.44 のあいだに
-    210 から 300 へ伸び、**その分だけ診断情報の欄が押し出されて、既定の窓では
-    読めなくなっていました。**画面を撮って気づきました。
+  { ════ 受信 ════ / Receive
+    入力装置が使えないとき、送受信画面の「入力の設定...」から**最初に来る場所**
+    なので、先頭のタブの先頭に置きます（付録 CN）。
+    The first place reached from the operating screen's "input settings..."
+    when the device does not work, so it leads the first tab (appendix CN). }
+  PageRx := AddPage(@RsSetPageRx, FSetPageRx);
+  BuildReceiveInputGroup(PageRx);
 
-    窓を高くしても、次に設定を足せば同じことが起きます。**足し算で決まる高さに
-    固定の窓で付き合わない。**巻き取れるようにして、どちらの枠も本来の高さを
-    保てるようにします。
-
-    The settings ride in **a scrolling area** (requirement FR-G.3, lesson 10.36).
-
-    The operating group grows taller with every setting added: between versions
-    2.42 and 2.44 it went from 210 to 300, and **the diagnostics panel was
-    pushed out by exactly that much until it could not be read at the default
-    window size.** A screenshot is what showed it.
-
-    A taller window would only postpone it -- the next setting would do the same.
-    **A height that grows by addition is not something a fixed window can keep
-    up with.** Scrolling lets both groups keep the height they need. }
-  Scroller := TScrollBox.Create(Sheet);
-  Scroller.Parent := Sheet;
-  Scroller.Align := alClient;
-  Scroller.BorderStyle := bsNone;
-  Scroller.HorzScrollBar.Visible := False;
-
-  { 受信の入力（付録 CN）。運用設定の上に置きます。**入力装置が使えないとき、
-    送受信画面の「入力の設定...」から来て最初に見える場所**だからです。
-    The receive input (appendix CN), above the operating settings: **it is
-    the first thing seen when arriving from the operating screen's "input
-    settings" button** while the device does not work. }
-  BuildReceiveInputGroup(Scroller);
-
-  { ── 運用設定：普段さわるもの。技術用語を置かない ──
-    Operating settings: what an operator actually changes. No jargon here. }
-  Operating := TGroupBox.Create(Scroller);
-  Operating.Parent := Scroller;
-  { 高さは、中に置いた行の合計です。**足りなければ、最後に置いた行が枠の外へ
-    出ます。**呼出符号の一覧（要件 FR-K.9）を足したとき、実際にそうなりました
-    ——画面を撮って分かりました（教訓 10.42・10.36）。最後の行は上端 178 から
-    22 画素なので、枠は 210 では足りません。
-    The height is the sum of the rows put inside: **too little and the last row
-    added falls outside the box.** That is what happened when the roster row
-    (requirement FR-K.9) went in, and a screenshot is what showed it (lessons
-    10.42, 10.36). The last row sits at 178 and is 22 tall, so 210 is not
-    enough. 前置符字表（要件 FR-K.12）を足したので、さらに 32 画素。
-    The prefix table row (requirement FR-K.12) adds another 32. }
-  { 画面の言語の行（要件 NFR-7.6）を足したので 40 画素ぶん高くします。
-    The language row (requirement NFR-7.6) adds another 40. }
-  { 総務省の検索の行と説明（付録 CM）で 112 画素。
-    The ministry search row and its explanation (appendix CM) add 112. }
-  Operating.Height := 452;
-  RegisterCaption(Operating, @RsSetOperating);
-  Stretch(Operating, alTop);
-  { 幅が決まるたびに、置き場所を収め直します（`FitPath`）。
-    Each time the width settles, the locations are fitted again (`FitPath`). }
-  Operating.OnResize := @OperatingResized;
-
-  AddLabel(Operating, @RsSetCaptureRate, 14, 8);
-  FSetCaptureRate := TComboBox.Create(Operating);
-  FSetCaptureRate.Parent := Operating;
-  FSetCaptureRate.SetBounds(14, 30, 200, 28);
-  FSetCaptureRate.Style := csDropDownList;
-  RegisterItem(FSetCaptureRate, 0, @RsSetRate8000);
-  FSetCaptureRate.Items.Add('11025 Hz');
-  FSetCaptureRate.Items.Add('16000 Hz');
-  FSetCaptureRate.Items.Add('22050 Hz');
-  FSetCaptureRate.Items.Add('44100 Hz');
-  FSetCaptureRate.Items.Add('48000 Hz');
-  FSetCaptureRate.ItemIndex := 0;
-  AddLabel(Operating, @RsSetCaptureNote,
-    232, 36);
-
-  AddLabel(Operating, @RsSetRetention, 14, 62);
-  FSetRetention := TComboBox.Create(Operating);
-  FSetRetention.Parent := Operating;
-  FSetRetention.SetBounds(132, 58, 110, 28);
-  FSetRetention.Style := csDropDownList;
-  RegisterItem(FSetRetention, 0, @RsSetRetention5);
-  RegisterItem(FSetRetention, 1, @RsSetRetention10);
-  RegisterItem(FSetRetention, 2, @RsSetRetention20);
-  RegisterItem(FSetRetention, 3, @RsSetRetention30);
-  FSetRetention.ItemIndex := 1;
-  FSetRetention.OnChange := @RxRetentionChanged;
-  AddLabel(Operating, @RsSetRetentionNote, 260, 62);
-
-  FSetJournal := TCheckBox.Create(Operating);
-  FSetJournal.Parent := Operating;
-  FSetJournal.SetBounds(14, 90, 300, 22);
-  RegisterCaption(FSetJournal, @RsSetJournal);
-  FSetJournal.Checked := True;
-  FSetJournal.OnChange := @RxJournalChanged;
-  AddLabel(Operating, @RsSetJournalNote, 330, 92);
-
-  { 受信音の録音（要件 FR-E.8）。受信テキストの記録のすぐ下に置きます。**同じ
-    運用の、同じ「残す」という選択**であり、片方が設定タブで片方が受信タブに
-    あると、どちらを入れたのか覚えていられません。
-
-    既定は入れません。**書くのは利用者のディスクです。**聴き直し（要件 FR-E.10）
-    は記憶の中だけで済みますが、こちらは残ります。
-
-    Recording the received audio (requirement FR-E.8), directly under the
-    transcript journal: **the same session and the same choice to keep
-    something**, and split between two tabs there would be no remembering which
-    was switched on.
-
-    It is off by default. **What is written is the operator's own disk**: replay
-    (requirement FR-E.10) stays in memory, while this stays. }
-  FSetRecord := TCheckBox.Create(Operating);
-  FSetRecord.Parent := Operating;
-  FSetRecord.SetBounds(14, 118, 300, 22);
-  RegisterCaption(FSetRecord, @RsSetRecord);
-  FSetRecord.Checked := False;
-  FSetRecord.OnChange := @RxRecordChanged;
-  FSetRecordInfo := AddLabel(Operating, '', 330, 120);
-
-  { 交信記録の出し入れ。運用者が別のソフトで積み上げた記録を取り込めば、その場で
-    「交信済み」が効きます（要件 FR-E.3・FR-J.4）。
-    Taking the contact log in and out. Importing a log an operator built in
-    another program makes the worked marks work at once (requirements FR-E.3 and
-    FR-J.4). }
-  AddLabel(Operating, @RsSetLog, 14, 150);
-  FSetLogImport := AddButton(Operating, @RsSetAdifImport, 120, 146, 150,
-    @SetLogImportClick);
-  FSetLogExport := AddButton(Operating, @RsSetAdifExport, 278, 146, 150,
-    @SetLogExportClick);
-  FSetLogInfo := AddLabel(Operating, '', 440, 150);
-
-  { 手元の呼出符号一覧（要件 FR-K.9）。**同梱はしません。**配られている一覧を
-    再配布してよいかが分からないためです（未解決 #15）。読むのは利用者が自分で
-    置いたファイルだけで、**通信は一切しません。**
-
-    A locally held call sign roster (requirement FR-K.9). **Nothing is
-    bundled**: whether the distributed rosters may be redistributed is not known
-    (open question #15). Only a file the operator put there is read, and
-    **nothing is ever sent.** }
-  AddLabel(Operating, @RsSetRoster, 14, 182);
-  FSetRoster := AddButton(Operating, @RsSetChooseFile, 120, 178, 150,
-    @SetRosterClick);
-  FSetRosterClear := AddButton(Operating, @RsSetDontUse, 278, 178, 150,
-    @SetRosterClearClick);
-  FSetRosterInfo := AddLabel(Operating, '', 440, 182);
-
-  { 国別前置符字表（要件 FR-K.12）。**呼出符号の一覧より小さく、更新も稀**
-    なので、別のファイルとして持ちます。これも同梱しません。
-    The country prefix table (requirement FR-K.12). **Smaller than the call sign
-    roster and rarely updated**, so it is a file of its own; not bundled
-    either. }
-  AddLabel(Operating, @RsSetPrefixes, 14, 214);
-  FSetPrefixes := AddButton(Operating, @RsSetChooseFile, 120, 210, 150,
-    @SetPrefixesClick);
-  FSetPrefixesClear := AddButton(Operating, @RsSetDontUse, 278, 210, 150,
-    @SetPrefixesClearClick);
-  FSetPrefixesInfo := AddLabel(Operating, '', 440, 214);
-
-  { 総務省の無線局等情報検索（要件 FR-K.3〜K.8、付録 CM）。**既定は切で、
-    有効にする前に何を送り何を受け取るかが見えるように、説明を常に出して
-    おきます。**取得元の明示（規約第 3 条）も同じ場所に置きます。通信の部品が
-    無い版では選べません。
-    The ministry's radio station search (requirements FR-K.3-K.8, appendix
-    CM). **Off by default, with the explanation always on show so that what
-    is sent and what comes back is seen before switching it on**; the source
-    statement of article 3 of the terms sits in the same place. A version
-    without the transport does not offer it. }
-  FSetLicence := TCheckBox.Create(Operating);
-  FSetLicence.Parent := Operating;
-  FSetLicence.SetBounds(14, 242, 420, 22);
-  RegisterCaption(FSetLicence, @RsSetLicence);
-  FSetLicence.Checked := False;
-  FSetLicence.Enabled := LookupTransportBuilt;
-  FSetLicence.OnChange := @SetLicenceChanged;
-  FSetLicenceInfo := AddLabel(Operating, '', 440, 244);
-  FSetLicenceNote := AddLabel(Operating, @RsSetLicenceNote, 34, 268);
-  FSetLicenceNote.AutoSize := False;
-  FSetLicenceNote.WordWrap := True;
-  FSetLicenceNote.SetBounds(34, 268, 600, 40);
-  { 規約第 3 条の文言は、英語の画面でも日本語のままです（規約の文言なので
-    訳しません。`.po` の訳も原文と同じ）。登録してあるので、言語の往復の試験は
-    「意図して残した日本語」として扱います（「画面の言葉 / Language」と同じ）。
-    The wording of article 3 stays Japanese on the English screen too (it is
-    the terms' own wording, so it is not translated; the `.po` carries the
-    original). Being registered, the language round trip treats it as
-    deliberate Japanese, like "画面の言葉 / Language". }
-  FSetLicenceSource := AddLabel(Operating, @RsLicenceAttribution, 34, 310);
-  FSetLicenceSource.AutoSize := False;
-  FSetLicenceSource.WordWrap := True;
-  FSetLicenceSource.SetBounds(34, 310, 600, 40);
-
-  { 高コントラスト表示（要件 NFR-5.5）。**この製品が想定する利用者は老眼を
-    抱える運用者**なので、薄い文字は読めないことがあります。
-    High contrast (requirement NFR-5.5): **the operators this product is for
-    have presbyopia**, and faint text can simply be unreadable to them. }
-  FSetHighContrast := TCheckBox.Create(Operating);
-  FSetHighContrast.Parent := Operating;
-  FSetHighContrast.SetBounds(14, 356, 420, 22);
-  RegisterCaption(FSetHighContrast, @RsSetHighContrast);
-  FSetHighContrast.Checked := False;
-  FSetHighContrast.OnChange := @HighContrastChanged;
-  AddLabel(Operating, @RsSetHighContrastNote,
-    440, 358);
-
-  { 画面の言語（要件 NFR-7.6）。**再起動を求めません。**押したその場で変わります。
-
-    選択肢の名前は、それぞれの言語で書いてあります（`UiLangCaption`）。
-    「English」を「英語」と出すと、英語しか読めない人には選べません。
-
-    **この選択肢は訳しません。**訳すと、読めない言語で書かれた選択肢の中から
-    読める言語を探すことになります。
-
-    The language of the screen (requirement NFR-7.6). **No restart is asked
-    for**: it changes as it is chosen.
-
-    Each choice is named in its own language (`UiLangCaption`): shown as `英語`,
-    `English` could not be found by someone who reads only English.
-
-    **These choices are not translated**, or the operator would be hunting for a
-    language they can read among names written in one they cannot. }
-  AddLabel(Operating, @RsSetLanguage, 14, 390);
-  FSetLanguage := TComboBox.Create(Operating);
-  FSetLanguage.Parent := Operating;
-  FSetLanguage.SetBounds(200, 386, 160, 28);
-  FSetLanguage.Style := csDropDownList;
-  for Language_ := Low(UI_LANG_KEYS) to High(UI_LANG_KEYS) do
-    FSetLanguage.Items.Add(UiLangCaption(Language_));
-  FSetLanguage.ItemIndex := UI_LANG_DEFAULT;
-  FSetLanguage.OnChange := @SetLanguageChanged;
-  FSetLanguageInfo := AddLabel(Operating, '', 380, 390);
-
-  { ── 練習で鳴らす音 ──（版 2.85 で送信タブから移した。付録 CG）
-    PC で鳴らす音（受信練習・文から作る音）にだけ効きます。**無線機の側音は
-    無線機が決めます**ので、交信には関わりません。文字速度は交信中に変えるので
-    送信欄に残しました。
-    The sound played on the PC (moved from the transmit tab in 2.85; appendix
-    CG). It affects only what the PC plays -- copy practice and sound made from
-    text. **The rig decides its own sidetone**, so a contact is not affected.
-    The character speed is changed during contacts and stays in the send
-    panel. }
-  SoundGroup := TGroupBox.Create(Scroller);
-  SoundGroup.Parent := Scroller;
-  SoundGroup.Height := 92;
-  RegisterCaption(SoundGroup, @RsSetPracticeSound);
-  Stretch(SoundGroup, alTop);
-  AddLabel(SoundGroup, @RsTxTextWpm, 14, 6);
-  FTxTextWpm := AddSpin(SoundGroup, 14, 26, 5, 60, 20, @TxOptionsChanged);
-  AddLabel(SoundGroup, @RsTxToneHz, 150, 6);
-  FTxToneHz := AddSpin(SoundGroup, 150, 26, 300, 1500, 700, @TxOptionsChanged);
-  AddLabel(SoundGroup, @RsTxVolume, 270, 6);
-  FTxVolume := TTrackBar.Create(SoundGroup);
-  FTxVolume.Parent := SoundGroup;
-  FTxVolume.SetBounds(270, 30, 160, 36);
-  FTxVolume.Min := 0;
-  FTxVolume.Max := 100;
-  FTxVolume.Position := 60;
-  FTxVolume.OnChange := @TxOptionsChanged;
-
-  { ── 受信テキストの表示 ──（版 2.85 で送受信画面から移した。付録 CG）
-    一度決めたら変えない好みなので、交信中の画面から外して、送信欄に高さを
-    回しました。
+  { 受信テキストの表示（版 2.85 で送受信画面から移した。付録 CG）。一度決めたら
+    変えない好みです。
     How the received text is shown (moved from the operating screen in 2.85;
-    appendix CG): preferences set once, taken off the contact screen so their
-    height could go to the send panel. }
-  DisplayGroup := TGroupBox.Create(Scroller);
-  DisplayGroup.Parent := Scroller;
-  DisplayGroup.Height := 92;
-  RegisterCaption(DisplayGroup, @RsSetRxDisplay);
-  Stretch(DisplayGroup, alTop);
-  FRxShowDoubt := TCheckBox.Create(DisplayGroup);
-  FRxShowDoubt.Parent := DisplayGroup;
-  FRxShowDoubt.SetBounds(14, 8, 220, 22);
+    appendix CG): preferences set once. }
+  DisplayGroup := AddSettingsGroup(PageRx, @RsSetRxDisplay,
+    SetGroupHeight(4, SET_SLIDER_EXTRA));
   { **「正しさ」とは言いません**（要件 FR-C.5）。この値は「モデルがどれだけ
     迷わなかったか」であって、当たっているかどうかではありません。
     **Never "correctness"** (requirement FR-C.5): the value is how little the
     model wavered, not whether it was right. }
-  RegisterCaption(FRxShowDoubt, @RsRxShade);
-  FRxShowDoubt.Checked := True;
-  FRxShowDoubt.OnChange := @RxDisplayChanged;
-  AddLabel(DisplayGroup, @RsRxShadeAmount, 250, 10);
+  FRxShowDoubt := AddRowCheck(DisplayGroup, @RsRxShade, 0, SET_LABEL_X, 300,
+    True, @RxDisplayChanged);
+  AddSliderLabel(DisplayGroup, @RsRxShadeAmount, 1);
   FRxDoubtStrength := TTrackBar.Create(DisplayGroup);
   FRxDoubtStrength.Parent := DisplayGroup;
-  FRxDoubtStrength.SetBounds(310, 2, 120, 30);
+  FRxDoubtStrength.SetBounds(SET_CONTROL_X, SetRowTop(1), 200, 36);
   FRxDoubtStrength.Min := 0;
   FRxDoubtStrength.Max := 100;
   FRxDoubtStrength.Position := 100;
   FRxDoubtStrength.ShowSelRange := False;
   FRxDoubtStrength.OnChange := @RxDisplayChanged;
-  AddLabel(DisplayGroup, @RsRxFontSize, 450, 10);
-  FRxFontSize := AddSpin(DisplayGroup, 560, 6, 9, 32, 14, @RxDisplayChanged);
+  AddRowLabel(DisplayGroup, @RsRxFontSize, 2, SET_LABEL_X, SET_SLIDER_EXTRA);
+  FRxFontSize := AddSpin(DisplayGroup, SET_CONTROL_X,
+    SetRowTop(2) + SET_SLIDER_EXTRA + 1, 9, 32, 14, @RxDisplayChanged);
   { 読んだ文字をウォーターフォールに重ねるか（要件 FR-D.6）。重ねた文字は信号を
     隠すので、切れるようにしてあります。
     Whether to lay the characters over the waterfall (requirement FR-D.6). They
     cover the signals, so they can be turned off. }
-  FRxAlign := TCheckBox.Create(DisplayGroup);
-  FRxAlign.Parent := DisplayGroup;
-  FRxAlign.SetBounds(14, 42, 260, 24);
-  RegisterCaption(FRxAlign, @RsRxOverlay);
-  FRxAlign.Checked := True;
-  FRxAlign.OnChange := @RxDisplayChanged;
+  FRxAlign := AddRowCheck(DisplayGroup, @RsRxOverlay, 3, SET_LABEL_X, 300,
+    True, @RxDisplayChanged);
+  FRxAlign.Top := FRxAlign.Top + SET_SLIDER_EXTRA;
 
-  { ── 無線機（送信）: 要件 FR-T ──
-    The rig (sending): requirement FR-T. }
-  RigGroup := TGroupBox.Create(Scroller);
-  RigGroup.Parent := Scroller;
-  RegisterCaption(RigGroup, @RsSetRigGroup);
-  { 最後の行（上端 222、高さ 22）が枠の中に収まる高さ。262 では 100 dpi の
-    丸めで 2 画素はみ出していました（付録 CH）。
-    Tall enough for the last row (top 222, 22 high): at 262 it stuck out by
-    two pixels after 100 dpi rounding (appendix CH). }
-  RigGroup.Height := 274;
-  Stretch(RigGroup, alTop);
-  AddLabel(RigGroup, @RsSetRigModel, 14, 10);
-  FSetRigModel := AddSpin(RigGroup, 100, 6, 0, 99999, 0, @SettingChanged);
-  AddLabel(RigGroup, @RsSetRigPort, 220, 10);
+  { ════ 記録と照合 ════ / Logging and checks }
+  PageLog := AddPage(@RsSetPageLog, Dummy);
+
+  { 残すもの: 受信テキスト・受信音・交信記録。説明と置き場所は、どの行も同じ
+    桁（操作の右）から始めます。
+    What is kept: the text, the audio, the contact log. Every row's
+    explanation or location starts in the same column, right of the
+    controls. }
+  RecordGroup := AddSettingsGroup(PageLog, @RsSetRecordGroup, SetGroupHeight(3));
+  RecordGroup.OnResize := @OperatingResized;
+  FSetJournal := AddRowCheck(RecordGroup, @RsSetJournal, 0, SET_LABEL_X, 360,
+    True, @RxJournalChanged);
+  AddRowNote(RecordGroup, @RsSetJournalNote, 0, SET_CONTROL_X + 316);
+  { 受信音の録音（要件 FR-E.8）。既定は入れません。**書くのは利用者のディスク
+    です。**
+    Recording the received audio (requirement FR-E.8), off by default: **what
+    is written is the operator's own disk.** }
+  FSetRecord := AddRowCheck(RecordGroup, @RsSetRecord, 1, SET_LABEL_X, 360,
+    False, @RxRecordChanged);
+  FSetRecordInfo := AddLabel(RecordGroup, '', SET_CONTROL_X + 316, SetRowTop(1) + 5);
+  { 交信記録の出し入れ。別のソフトで積み上げた記録を取り込めば、その場で
+    「交信済み」が効きます（要件 FR-E.3・FR-J.4）。
+    Taking the contact log in and out: importing a log built in another
+    program makes the worked marks work at once (FR-E.3, FR-J.4). }
+  AddRowLabel(RecordGroup, @RsSetLog, 2);
+  FSetLogImport := AddButton(RecordGroup, @RsSetAdifImport, SET_CONTROL_X,
+    SetRowTop(2), 150, @SetLogImportClick);
+  FSetLogExport := AddButton(RecordGroup, @RsSetAdifExport, SET_CONTROL_X + 158,
+    SetRowTop(2), 150, @SetLogExportClick);
+  FSetLogInfo := AddLabel(RecordGroup, '', SET_CONTROL_X + 316, SetRowTop(2) + 5);
+
+  { 呼出符号を確かめる材料: 手元の一覧（要件 FR-K.9。同梱しない、未解決 #15）・
+    国別前置符字表（FR-K.12）・総務省の検索（FR-K.3〜K.8、付録 CM）。**既定は
+    切で、何を送り何を受け取るかの説明を常に出しておきます。**取得元の明示
+    （規約第 3 条）も同じ場所に置きます。
+    What call signs are checked against: the local roster (FR-K.9; not
+    bundled, open question #15), the prefix table (FR-K.12) and the ministry
+    search (FR-K.3-K.8, appendix CM). **Off by default, with what is sent and
+    what comes back always on show**, and the source statement of article 3
+    of the terms beside it. }
+  CheckGroup := AddSettingsGroup(PageLog, @RsSetCallCheckGroup,
+    SetGroupHeight(3, 92));
+  CheckGroup.OnResize := @OperatingResized;
+  AddRowLabel(CheckGroup, @RsSetRoster, 0);
+  FSetRoster := AddButton(CheckGroup, @RsSetChooseFile, SET_CONTROL_X,
+    SetRowTop(0), 150, @SetRosterClick);
+  FSetRosterClear := AddButton(CheckGroup, @RsSetDontUse, SET_CONTROL_X + 158,
+    SetRowTop(0), 150, @SetRosterClearClick);
+  FSetRosterInfo := AddLabel(CheckGroup, '', SET_CONTROL_X + 316, SetRowTop(0) + 5);
+  AddRowLabel(CheckGroup, @RsSetPrefixes, 1);
+  FSetPrefixes := AddButton(CheckGroup, @RsSetChooseFile, SET_CONTROL_X,
+    SetRowTop(1), 150, @SetPrefixesClick);
+  FSetPrefixesClear := AddButton(CheckGroup, @RsSetDontUse, SET_CONTROL_X + 158,
+    SetRowTop(1), 150, @SetPrefixesClearClick);
+  FSetPrefixesInfo := AddLabel(CheckGroup, '', SET_CONTROL_X + 316, SetRowTop(1) + 5);
+  FSetLicence := AddRowCheck(CheckGroup, @RsSetLicence, 2, SET_LABEL_X, 480,
+    False, @SetLicenceChanged);
+  FSetLicence.Enabled := LookupTransportBuilt;
+  FSetLicenceInfo := AddLabel(CheckGroup, '', SET_CONTROL_X + 316, SetRowTop(2) + 5);
+  FSetLicenceNote := AddLabel(CheckGroup, @RsSetLicenceNote, 34, SetRowTop(3));
+  FSetLicenceNote.AutoSize := False;
+  FSetLicenceNote.WordWrap := True;
+  FSetLicenceNote.SetBounds(34, SetRowTop(3), 600, 40);
+  { 規約第 3 条の文言は、英語の画面でも日本語のままです（規約の文言なので
+    訳しません）。登録してあるので、言語の往復の試験は「意図して残した日本語」
+    として扱います。
+    The wording of article 3 stays Japanese on the English screen too (the
+    terms' own wording); being registered, the language round trip treats it
+    as deliberate Japanese. }
+  FSetLicenceSource := AddLabel(CheckGroup, @RsLicenceAttribution, 34,
+    SetRowTop(3) + 46);
+  FSetLicenceSource.AutoSize := False;
+  FSetLicenceSource.WordWrap := True;
+  FSetLicenceSource.SetBounds(34, SetRowTop(3) + 46, 600, 40);
+
+  { ════ 無線機 ════ / Rig: requirement FR-T }
+  PageRig := AddPage(@RsSetPageRig, Dummy);
+  { 機種・口・速度は 1 行ずつ、見出しの桁と操作の桁をそろえます。定型の欄は
+    見出しが長いので、見出しの行の下に置きます。
+    Model, port and speed get a row each, on the shared columns. The
+    templates' heading is long, so the box sits under its own heading row. }
+  RigGroup := AddSettingsGroup(PageRig, @RsSetRigGroup, SetGroupHeight(5, 112));
+  AddRowLabel(RigGroup, @RsSetRigModel, 0);
+  FSetRigModel := AddRowSpin(RigGroup, SET_CONTROL_X, 0, 0, 99999, 0, @SettingChanged);
+  FSetRigModel.Width := 100;
+  AddRowLabel(RigGroup, @RsSetRigPort, 0, SET_CONTROL_X + 120);
   FSetRigPort := TEdit.Create(RigGroup);
   FSetRigPort.Parent := RigGroup;
-  FSetRigPort.SetBounds(260, 6, 200, 28);
+  FSetRigPort.SetBounds(SET_CONTROL_X + 160, SetRowTop(0) + 1, 200, 28);
   FSetRigPort.OnChange := @SettingChanged;
-  AddLabel(RigGroup, @RsSetRigBaud, 476, 10);
-  FSetRigBaud := TComboBox.Create(RigGroup);
-  FSetRigBaud.Parent := RigGroup;
-  FSetRigBaud.SetBounds(560, 6, 140, 28);
-  FSetRigBaud.Style := csDropDownList;
+  AddRowLabel(RigGroup, @RsSetRigBaud, 0, SET_CONTROL_X + 380);
+  FSetRigBaud := AddRowCombo(RigGroup, 0, SET_CONTROL_X + 460, 140);
   RegisterItem(FSetRigBaud, 0, @RsSetRigBaudDefault);
   FSetRigBaud.Items.Add('4800');
   FSetRigBaud.Items.Add('9600');
@@ -4713,135 +4686,152 @@ begin
   FSetRigBaud.Items.Add('115200');
   FSetRigBaud.ItemIndex := 0;
   FSetRigBaud.OnChange := @SettingChanged;
-  AddLabel(RigGroup, @RsSetRigHint, 14, 40);
-  AddLabel(RigGroup, @RsSetMyCall, 14, 70);
+  AddLabel(RigGroup, @RsSetRigHint, SET_CONTROL_X, SetRowTop(1) + 2);
+  AddRowLabel(RigGroup, @RsSetMyCall, 2);
   FSetMyCall := TEdit.Create(RigGroup);
   FSetMyCall.Parent := RigGroup;
-  FSetMyCall.SetBounds(120, 66, 140, 28);
+  FSetMyCall.SetBounds(SET_CONTROL_X, SetRowTop(2) + 1, 140, 28);
   FSetMyCall.CharCase := ecUppercase;
   FSetMyCall.OnChange := @SettingChanged;
-  FSetMuteRx := TCheckBox.Create(RigGroup);
-  FSetMuteRx.Parent := RigGroup;
-  FSetMuteRx.SetBounds(300, 68, 400, 22);
-  RegisterCaption(FSetMuteRx, @RsSetMuteRx);
-  FSetMuteRx.Checked := True;
-  FSetMuteRx.OnChange := @SettingChanged;
-  AddLabel(RigGroup, @RsSetTemplates, 14, 100);
+  FSetMuteRx := AddRowCheck(RigGroup, @RsSetMuteRx, 2, SET_CONTROL_X + 160, 400,
+    True, @SettingChanged);
+  FSetRigAutoConnect := AddRowCheck(RigGroup, @RsSetRigAutoConnect, 3,
+    SET_LABEL_X, 760, False, @SettingChanged);
+  FSetRigUseFreq := AddRowCheck(RigGroup, @RsSetRigUseFreq, 4, SET_LABEL_X, 760,
+    True, @SettingChanged);
+  AddLabel(RigGroup, @RsSetTemplates, SET_LABEL_X, SetRowTop(5) + 5);
   FSetTemplates := TMemo.Create(RigGroup);
   FSetTemplates.Parent := RigGroup;
-  FSetTemplates.SetBounds(14, 120, 700, 70);
+  FSetTemplates.SetBounds(SET_LABEL_X, SetRowTop(5) + 28, 760, 76);
   FSetTemplates.ScrollBars := ssAutoVertical;
   FSetTemplates.OnChange := @SetTemplatesChanged;
-  FSetRigAutoConnect := TCheckBox.Create(RigGroup);
-  FSetRigAutoConnect.Parent := RigGroup;
-  FSetRigAutoConnect.SetBounds(14, 196, 700, 22);
-  RegisterCaption(FSetRigAutoConnect, @RsSetRigAutoConnect);
-  FSetRigAutoConnect.OnChange := @SettingChanged;
-  FSetRigUseFreq := TCheckBox.Create(RigGroup);
-  FSetRigUseFreq.Parent := RigGroup;
-  FSetRigUseFreq.SetBounds(14, 222, 700, 22);
-  RegisterCaption(FSetRigUseFreq, @RsSetRigUseFreq);
-  FSetRigUseFreq.Checked := True;
-  FSetRigUseFreq.OnChange := @SettingChanged;
 
-  { ── 無線機の詳しい接続設定: 要件 FR-T.5 ──
-    **普通は既定のまま。**「機種の既定」と 0 ms は Hamlib へ渡しません。
-    項目の並びは `DeepCW.RigConfig` の選択肢と同じ順です。
+  { 無線機の詳しい接続設定（要件 FR-T.5）。**普通は既定のまま。**「機種の既定」と
+    0 ms は Hamlib へ渡しません。3 つの組を同じ桁に並べます。
     Detailed rig connection settings (FR-T.5). **Normally left at the
-    defaults**; "the model's default" and 0 ms are not passed to Hamlib. The
-    items follow the order of the choices in `DeepCW.RigConfig`. }
-  RigAdvGroup := TGroupBox.Create(Scroller);
-  RigAdvGroup.Parent := Scroller;
-  RegisterCaption(RigAdvGroup, @RsSetRigAdvGroup);
-  RigAdvGroup.Height := 214;
-  Stretch(RigAdvGroup, alTop);
-  AddLabel(RigAdvGroup, @RsSetRigCivAddr, 14, 10);
+    defaults**; "the model's default" and 0 ms are not passed to Hamlib.
+    Three pairs per row, on shared columns. }
+  RigAdvGroup := AddSettingsGroup(PageRig, @RsSetRigAdvGroup, SetGroupHeight(4, 52));
+  AddRowLabel(RigAdvGroup, @RsSetRigCivAddr, 0);
   FSetRigCivAddr := TEdit.Create(RigAdvGroup);
   FSetRigCivAddr.Parent := RigAdvGroup;
-  FSetRigCivAddr.SetBounds(140, 6, 60, 28);
+  FSetRigCivAddr.SetBounds(SET_CONTROL_X, SetRowTop(0) + 1, 60, 28);
   FSetRigCivAddr.CharCase := ecUppercase;
   FSetRigCivAddr.MaxLength := 2;
   FSetRigCivAddr.OnChange := @SettingChanged;
-  AddLabel(RigAdvGroup, @RsSetRigDataBits, 230, 10);
-  FSetRigDataBits := AddChoice(RigAdvGroup, 340, 6, 120);
+  AddRowLabel(RigAdvGroup, @RsSetRigDataBits, 0, SET_CONTROL_X + 190);
+  FSetRigDataBits := AddChoice(RigAdvGroup, SET_CONTROL_X + 320, 0, 140);
   FSetRigDataBits.Items.Add('7');
   FSetRigDataBits.Items.Add('8');
-  AddLabel(RigAdvGroup, @RsSetRigStopBits, 490, 10);
-  FSetRigStopBits := AddChoice(RigAdvGroup, 610, 6, 120);
+  AddRowLabel(RigAdvGroup, @RsSetRigStopBits, 0, SET_CONTROL_X + 480);
+  FSetRigStopBits := AddChoice(RigAdvGroup, SET_CONTROL_X + 600, 0, 140);
   FSetRigStopBits.Items.Add('1');
   FSetRigStopBits.Items.Add('2');
-  AddLabel(RigAdvGroup, @RsSetRigParity, 14, 44);
-  FSetRigParity := AddChoice(RigAdvGroup, 140, 40, 130);
+  AddRowLabel(RigAdvGroup, @RsSetRigParity, 1);
+  FSetRigParity := AddChoice(RigAdvGroup, SET_CONTROL_X, 1, 160);
   RegisterItem(FSetRigParity, 1, @RsSetRigParityNone);
   RegisterItem(FSetRigParity, 2, @RsSetRigParityEven);
   RegisterItem(FSetRigParity, 3, @RsSetRigParityOdd);
-  AddLabel(RigAdvGroup, @RsSetRigHandshake, 300, 44);
-  FSetRigHandshake := AddChoice(RigAdvGroup, 410, 40, 160);
+  AddRowLabel(RigAdvGroup, @RsSetRigHandshake, 1, SET_CONTROL_X + 190);
+  FSetRigHandshake := AddChoice(RigAdvGroup, SET_CONTROL_X + 320, 1, 140);
   RegisterItem(FSetRigHandshake, 1, @RsSetRigHandshakeNone);
   FSetRigHandshake.Items.Add('XON/XOFF');
   RegisterItem(FSetRigHandshake, 3, @RsSetRigHandshakeHardware);
-  AddLabel(RigAdvGroup, 'DTR', 14, 78);
-  FSetRigDtr := AddChoice(RigAdvGroup, 140, 74, 130);
+  AddLabel(RigAdvGroup, 'DTR', SET_LABEL_X, SetRowTop(2) + 5);
+  FSetRigDtr := AddChoice(RigAdvGroup, SET_CONTROL_X, 2, 160);
   FSetRigDtr.Items.Add('ON');
   FSetRigDtr.Items.Add('OFF');
-  AddLabel(RigAdvGroup, 'RTS', 300, 78);
-  FSetRigRts := AddChoice(RigAdvGroup, 410, 74, 160);
+  AddLabel(RigAdvGroup, 'RTS', SET_CONTROL_X + 190, SetRowTop(2) + 5);
+  FSetRigRts := AddChoice(RigAdvGroup, SET_CONTROL_X + 320, 2, 140);
   FSetRigRts.Items.Add('ON');
   FSetRigRts.Items.Add('OFF');
-  AddLabel(RigAdvGroup, @RsSetRigTimeout, 14, 112);
-  FSetRigTimeout := AddSpin(RigAdvGroup, 140, 108, 0, RIG_TIMEOUT_MAX, 0, @SettingChanged);
-  FSetRigTimeout.Width := 90;
-  AddLabel(RigAdvGroup, @RsSetRigWriteDelay, 250, 112);
-  FSetRigWriteDelay := AddSpin(RigAdvGroup, 380, 108, 0, RIG_DELAY_MAX, 0, @SettingChanged);
-  AddLabel(RigAdvGroup, @RsSetRigPostDelay, 480, 112);
-  FSetRigPostDelay := AddSpin(RigAdvGroup, 610, 108, 0, RIG_DELAY_MAX, 0, @SettingChanged);
-  AddLabel(RigAdvGroup, @RsSetRigAdvHint, 14, 146);
-  AddLabel(RigAdvGroup, @RsSetRigLineWarn, 14, 170);
+  AddRowLabel(RigAdvGroup, @RsSetRigTimeout, 3);
+  FSetRigTimeout := AddRowSpin(RigAdvGroup, SET_CONTROL_X, 3, 0, RIG_TIMEOUT_MAX, 0,
+    @SettingChanged);
+  FSetRigTimeout.Width := 100;
+  AddRowLabel(RigAdvGroup, @RsSetRigWriteDelay, 3, SET_CONTROL_X + 190);
+  FSetRigWriteDelay := AddRowSpin(RigAdvGroup, SET_CONTROL_X + 320, 3, 0,
+    RIG_DELAY_MAX, 0, @SettingChanged);
+  AddRowLabel(RigAdvGroup, @RsSetRigPostDelay, 3, SET_CONTROL_X + 480);
+  FSetRigPostDelay := AddRowSpin(RigAdvGroup, SET_CONTROL_X + 600, 3, 0,
+    RIG_DELAY_MAX, 0, @SettingChanged);
+  AddLabel(RigAdvGroup, @RsSetRigAdvHint, SET_LABEL_X, SetRowTop(4) + 2);
+  AddLabel(RigAdvGroup, @RsSetRigLineWarn, SET_LABEL_X, SetRowTop(4) + 26);
 
-  { ── 拡張（準備中）: 要件 FR-W・FR-N ──
-    **受け口だけ**です。準備中の項目も見せますが、選べません
-    （`ExtensionChanged`）。項目の並びは `ALPHABET_ITEMS`・`NOISE_ITEMS` と
-    同じ順です。
+  { ════ 画面と音 ════ / Screen and sound }
+  PageScreen := AddPage(@RsSetPageScreen, Dummy);
+  ScreenGroup := AddSettingsGroup(PageScreen, @RsSetScreenGroup, SetGroupHeight(2));
+  { 画面の言語（要件 NFR-7.6）。**再起動を求めません。**選択肢の名前はそれぞれの
+    言語で書き、**訳しません**（`UiLangCaption`）。読めない言語で書かれた選択肢
+    から読める言語を探すことになるためです。
+    The screen language (NFR-7.6). **No restart.** Each choice is named in its
+    own language and **not translated** (`UiLangCaption`): otherwise one would
+    hunt for a readable language among names in one that cannot be read. }
+  AddRowLabel(ScreenGroup, @RsSetLanguage, 0);
+  FSetLanguage := AddRowCombo(ScreenGroup, 0, SET_CONTROL_X, 200);
+  for Language_ := Low(UI_LANG_KEYS) to High(UI_LANG_KEYS) do
+    FSetLanguage.Items.Add(UiLangCaption(Language_));
+  FSetLanguage.ItemIndex := UI_LANG_DEFAULT;
+  FSetLanguage.OnChange := @SetLanguageChanged;
+  FSetLanguageInfo := AddLabel(ScreenGroup, '', SET_CONTROL_X + 216, SetRowTop(0) + 5);
+  { 高コントラスト表示（要件 NFR-5.5）。**この製品が想定する利用者は老眼を
+    抱える運用者**なので、薄い文字は読めないことがあります。
+    High contrast (NFR-5.5): **the operators this product is for have
+    presbyopia**, and faint text can be unreadable to them. }
+  FSetHighContrast := AddRowCheck(ScreenGroup, @RsSetHighContrast, 1, SET_LABEL_X,
+    380, False, @HighContrastChanged);
+  AddRowNote(ScreenGroup, @RsSetHighContrastNote, 1, SET_CONTROL_X + 216);
+
+  { 練習で鳴らす音（版 2.85 で送信タブから移した。付録 CG）。PC で鳴らす音に
+    だけ効きます。**無線機の側音は無線機が決めます。**
+    The sound the PC plays (moved from the transmit tab in 2.85; appendix CG).
+    **The rig decides its own sidetone.** }
+  SoundGroup := AddSettingsGroup(PageScreen, @RsSetPracticeSound,
+    SetGroupHeight(3, SET_SLIDER_EXTRA));
+  AddRowLabel(SoundGroup, @RsTxTextWpm, 0);
+  FTxTextWpm := AddRowSpin(SoundGroup, SET_CONTROL_X, 0, 5, 60, 20, @TxOptionsChanged);
+  AddRowLabel(SoundGroup, @RsTxToneHz, 1);
+  FTxToneHz := AddRowSpin(SoundGroup, SET_CONTROL_X, 1, 300, 1500, 700,
+    @TxOptionsChanged);
+  AddSliderLabel(SoundGroup, @RsTxVolume, 2);
+  FTxVolume := TTrackBar.Create(SoundGroup);
+  FTxVolume.Parent := SoundGroup;
+  FTxVolume.SetBounds(SET_CONTROL_X, SetRowTop(2), 200, 36);
+  FTxVolume.Min := 0;
+  FTxVolume.Max := 100;
+  FTxVolume.Position := 60;
+  FTxVolume.OnChange := @TxOptionsChanged;
+
+  { 拡張（準備中）: 要件 FR-W・FR-N。**受け口だけ**です。準備中の項目も見せますが、
+    選べません（`ExtensionChanged`）。
     Extensions (pending): FR-W, FR-N. **Only the seats**: pending items are
-    shown but cannot be chosen (`ExtensionChanged`). The items follow the order
-    of `ALPHABET_ITEMS` and `NOISE_ITEMS`. }
-  ExtGroup := TGroupBox.Create(Scroller);
-  ExtGroup.Parent := Scroller;
-  RegisterCaption(ExtGroup, @RsSetExtGroup);
-  ExtGroup.Height := 110;
-  Stretch(ExtGroup, alTop);
-  AddLabel(ExtGroup, @RsSetAlphabet, 14, 10);
-  FSetAlphabet := TComboBox.Create(ExtGroup);
-  FSetAlphabet.Parent := ExtGroup;
-  FSetAlphabet.SetBounds(140, 6, 180, 28);
-  FSetAlphabet.Style := csDropDownList;
+    shown but cannot be chosen (`ExtensionChanged`). }
+  ExtGroup := AddSettingsGroup(PageScreen, @RsSetExtGroup, SetGroupHeight(2, 52));
+  AddRowLabel(ExtGroup, @RsSetAlphabet, 0);
+  FSetAlphabet := AddRowCombo(ExtGroup, 0, SET_CONTROL_X, 200);
   RegisterItem(FSetAlphabet, 0, @RsSetAlphabetIntl);
   RegisterItem(FSetAlphabet, 1, @RsSetAlphabetWabun);
   FSetAlphabet.ItemIndex := 0;
   FSetAlphabet.OnChange := @ExtensionChanged;
-  AddLabel(ExtGroup, @RsSetNoise, 360, 10);
-  FSetNoise := TComboBox.Create(ExtGroup);
-  FSetNoise.Parent := ExtGroup;
-  FSetNoise.SetBounds(490, 6, 180, 28);
-  FSetNoise.Style := csDropDownList;
+  AddRowLabel(ExtGroup, @RsSetNoise, 1);
+  FSetNoise := AddRowCombo(ExtGroup, 1, SET_CONTROL_X, 200);
   RegisterItem(FSetNoise, 0, @RsSetNoiseOff);
   RegisterItem(FSetNoise, 1, @RsSetNoiseAi);
   FSetNoise.ItemIndex := 0;
   FSetNoise.OnChange := @ExtensionChanged;
-  AddLabel(ExtGroup, @RsSetExtHint, 14, 44);
-  AddLabel(ExtGroup, @RsSetExtRawHint, 14, 70);
+  AddLabel(ExtGroup, @RsSetExtHint, SET_LABEL_X, SetRowTop(2) + 2);
+  AddLabel(ExtGroup, @RsSetExtRawHint, SET_LABEL_X, SetRowTop(2) + 26);
 
-  { ── 詳細・診断：困ったときだけ見るもの ──
-    Advanced and diagnostics: only looked at when something is wrong. }
-  Advanced := TGroupBox.Create(Scroller);
-  Advanced.Parent := Scroller;
+  { ════ 詳細・診断 ════：困ったときだけ見るもの / Advanced and diagnostics:
+    only looked at when something is wrong. }
+  PageAdvanced := AddPage(@RsSetPageAdvanced, FSetPageAdvanced);
+  Advanced := TGroupBox.Create(PageAdvanced);
+  Advanced.Parent := PageAdvanced;
   RegisterCaption(Advanced, @RsSetAdvanced);
   { 巻き取れる欄の中では、`alClient` は「残り全部」ではなく「見えている分だけ」に
-    なります。**それでは診断情報が見えなくなった元の状態に戻ります。**必要な
-    高さを持たせて積みます。
-    Inside a scrolling area `alClient` means what is visible rather than what is
-    left, **which is the state that hid the diagnostics in the first place**: the
-    group is given the height it needs and stacked. }
+    なります。必要な高さを持たせて積みます。
+    Inside a scrolling area `alClient` means what is visible rather than what
+    is left, so the group is given the height it needs and stacked. }
   Advanced.AutoSize := True;
   Stretch(Advanced, alTop);
 
@@ -4879,24 +4869,25 @@ begin
   FSetPortAudio := AddPathEdit(Advanced, @RsSetPortAudio, '');
 
   { 不具合報告に添えられるように、まとめて写せるようにします（要件 FR-G.5）。
-    **画面を撮って送るより、貼れるほうが正確です。**
-    So that it can be attached to a bug report (requirement FR-G.5): **pasting
-    is more accurate than sending a picture of the screen.** }
-  { 2 行ぶんの注記が入るので 44。**40 では 1〜2 画素重なりました**（付録 BE.4）。
-    文字の高さは 96 dpi で 17〜18 画素あり、192 dpi では倍になります。
-    44 to fit two lines of note: **at 40 they overlapped by a pixel or two**
-    (appendix BE.4). The text is 17 to 18 pixels tall at 96 dpi and twice that
-    at 192. }
+    **画面を撮って送るより、貼れるほうが正確です。**2 行ぶんの注記が入るので
+    44。**40 では 1〜2 画素重なりました**（付録 BE.4）。
+    So that it can be attached to a bug report (FR-G.5): **pasting is more
+    accurate than a picture of the screen.** 44 to fit two lines of note: **at
+    40 they overlapped by a pixel or two** (appendix BE.4). }
   Row := AddTopPanel(Advanced, 44);
   FSetCopyInfo := AddButton(Row, @RsSetCopyDiag, 12, 4, 180,
     @SetCopyInfoClick);
-  { 2 文に分けて置きます。**1 つに繋いで渡すと、控えに載せられません**——控えるのは
-    文言のありかなので、繋いだ結果には「ありか」がありません（付録 BE.2）。
-    Two labels rather than one joined string: **a joined string cannot be noted
-    down**, because what is noted is where the words live and a joined result
-    lives nowhere (appendix BE.2). }
+  { 2 文に分けて置きます。**1 つに繋いで渡すと、控えに載せられません**（付録
+    BE.2）。/ Two labels rather than one joined string: **a joined string
+    cannot be noted down** (appendix BE.2). }
   AddLabel(Row, @RsSetDiagNote1, 200, 3);
   AddLabel(Row, @RsSetDiagNote2, 200, 23);
+  { 版と許諾条項の窓（付録 CP）。**受信しながら開いておけるよう、別の窓です**
+    （モードレス）。F1 でも開きます。
+    The version and licence window (appendix CP), **a separate, modeless
+    window so it can stay open while receiving.** F1 opens it too. }
+  FSetAbout := AddButton(Row, @RsSetAbout, 0, 4, 200, @AboutClick);
+  Stretch(FSetAbout, alRight, 4);
 
   AddTopLabel(Advanced, @RsSetDiagnostics);
   FSetInfo := TMemo.Create(Advanced);
@@ -4905,12 +4896,9 @@ begin
   FSetInfo.ScrollBars := ssAutoBoth;
   FSetInfo.WordWrap := False;
   FSetInfo.Font.Name := 'Monospace';
-  { 巻き取れる欄の中なので、**読める高さを自分で持ちます。**`alClient` は
-    「見えている分だけ」になり、上に積んだものが増えるほど痩せます
-    （教訓 10.36）。
-    Inside a scrolling area it **carries a readable height of its own**:
-    `alClient` would mean only what is visible, growing thinner as things stack
-    above it (lesson 10.36). }
+  { 巻き取れる欄の中なので、**読める高さを自分で持ちます**（教訓 10.36）。
+    Inside a scrolling area it **carries a readable height of its own**
+    (lesson 10.36). }
   FSetInfo.Height := 200;
   Stretch(FSetInfo, alTop);
 end;
@@ -5507,6 +5495,8 @@ begin
     (appendix CN). }
   UpdateTranscriptMessage;
   UpdateBandNote;
+  if FAbout <> nil then
+    FAbout.Refresh;
   { いまの状態から出し直せるもの。**控えに載らない「実行時に組み立てる札」は
     すべてここで出し直す。**これらは `UiText` に登録できない（内容が
     `Format` で作られる／実行中に組み直される）ため、呼び忘れれば起動した
@@ -6765,7 +6755,37 @@ begin
     FKeyer.Stop;
     SetStatus('', '', RsRigStopped);
     Key := 0;
+  end
+  { F1 で版と許諾条項の窓（付録 CP）。/ F1 opens the version and licence
+    window (appendix CP). }
+  else if (Key = VK_F1) and (Shift = []) then
+  begin
+    AboutClick(nil);
+    Key := 0;
   end;
+end;
+
+{ 版と許諾条項の窓を開きます（付録 CP）。**1 つだけ作って使い回します**——開く
+  たびに作ると、閉じ忘れた窓が重なります。
+  Opens the version and licence window (appendix CP). **One is made and
+  reused**: making one per press would stack forgotten windows. }
+procedure TMainForm.AboutClick(Sender: TObject);
+begin
+  if FAbout = nil then
+    FAbout := TAboutWindow.CreateWith(Self, RsLicenceAttribution)
+  else
+    FAbout.Refresh;
+  FAbout.Show;
+  FAbout.BringToFront;
+end;
+
+{ 設定の小さなタブを変えたとき。診断情報は「詳細・診断」を開いたときに作り
+  直します。/ When the settings' small tab changes: the diagnostics are
+  rebuilt when "advanced" is opened. }
+procedure TMainForm.SetPagesChanged(Sender: TObject);
+begin
+  if FSetPages.ActivePage = FSetPageAdvanced then
+    RefreshInfo;
 end;
 
 { 無線機の様子を札とボタンに映します。`PollTimer` と `ApplyTexts` が呼びます。
@@ -8736,6 +8756,7 @@ end;
 procedure TMainForm.RxInputSettingsClick(Sender: TObject);
 begin
   FPages.ActivePage := FSettingsSheet;
+  FSetPages.ActivePage := FSetPageRx;
   if FRxDevice.CanFocus then
     FRxDevice.SetFocus;
 end;
@@ -10077,9 +10098,27 @@ end;
   Counts the layout breakages on every tab in turn (requirement NFR-5.1). }
 function TMainForm.ReportLayout: TStringList;
 var
-  Was, I: Integer;
+  Was, I, K: Integer;
   Problems: TLayoutProblems;
-  J: Integer;
+
+  procedure CheckPage(Page: TWinControl; const Name: string);
+  var
+    J: Integer;
+  begin
+    Application.ProcessMessages;
+    Problems := FindLayoutProblems(Page);
+    for J := 0 to High(Problems) do
+      Result.Add(Format('[%s] %s', [Name, DescribeProblem(Problems[J])]));
+    { タブ順序は窓全体で 1 本の輪になっているので、窓から辿ります。
+      前へ出ているタブの部品だけが輪に入ります（要件 NFR-5.6）。
+      The Tab chain is one loop over the whole window, so it is followed from
+      the window; only the controls of the tab in front take part in it
+      (requirement NFR-5.6). }
+    Problems := FindTabOrderProblems(Self);
+    for J := 0 to High(Problems) do
+      Result.Add(Format('[%s] %s', [Name, DescribeProblem(Problems[J])]));
+  end;
+
 begin
   Result := TStringList.Create;
   Was := FPages.ActivePageIndex;
@@ -10091,21 +10130,21 @@ begin
     for I := 0 to FPages.PageCount - 1 do
     begin
       FPages.ActivePageIndex := I;
-      Application.ProcessMessages;
-      Problems := FindLayoutProblems(FPages.Pages[I]);
-      for J := 0 to High(Problems) do
-        Result.Add(Format('[%s] %s',
-          [FPages.Pages[I].Caption, DescribeProblem(Problems[J])]));
-      { タブ順序は窓全体で 1 本の輪になっているので、窓から辿ります。
-        前へ出ているタブの部品だけが輪に入ります（要件 NFR-5.6）。
-        The Tab chain is one loop over the whole window, so it is followed from
-        the window; only the controls of the tab in front take part in it
-        (requirement NFR-5.6). }
-      Problems := FindTabOrderProblems(Self);
-      for J := 0 to High(Problems) do
-        Result.Add(Format('[%s] %s',
-          [FPages.Pages[I].Caption, DescribeProblem(Problems[J])]));
+      { 設定は小さなタブに分かれています（付録 CP）。**前へ出ている小さな
+        タブしか並べられない**ので、1 枚ずつ前へ出して数えます。
+        The settings are split into small tabs (appendix CP). **Only the one
+        in front is laid out**, so each is brought forward in turn. }
+      if FPages.Pages[I] = FSettingsSheet then
+        for K := 0 to FSetPages.PageCount - 1 do
+        begin
+          FSetPages.ActivePageIndex := K;
+          CheckPage(FSetPages.Pages[K], FPages.Pages[I].Caption + ' / ' +
+            FSetPages.Pages[K].Caption);
+        end
+      else
+        CheckPage(FPages.Pages[I], FPages.Pages[I].Caption);
     end;
+    FSetPages.ActivePageIndex := 0;
     { 受信テキストの高さ（付録 BV.4）。**重なりを見る検査は、欄が押し潰されても
       気付かない**——受信タブへ行を 1 つ足したら、受信テキストが数画素に潰れた
       のに 0 件と言いました。いちばん狭い場合（「デコード中」の行が出ている・

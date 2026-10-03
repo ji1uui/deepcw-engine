@@ -1,6 +1,55 @@
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8"
 
+#: aboutwindow.rsaboutattribution
+msgid "総務省の無線局等情報検索"
+msgstr ""
+
+#: aboutwindow.rsaboutclose
+msgid "閉じる"
+msgstr ""
+
+#: aboutwindow.rsaboutnolicences
+msgid "同梱の部品の条項: 見つかりません"
+msgstr ""
+
+#: aboutwindow.rsaboutnolicencesnote
+msgid "同梱した部品（ONNX Runtime・PortAudio）の条項は、配布物の licences フォルダに入ります。開発のために組んだまま動かしているときはありません。"
+msgstr ""
+
+#: aboutwindow.rsaboutnotfound
+#, object-pascal-format
+msgid ""
+"見つかりません: %s\n"
+"\n"
+"開発のために組んだまま動かしているときは、配布物に入る条項の一部がありません。配布物（zip）を展開したものでは見つかります。"
+msgstr ""
+
+#: aboutwindow.rsaboutnotices
+msgid "同梱した部品の一覧"
+msgstr ""
+
+#: aboutwindow.rsaboutopenfolder
+msgid "条項のフォルダを開く"
+msgstr ""
+
+#: aboutwindow.rsaboutownlicence
+msgid "DeepCW の許諾（AGPL-3.0）"
+msgstr ""
+
+#: aboutwindow.rsaboutproduct
+#, object-pascal-format
+msgid "DeepCW Morse Station  版 %s"
+msgstr ""
+
+#: aboutwindow.rsaboutsummary
+msgid "このアプリケーションは AGPL-3.0 で無償配布しています。同梱した部品の条項と、総務省の検索の取得元をここで読めます。"
+msgstr ""
+
+#: aboutwindow.rsabouttitle
+msgid "このアプリについて"
+msgstr ""
+
 #: bandmapview.rsageminutes
 #, object-pascal-format
 msgid "%.0f分"
@@ -464,6 +513,7 @@ msgid "送信訓練の開始"
 msgstr ""
 
 #: frmmain.rsctxjournal
+msgctxt "frmmain.rsctxjournal"
 msgid "記録"
 msgstr ""
 
@@ -1815,6 +1865,10 @@ msgstr ""
 msgid "保存しました: %s"
 msgstr ""
 
+#: frmmain.rssetabout
+msgid "このアプリについて..."
+msgstr ""
+
 #: frmmain.rssetadifexport
 msgid "ADIF を書き出す"
 msgstr ""
@@ -1824,6 +1878,7 @@ msgid "ADIF を取り込む"
 msgstr ""
 
 #: frmmain.rssetadvanced
+msgctxt "frmmain.rssetadvanced"
 msgid "詳細・診断"
 msgstr ""
 
@@ -1850,6 +1905,10 @@ msgstr ""
 
 #: frmmain.rssetbandwidth
 msgid "同調時の帯域幅"
+msgstr ""
+
+#: frmmain.rssetcallcheckgroup
+msgid "呼出符号の確かめ"
 msgstr ""
 
 #: frmmain.rssetcapturenote
@@ -1963,8 +2022,27 @@ msgctxt "frmmain.rssetnoiseoff"
 msgid "使わない"
 msgstr ""
 
-#: frmmain.rssetoperating
-msgid "運用設定"
+#: frmmain.rssetpageadvanced
+msgctxt "frmmain.rssetpageadvanced"
+msgid "詳細・診断"
+msgstr ""
+
+#: frmmain.rssetpagelog
+msgid "記録と照合"
+msgstr ""
+
+#: frmmain.rssetpagerig
+msgctxt "frmmain.rssetpagerig"
+msgid "無線機"
+msgstr ""
+
+#: frmmain.rssetpagerx
+msgctxt "frmmain.rssetpagerx"
+msgid "受信"
+msgstr ""
+
+#: frmmain.rssetpagescreen
+msgid "画面と音"
 msgstr ""
 
 #: frmmain.rssetportaudio
@@ -1986,6 +2064,11 @@ msgstr ""
 
 #: frmmain.rssetrecord
 msgid "受信した音を WAV で録音する"
+msgstr ""
+
+#: frmmain.rssetrecordgroup
+msgctxt "frmmain.rssetrecordgroup"
+msgid "記録"
 msgstr ""
 
 #: frmmain.rssetretention
@@ -2121,6 +2204,10 @@ msgstr ""
 
 #: frmmain.rssetrxdisplay
 msgid "受信テキストの表示"
+msgstr ""
+
+#: frmmain.rssetscreengroup
+msgid "画面"
 msgstr ""
 
 #: frmmain.rssettab
