@@ -499,3 +499,174 @@ jobs:
       - name: 日本語の出力（命令行）
         working-directory: lazarus
         run: ./tools/text_output_test.sh
+
+  # macOS（Apple Silicon）の配布物（付録 CQ）。
+  #
+  # **FPC 3.2.2 では画面のアプリがリンクできません**（未解決 #25: Apple の
+  # 新しいリンカ ld-1267 が、3.2.2 の出す Objective-C の並びを拒む）。CI の
+  # Xcode はすべて 26.x で、古いリンカ（`-ld_classic`）も残っていません。
+  # 直した FPC は `release_3_2_4_rc2` にあり、**3.2.4 の正式版はまだ出て
+  # いません。**利用者の判断（付録 CQ.2）で、**この job だけ** 3.2.4-rc2 を
+  # 原典から組んで使います。上の matrix（Linux・Windows・macOS の試験）は
+  # 3.2.2 のままです。
+  #
+  # The macOS (Apple Silicon) package (appendix CQ). **FPC 3.2.2 cannot link
+  # the GUI** (open question #25: Apple's ld-1267 rejects the Objective-C
+  # method lists 3.2.2 emits); every Xcode on the runner is 26.x and the
+  # classic linker is gone. The fix is in `release_3_2_4_rc2`, and **3.2.4 has
+  # no final release yet.** By the operator's decision (appendix CQ.2) **this
+  # job alone** builds 3.2.4-rc2 from source and uses it; the matrix above
+  # stays on 3.2.2.
+  macos-package:
+    name: macOS ARM64 配布物
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      FPC_TAG: release_3_2_4_rc2
+      ORT_VERSION: 1.30.0
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.2.2（Homebrew）を足場に、3.2.4-rc2 を組みます。SDK の場所は
+      # `xcrun` に尋ねます（書き写すと Xcode が上がった日に古くなる）。
+      # 3.2.2 (Homebrew) bootstraps 3.2.4-rc2. The SDK location is asked of
+      # `xcrun` rather than written down.
+      - name: FPC 3.2.4-rc2 を原典から組む
+        run: |
+          set -eo pipefail
+          brew install fpc portaudio
+          sdk=$(xcrun --show-sdk-path)
+          echo "SDK: $sdk"
+          git clone --depth 1 --branch "$FPC_TAG" \
+            https://gitlab.com/freepascal.org/fpc/source.git "$HOME/fpcsrc"
+          cd "$HOME/fpcsrc"
+          make all FPC="$(command -v fpc)" OPT="-XR$sdk" >"$RUNNER_TEMP/fpc-build.log" 2>&1 \
+            || { tail -60 "$RUNNER_TEMP/fpc-build.log"; exit 1; }
+          tail -3 "$RUNNER_TEMP/fpc-build.log"
+          make install INSTALL_PREFIX="$HOME/fpc" FPC="$PWD/compiler/ppca64" \
+            >"$RUNNER_TEMP/fpc-install.log" 2>&1 \
+            || { tail -60 "$RUNNER_TEMP/fpc-install.log"; exit 1; }
+          ver=$(ls "$HOME/fpc/lib/fpc" | grep -E '^3\.' | head -1)
+          echo "版の置き場所: $HOME/fpc/lib/fpc/$ver"
+          ln -sf "$HOME/fpc/lib/fpc/$ver/ppca64" "$HOME/fpc/bin/ppca64"
+          mkdir -p "$HOME/fpc/etc"
+          "$HOME/fpc/lib/fpc/$ver/samplecfg" "$HOME/fpc/lib/fpc/$ver" "$HOME/fpc/etc" >/dev/null
+          # **Homebrew の 3.2.2 の設定を読ませません。**読めば 3.2.2 の部品と
+          # 混ざります。設定の場所を指し、SDK も書き足します。
+          # **3.2.2's Homebrew configuration must not be read**, or 3.2.2's
+          # units would mix in: the configuration is pointed at, with the SDK.
+          echo "-XR$sdk" >> "$HOME/fpc/etc/fpc.cfg"
+          echo "PPC_CONFIG_PATH=$HOME/fpc/etc" >> "$GITHUB_ENV"
+          echo "$HOME/fpc/bin" >> "$GITHUB_PATH"
+
+      - name: Lazarus（lazbuild）を 3.2.4-rc2 で組む
+        run: |
+          set -eo pipefail
+          which fpc
+          fpc -iV
+          fpc -i | head -3 || true
+          tag=$(git ls-remote --tags --refs \
+                  https://gitlab.com/freepascal.org/lazarus/lazarus.git \
+                | awk -F/ '{print $NF}' \
+                | grep -E '^lazarus_[0-9]+_[0-9]+$' | sort -V | tail -1)
+          [ -n "$tag" ] || { echo "Lazarus の版が問い合わせられません"; exit 1; }
+          echo "Lazarus $tag を組みます"
+          git clone --depth 1 --branch "$tag" \
+            https://gitlab.com/freepascal.org/lazarus/lazarus.git "$HOME/lazarus"
+          make -C "$HOME/lazarus" lazbuild >"$RUNNER_TEMP/laz.log" 2>&1 \
+            || { tail -60 "$RUNNER_TEMP/laz.log"; exit 1; }
+          mkdir -p "$HOME/bin"
+          printf '#!/bin/sh\nexec "%s/lazarus/lazbuild" --lazarusdir="%s/lazarus" "$@"\n' \
+            "$HOME" "$HOME" > "$HOME/bin/lazbuild"
+          chmod +x "$HOME/bin/lazbuild"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      # **#25 の印を許しません。**3.2.4-rc2 で組めないなら、配布物は作れて
+      # いないのだから落とします。
+      # **The #25 signature is not let through**: if 3.2.4-rc2 cannot link
+      # it, no package was made, and the job fails.
+      - name: 画面のアプリを組む（.app）と同梱物
+        working-directory: lazarus
+        run: |
+          set -eo pipefail
+          tmp="$RUNNER_TEMP"
+          curl -fsSL -o "$tmp/ort.tgz" \
+            "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/onnxruntime-osx-arm64-$ORT_VERSION.tgz"
+          tar -xzf "$tmp/ort.tgz" -C "$tmp"
+          ort="$tmp/onnxruntime-osx-arm64-$ORT_VERSION"
+          ls "$ort" "$ort/lib"
+          ort_lib=$(ls "$ort"/lib/libonnxruntime.*.dylib | grep -v '\.dSYM' | head -1)
+          # Homebrew の名前は版つきの実体への別名です。**実体を渡します**——
+          # 条項は実体のそばで探します。
+          # Homebrew's name is an alias of the versioned file. **The real file
+          # is passed**: the licence is looked for beside it.
+          pa_lib=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' \
+            "$(brew --prefix portaudio)/lib/libportaudio.2.dylib")
+          pa_licence=$(find "$(brew --prefix portaudio)/" -maxdepth 2 -iname 'LICENSE*' | head -1)
+          echo "ONNX Runtime: $ort_lib"
+          echo "PortAudio: $pa_lib（条項 $pa_licence）"
+          version=$(grep -m1 "DEEPCW_VERSION = " src/deepcw.licenselookup.pas | sed "s/.*'\(.*\)'.*/\1/")
+          DEEPCW_ONNXRUNTIME="$ort_lib" \
+          DEEPCW_PORTAUDIO="$pa_lib" \
+          DEEPCW_PORTAUDIO_LICENCE="$pa_licence" \
+          DEEPCW_BUNDLE_VERSION="$version" \
+            ./tools/make_bundle.sh "$PWD/dist"
+
+      - name: 署名（ad-hoc）と、中の道具で読めるか
+        working-directory: lazarus
+        run: |
+          set -eo pipefail
+          stage="$PWD/dist/deepcw-station-macos-arm64"
+          app="$stage/DeepCW Station.app"
+          [ -x "$app/Contents/MacOS/deepcw_station" ] || { echo ".app に本体がありません"; exit 1; }
+          # Apple Silicon では、**署名の無いものは動きません**（ad-hoc で足る）。
+          # 証明書が無いので配布の署名・公証はしていません（付録 CQ.5）。
+          # On Apple Silicon **unsigned code does not run** (ad-hoc is enough).
+          # No certificate, so no distribution signing or notarisation.
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          file "$app/Contents/MacOS/deepcw_station"
+          python3 tools/make_test_wav.py "$RUNNER_TEMP/test.wav"
+          cd "$RUNNER_TEMP"
+          env -u DEEPCW_ONNXRUNTIME -u DEEPCW_PORTAUDIO \
+            "$app/Contents/MacOS/cw_devices" | tee devices.txt
+          grep -q "PortAudio V" devices.txt
+          env -u DEEPCW_ONNXRUNTIME -u DEEPCW_PORTAUDIO \
+            "$app/Contents/MacOS/decode_morse" --wav "$RUNNER_TEMP/test.wav" | tee decoded.txt
+          grep -q "CQ CQ DE JA1ABC JA1ABC K" decoded.txt
+
+      # 画面のアプリが macOS で**起動して組み方を数えられるか**。CI の
+      # macOS は画面を持ちますが、画面の試験は初めてなので、落ちても
+      # 配布物は残します（結果は記録で読む）。
+      # Whether the GUI **starts on macOS and can count its layout.** The
+      # runner has a display, but this is the first GUI run there, so a
+      # failure does not cost the package (the result is read from the log).
+      - name: 画面の組み方の検査（macOS、参考）
+        continue-on-error: true
+        working-directory: lazarus
+        run: |
+          app="$PWD/dist/deepcw-station-macos-arm64/DeepCW Station.app"
+          mkdir -p "$RUNNER_TEMP/cfg"
+          DEEPCW_CONFIG_DIR="$RUNNER_TEMP/cfg" DEEPCW_LAYOUT_CHECK=1 \
+            perl -e 'alarm 180; exec @ARGV' "$app/Contents/MacOS/deepcw_station" --lang ja
+
+      # **dmg にします。**成果物は zip にされ、**実行の印（x）が落ちます**
+      # ——`.app` をそのまま渡すと起動しません。dmg は印を保ちます。
+      # **Packed as a dmg.** Artifacts are zipped and **lose the executable
+      # bit**, so a bare `.app` would not start; a dmg keeps it.
+      - name: dmg にする
+        working-directory: lazarus
+        run: |
+          set -eo pipefail
+          hdiutil create -volname "DeepCW Station" \
+            -srcfolder dist/deepcw-station-macos-arm64 -ov -format UDZO \
+            dist/deepcw-station-macos-arm64.dmg
+          ls -l dist/deepcw-station-macos-arm64.dmg
+
+      - name: macOS の配布物を残す
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepcw-station-macos-arm64
+          path: lazarus/dist/deepcw-station-macos-arm64.dmg
+          if-no-files-found: error
+          retention-days: 30
