@@ -634,26 +634,33 @@ begin
   Result.RtlMinutes := UnixUtil.Tzseconds div 60;
   {$ENDIF}
   Result.OsMinutes := Tm.tm_gmtoff div 60;
-  if Result.RtlMinutes * 60 <> Tm.tm_gmtoff then
-  begin
-    {$IF FPC_FULLVERSION >= 30204}
-    { 3.2.4 の時差には「いつからいつまで正しいか」が付き、外れると RTL が
-      時間帯ファイルを読み直します（読み違えの元）。**いまを挟む 1 時間**
-      とします。この関数は 1 分ごとに呼ばれるので、切れる前に直ります。
-      In 3.2.4 the offset carries a validity window, and outside it the RTL
-      re-reads the zone file (the source of the misreading). The window is
-      **one hour around now**; this runs every minute, so it is renewed long
-      before it lapses. }
-    Info := TZInfo;
-    Info.seconds := Tm.tm_gmtoff;
-    Info.validsince := Int64(T) - Tm.tm_gmtoff - 60;
-    Info.validuntil := Int64(T) - Tm.tm_gmtoff + 3600;
-    SetTZInfo(Info, TZInfoEx);
-    {$ELSE}
+  Result.Changed := Result.RtlMinutes * 60 <> Tm.tm_gmtoff;
+  {$IF FPC_FULLVERSION >= 30204}
+  { 3.2.4 の時差には「いつからいつまで正しいか」が付き、**その間だけ** RTL は
+    この値を使います（外れると時間帯ファイルを読み直す。読み違えの元）。窓の
+    判じ方が 2 つあり（`GetTZInfo` は「始まり＋時差 ≦ いま」、
+    `GetLocalTimezone` は「始まり ≦ いま」）、**どちらでも今を挟む**ように
+    時差の大きさぶん広げます。**毎回入れ直します**——値が同じでも、窓が
+    切れると `Now` が時間帯ファイルの値に戻るためです（CI の 4 回目で、片方の
+    判じ方だけを満たした窓では `Now` が直らなかった）。この関数は 1 分ごとに
+    呼ばれます。
+    In 3.2.4 the offset carries a validity window, and the RTL uses it **only
+    inside it** (outside, it re-reads the zone file: the source of the
+    misreading). The window is judged two ways (`GetTZInfo`: start + offset
+    <= now; `GetLocalTimezone`: start <= now), so it is widened by the size of
+    the offset to **contain now either way**. **It is set again every time**:
+    even with the same value, an expired window sends `Now` back to the zone
+    file (on the fourth CI run a window that met only one test left `Now`
+    wrong). This runs every minute. }
+  Info := TZInfo;
+  Info.seconds := Tm.tm_gmtoff;
+  Info.validsince := Int64(T) - Abs(Int64(Tm.tm_gmtoff)) - 60;
+  Info.validuntil := Int64(T) + Abs(Int64(Tm.tm_gmtoff)) + 3600;
+  SetTZInfo(Info, TZInfoEx);
+  {$ELSE}
+  if Result.Changed then
     UnixUtil.Tzseconds := Tm.tm_gmtoff;
-    {$ENDIF}
-    Result.Changed := True;
-  end;
+  {$ENDIF}
   {$ENDIF}
 end;
 

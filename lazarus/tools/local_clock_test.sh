@@ -88,6 +88,8 @@ check() {
     FAIL=1
   fi
   [ "$before" != "$want" ] && DIFFERED=$((DIFFERED + 1))
+  LAST_FPC=$(printf '%s' "$line" | sed -n 's/.*fpc=\([0-9.]*\).*/\1/p' \
+    | awk -F. '{ printf "%d%02d%02d", $1, $2, $3 }')
   LAST_BEFORE=$before
   LAST_WANT=$want
 }
@@ -115,9 +117,15 @@ EOF
   check ":$WORK/slim/Test/Tokyo" "slim 形式（東京）"
   # slim では、合わせる前は必ず食い違う（直していなければ見逃す例）。
   # With slim, the offset before must disagree (the case that would be missed).
+  # FPC 3.2.4 の RTL は slim 形式を読める（付録 CQ）ので、そこでは問いません。
+  # FPC 3.2.4's RTL reads slim files (appendix CQ), so it is not asked there.
   if [ "$LAST_BEFORE" = "$LAST_WANT" ]; then
-    echo "  NG   slim 形式で、合わせる前から一致していた（検査が働いていない）"
-    FAIL=1
+    if [ "${LAST_FPC:-0}" -ge 30204 ]; then
+      echo "  --   FPC $LAST_FPC の RTL は slim 形式を読める（合わせる前から一致）"
+    else
+      echo "  NG   slim 形式で、合わせる前から一致していた（検査が働いていない）"
+      FAIL=1
+    fi
   fi
   check ":$WORK/slim/Test/NY" "slim 形式（ニューヨーク）"
 else

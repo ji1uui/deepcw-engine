@@ -5816,12 +5816,13 @@ begin
     `utcepoch` is the UTC the log uses (`UtcNow`) in seconds; `localskew` is
     local time minus (UTC + the aligned offset), in seconds. The test checks
     the former against `date -u` and the latter for zero (appendix CQ). }
-  WriteLn(Format('CLOCK before=%0:d after=%1:d known=%2:s changed=%3:s utcmoved=%4:d utcepoch=%5:d localskew=%6:d',
+  WriteLn(Format('CLOCK before=%0:d after=%1:d known=%2:s changed=%3:s utcmoved=%4:d utcepoch=%5:d localskew=%6:d fpc=%7:s',
     [BeforeMinutes, -GetLocalTimeOffset, BoolToStr(Sync.Known, True),
      BoolToStr(Sync.Changed, True),
      Round(Abs(UtcNow - UtcBefore) * SecsPerDay),
      Round((UtcNow - UnixDateDelta) * SecsPerDay),
-     Round((Now - UtcNow + GetLocalTimeOffset / MinsPerDay) * SecsPerDay)]));
+     Round((Now - UtcNow + GetLocalTimeOffset / MinsPerDay) * SecsPerDay),
+     {$I %FPCVERSION%}]));
   Flush(Output);
 end;
 
