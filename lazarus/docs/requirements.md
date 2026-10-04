@@ -13132,7 +13132,24 @@ CM.13・CM.14 の「確かめていないこと」のうち、**Windows・macOS 
   `unix.pp` を使う）。Linux で packages まで組むことは、この環境の glibc との相性（`__libc_csu_init`）で
   できなかったので、**動きは macOS の CI で確かめる**
 - 3.2.2（Linux）でも通る。地方時の試験（9 通りの与え方）と `dsp_check` が通る
-- CI の結果は CQ.6 に書く
+- **CI（run 37196955975、macos-latest・Xcode 26.6）で配布物ができた:**
+  - FPC 3.2.4-rc2 と `lazbuild` を原典から組み、**画面のアプリが macOS で初めてリンクできた**（#25 は
+    rc2 で直っている）
+  - rc2 の組み立てで `dsp_check` がすべて通り、地方時の試験は 9 通りとも通った（slim 形式は rc2 の RTL が
+    自分で読めた）
+  - `.app` の中身: `deepcw_station`・`decode_morse`・`cw_devices`（Mach-O arm64）、`libonnxruntime.dylib`
+    （1.30.0）、`libportaudio.dylib`（Homebrew 19.7.0）、`model.onnx`・訳・条項。ad-hoc の署名が
+    `codesign --verify --deep --strict` を通る
+  - 配布物の外から環境変数なしで: `cw_devices` が同梱の PortAudio を読み、装置 2 台（Apple Virtual Sound
+    Device・Null Audio Device）を一覧にした。`decode_morse` が試験の音を `CQ CQ DE JA1ABC JA1ABC K` と
+    読んだ
+  - **画面のアプリが macOS で起動し、組み方を数えた**（初めて）。窓 1016×634 で**はみ出しが 2 件**:
+    送受信の送信欄の「使う」（最小の幅 1036 で右端を 14 画素越える。**Linux でも最小の幅なら起きる**
+    のに、Linux の検査は最小の幅まで狭めていなかった）と、送信訓練の「課題文を出す」（macOS の見出しの
+    帯が厚く、下へ 3 画素）。両方を直し、組み方の検査に **1024×768（最小の幅より狭い）** を足した。
+    足した検査は、直す前の「使う」を見つけ、**版 3.01 の設定の「記録」の説明 2 つ（510 から始めて、
+    狭い画面ではみ出す）**も見つけたので、ほかの枠と同じ桁（410）へ移した。10 通りすべて 0 件
+  - dmg は 35.7 MB。成果物 `deepcw-station-macos-arm64` として 30 日残る
 
 ### CQ.5 確かめていないこと（NOT VERIFIED）
 

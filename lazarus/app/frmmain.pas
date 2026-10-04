@@ -1800,7 +1800,7 @@ const
     （付録 CH）ので、窓 700 のときのタブの中の高さ。
     The height the send-practice tab's content needs: no overlap at a window
     of 700, overlaps at 680 (appendix CH), so the tab's client height at 700. }
-  FIST_MIN_HEIGHT_96 = 648;
+  FIST_MIN_HEIGHT_96 = 656;
 
 { ノイズ低減の選択肢の鍵。**画面の項目と同じ順**です（要件 FR-N）。
   The noise-reduction keys, **in the order of the items on screen** (FR-N). }
@@ -2582,9 +2582,15 @@ begin
   AddLabel(Compose, @RsTxTemplateLabel, 726, 8);
   FTxTemplate := TComboBox.Create(Compose);
   FTxTemplate.Parent := Compose;
-  FTxTemplate.SetBounds(796, 4, 176, 28);
+  { 右端は送受信画面の最小の幅（1036）の内に収めます。**macOS の組み方の
+    検査で、最小の幅のとき「使う」がはみ出していたと分かりました**（付録 CQ。
+    Linux の検査は最小の幅まで狭めていなかった）。
+    The right edge stays within the operating screen's least width (1036):
+    **the macOS layout check found "use" sticking out at the least width**
+    (appendix CQ; the Linux checks never narrowed that far). }
+  FTxTemplate.SetBounds(796, 4, 150, 28);
   FTxTemplate.Style := csDropDownList;
-  AddButton(Compose, @RsTxUseTemplate, 980, 4, 70, @TxTemplateClick);
+  AddButton(Compose, @RsTxUseTemplate, 954, 4, 70, @TxTemplateClick);
 
   { 送る文と、文字速度。速度は相手に合わせて交信中に変えるので、ここに置きます。
     The text and the character speed: the speed is matched to the other
@@ -3651,7 +3657,11 @@ begin
 
   Options := TGroupBox.Create(Host);
   Options.Parent := Host;
-  Options.Height := 124;
+  { 132。**124 では macOS で「課題文を出す」が枠の下へ 3 画素はみ出しました**
+    （macOS は見出しの帯が厚い。付録 CQ）。/ 132: **at 124 "make a text"
+    stuck out 3 pixels below the box on macOS** (its caption band is thicker;
+    appendix CQ). }
+  Options.Height := 132;
   RegisterCaption(Options, @RsFtTextAndScore);
   Stretch(Options, alTop);
 
@@ -4597,14 +4607,21 @@ begin
   RecordGroup.OnResize := @OperatingResized;
   FSetJournal := AddRowCheck(RecordGroup, @RsSetJournal, 0, SET_LABEL_X, 360,
     True, @RxJournalChanged);
-  AddRowNote(RecordGroup, @RsSetJournalNote, 0, SET_CONTROL_X + 316);
+  { 印の行の説明は、ほかの枠と同じ桁（操作の桁＋216）。釦の行（交信記録）の
+    置き場所は釦の右。**最小の幅より狭い画面で、510 から始めた説明がはみ出し
+    ました**（付録 CQ の 1024×768 の検査）。
+    A checkbox row's explanation sits in the same column as in the other
+    groups (control column + 216); the button row's location sits right of
+    its buttons. **Started at 510, the explanations stuck out on a screen
+    narrower than the least width** (appendix CQ, the 1024x768 check). }
+  AddRowNote(RecordGroup, @RsSetJournalNote, 0, SET_CONTROL_X + 216);
   { 受信音の録音（要件 FR-E.8）。既定は入れません。**書くのは利用者のディスク
     です。**
     Recording the received audio (requirement FR-E.8), off by default: **what
     is written is the operator's own disk.** }
   FSetRecord := AddRowCheck(RecordGroup, @RsSetRecord, 1, SET_LABEL_X, 360,
     False, @RxRecordChanged);
-  FSetRecordInfo := AddLabel(RecordGroup, '', SET_CONTROL_X + 316, SetRowTop(1) + 5);
+  FSetRecordInfo := AddLabel(RecordGroup, '', SET_CONTROL_X + 216, SetRowTop(1) + 5);
   { 交信記録の出し入れ。別のソフトで積み上げた記録を取り込めば、その場で
     「交信済み」が効きます（要件 FR-E.3・FR-J.4）。
     Taking the contact log in and out: importing a log built in another

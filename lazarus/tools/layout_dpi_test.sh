@@ -107,6 +107,16 @@ if [ -f app/languages/deepcw_station.en.po ]; then
   run_at 144 1920x1080x24 129 en
 fi
 
+# **窓を最小の幅より狭い画面へ。**中身は最小の幅（1036）のまま巻き取られるので、
+# その幅で何もはみ出さないこと。macOS の CI（窓 1016）で、送信欄の「使う」が
+# はみ出していたのに、ここでは一度も最小の幅まで狭めていなかった（付録 CQ）。
+# **A screen narrower than the window's least width**: the content keeps its
+# least width (1036) and scrolls, and nothing may stick out at that width. The
+# macOS CI (a 1016 window) found the send panel's "use" sticking out, and these
+# runs had never narrowed that far (appendix CQ).
+echo "  1024x768・96 dpi（最小の幅より狭い、日本語）:"
+run_at 96 1024x768x24 130 ja
+
 if [ $FAILED -ne 0 ]; then
   echo "組み方の破綻が見つかりました"
   exit 1
