@@ -585,7 +585,26 @@ jobs:
       # いないのだから落とします。
       # **The #25 signature is not let through**: if 3.2.4-rc2 cannot link
       # it, no package was made, and the job fails.
-      - name: 画面のアプリを組む（.app）と同梱物
+      # 先に組んで、**落ちたら記録を見せます。**`make_bundle.sh` は組み立ての
+      # 出力を捨てるので、そこで落ちると理由が残りません（初回がそうだった）。
+      # Built first, so that **a failure shows its log**: `make_bundle.sh`
+      # discards the build output, and a failure there leaves no reason (as
+      # on the first run).
+      - name: 画面のアプリを組む（3.2.4-rc2）
+        working-directory: lazarus
+        run: |
+          set -o pipefail
+          for p in app/deepcw_station cli/decode_morse cli/cw_devices; do
+            echo "== $p =="
+            if ! lazbuild -B "$p.lpi" >"$RUNNER_TEMP/build.log" 2>&1; then
+              grep -E "Error|Fatal|ld:|error:" "$RUNNER_TEMP/build.log" | head -40
+              tail -40 "$RUNNER_TEMP/build.log"
+              exit 1
+            fi
+            tail -3 "$RUNNER_TEMP/build.log"
+          done
+
+      - name: .app と同梱物
         working-directory: lazarus
         run: |
           set -eo pipefail
@@ -603,8 +622,8 @@ jobs:
           pa_lib=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' \
             "$(brew --prefix portaudio)/lib/libportaudio.2.dylib")
           pa_licence=$(find "$(brew --prefix portaudio)/" -maxdepth 2 -iname 'LICENSE*' | head -1)
-          echo "ONNX Runtime: $ort_lib"
-          echo "PortAudio: $pa_lib（条項 $pa_licence）"
+          echo "ONNX Runtime: ${ort_lib}"
+          echo "PortAudio: ${pa_lib}（条項 ${pa_licence}）"
           version=$(grep -m1 "DEEPCW_VERSION = " src/deepcw.licenselookup.pas | sed "s/.*'\(.*\)'.*/\1/")
           DEEPCW_ONNXRUNTIME="$ort_lib" \
           DEEPCW_PORTAUDIO="$pa_lib" \
