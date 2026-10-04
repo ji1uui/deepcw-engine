@@ -278,8 +278,14 @@ implementation
 uses
   Windows, Registry;
 {$ELSEIF DEFINED(UNIX)}
+{ FPC 3.2.4 から、RTL の時差（`Tzseconds`）は `UnixUtil` の変数ではなく、
+  `Unix` の読むだけの property になり、書き換えは `SetTZInfo` を通します
+  （3.2.4-rc2 の `rtl/unix/unix.pp` で確かめた。付録 CQ）。
+  From FPC 3.2.4 the RTL's offset (`Tzseconds`) is no longer a `UnixUtil`
+  variable but a read-only property of `Unix`, written through `SetTZInfo`
+  (checked in 3.2.4-rc2's `rtl/unix/unix.pp`; appendix CQ). }
 uses
-  UnixType, UnixUtil;
+  UnixType, UnixUtil{$IF FPC_FULLVERSION >= 30204}, Unix{$ENDIF};
 {$ENDIF}
 
 {$IF DEFINED(LINUX)}
@@ -561,6 +567,9 @@ function SyncLocalClock: TLocalClockSync;
 var
   T: time_t;
   Tm: TCTm;
+  {$IF FPC_FULLVERSION >= 30204}
+  Info: TTZInfo;
+  {$ENDIF}
 {$ENDIF}
 begin
   Result.Known := False;
@@ -584,7 +593,22 @@ begin
   Result.OsMinutes := Tm.tm_gmtoff div 60;
   if Tzseconds <> Tm.tm_gmtoff then
   begin
+    {$IF FPC_FULLVERSION >= 30204}
+    { 3.2.4 の時差には「いつからいつまで正しいか」が付き、外れると RTL が
+      時間帯ファイルを読み直します（読み違えの元）。**いまを挟む 1 時間**
+      とします。この関数は 1 分ごとに呼ばれるので、切れる前に直ります。
+      In 3.2.4 the offset carries a validity window, and outside it the RTL
+      re-reads the zone file (the source of the misreading). The window is
+      **one hour around now**; this runs every minute, so it is renewed long
+      before it lapses. }
+    Info := TZInfo;
+    Info.seconds := Tm.tm_gmtoff;
+    Info.validsince := Int64(T) - Tm.tm_gmtoff - 60;
+    Info.validuntil := Int64(T) - Tm.tm_gmtoff + 3600;
+    SetTZInfo(Info, TZInfoEx);
+    {$ELSE}
     Tzseconds := Tm.tm_gmtoff;
+    {$ENDIF}
     Result.Changed := True;
   end;
   {$ENDIF}

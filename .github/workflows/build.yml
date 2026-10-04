@@ -594,7 +594,7 @@ jobs:
         working-directory: lazarus
         run: |
           set -o pipefail
-          for p in app/deepcw_station cli/decode_morse cli/cw_devices; do
+          for p in app/deepcw_station cli/decode_morse cli/cw_devices cli/dsp_check; do
             echo "== $p =="
             if ! lazbuild -B "$p.lpi" >"$RUNNER_TEMP/build.log" 2>&1; then
               grep -E "Error|Fatal|ld:|error:" "$RUNNER_TEMP/build.log" | head -40
@@ -603,6 +603,21 @@ jobs:
             fi
             tail -3 "$RUNNER_TEMP/build.log"
           done
+
+      # 配る binary は 3.2.4-rc2 で組んだものなので、**同じ組み立てで数値の
+      # 検証と地方時の一致を走らせます**（RTL の時差の扱いが 3.2.4 で変わった。
+      # 付録 CQ.3）。
+      # The shipped binaries are built with 3.2.4-rc2, so **the numeric checks
+      # and the local-time check run on that same build** (the RTL's offset
+      # handling changed in 3.2.4; appendix CQ.3).
+      - name: 3.2.4-rc2 の組み立てで数値の検証と地方時
+        working-directory: lazarus
+        env:
+          DEEPCW_HTTPS_PROBE_URLS: https://github.com/robots.txt
+        run: |
+          set -eo pipefail
+          ./cli/dsp_check
+          ./tools/local_clock_test.sh
 
       - name: .app と同梱物
         working-directory: lazarus
