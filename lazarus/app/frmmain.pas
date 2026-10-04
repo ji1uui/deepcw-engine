@@ -8158,7 +8158,7 @@ begin
      (SecondsBetween(Now, FRateAt) < RATE_REFRESH_SECONDS) then
     Exit;
   FRateAt := Now;
-  Hour := FLog.CountSince(IncHour(LocalTimeToUniversal(Now), -1));
+  Hour := FLog.CountSince(IncHour(UtcNow, -1));
   Total := FLog.Count;
   FRxRate.Caption := Format(RsRate, [Hour, Total]);
 end;
@@ -8370,7 +8370,12 @@ begin
     The local time is converted to UTC before it is handed over: ADIF defines
     these two fields as UTC, and left local the logger that reads them would
     treat them as a different moment. }
-  Moment := LocalTimeToUniversal(Now);
+  { OS の時計から直接読みます（`UtcNow`、付録 CQ）。`LocalTimeToUniversal(Now)`
+    は FPC 3.2.4 で、時間帯ファイルを読み違える環境では時差のぶんずれます。
+    Read straight from the system clock (`UtcNow`, appendix CQ):
+    `LocalTimeToUniversal(Now)` is off by the offset in FPC 3.2.4 where the
+    zone file is misread. }
+  Moment := UtcNow;
   { 打たれたかどうかと、読み取れたかどうかを分けて控えます。**打っていない
     のに「書けませんでした」と言えば、打ち忘れたのかと思わせます。**
     Whether something was typed and whether it read are noted apart: **saying

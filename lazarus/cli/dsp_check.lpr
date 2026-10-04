@@ -5766,14 +5766,24 @@ begin
     UtcOffsetText(-150));
   Check('UTC+00:00', UtcOffsetText(0) = 'UTC+00:00', UtcOffsetText(0));
 
-  UtcBefore := LocalTimeToUniversal(Now);
+  UtcBefore := UtcNow;
   First := SyncLocalClock;
-  UtcAfter := LocalTimeToUniversal(Now);
-  { **合わせても UTC は動かない。**記録の時刻はこれで決まります。
-    **Aligning never moves UTC**: the log's time depends on it. }
+  UtcAfter := UtcNow;
+  { **合わせても UTC は動かない。**記録の時刻は `UtcNow` で決まります（付録
+    CQ）。/ **Aligning never moves UTC**: the log's time comes from `UtcNow`
+    (appendix CQ). }
   Check('合わせても UTC は動かない',
     Abs(UtcAfter - UtcBefore) * SecsPerDay < 2,
     Format('%.3f 秒', [(UtcAfter - UtcBefore) * SecsPerDay]));
+  { 合わせたあとの地方時は、UTC に OS の時差を足したもの。**3.2.4 では
+    `LocalTimeToUniversal` と `Now` が食い違いえた**ので、地方時そのものを
+    確かめます。/ After aligning, local time is UTC plus the system's offset:
+    **in 3.2.4 `LocalTimeToUniversal` and `Now` could disagree**, so local
+    time itself is checked. }
+  if First.Known then
+    Check('合わせたあとの地方時は UTC と OS の時差から決まる',
+      Abs(Now - UtcNow - First.OsMinutes / MinsPerDay) * SecsPerDay < 2,
+      Format('%.3f 秒', [(Now - UtcNow - First.OsMinutes / MinsPerDay) * SecsPerDay]));
   if First.Known then
     Check('合わせたあとの時差は OS のもの',
       -GetLocalTimeOffset = First.OsMinutes,
@@ -5798,12 +5808,20 @@ var
   Sync: TLocalClockSync;
 begin
   BeforeMinutes := -GetLocalTimeOffset;
-  UtcBefore := LocalTimeToUniversal(Now);
+  UtcBefore := UtcNow;
   Sync := SyncLocalClock;
-  WriteLn(Format('CLOCK before=%0:d after=%1:d known=%2:s changed=%3:s utcmoved=%4:d',
+  { `utcepoch` は記録に使う UTC（`UtcNow`）の秒、`localskew` は地方時と
+    「UTC＋合わせた時差」の差（秒）。試験は前者を `date -u` と突き合わせ、
+    後者が 0 であることを見ます（付録 CQ）。
+    `utcepoch` is the UTC the log uses (`UtcNow`) in seconds; `localskew` is
+    local time minus (UTC + the aligned offset), in seconds. The test checks
+    the former against `date -u` and the latter for zero (appendix CQ). }
+  WriteLn(Format('CLOCK before=%0:d after=%1:d known=%2:s changed=%3:s utcmoved=%4:d utcepoch=%5:d localskew=%6:d',
     [BeforeMinutes, -GetLocalTimeOffset, BoolToStr(Sync.Known, True),
      BoolToStr(Sync.Changed, True),
-     Round(Abs(LocalTimeToUniversal(Now) - UtcBefore) * SecsPerDay)]));
+     Round(Abs(UtcNow - UtcBefore) * SecsPerDay),
+     Round((UtcNow - UnixDateDelta) * SecsPerDay),
+     Round((Now - UtcNow + GetLocalTimeOffset / MinsPerDay) * SecsPerDay)]));
   Flush(Output);
 end;
 

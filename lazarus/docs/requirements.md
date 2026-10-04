@@ -13109,6 +13109,14 @@ CM.13・CM.14 の「確かめていないこと」のうち、**Windows・macOS 
   「いつからいつまで正しいか」が付き、外れると RTL が時間帯ファイルを読み直すので、**いまを挟む
   1 時間**とする（この関数は 1 分ごとに呼ばれる）
 - `はじめに.txt` の macOS の節: Apple シリコン用、dmg から写す、公証が無いので初回は「このまま開く」
+- **CI の 3 回目で、3.2.4 では記録の UTC がずれることが分かった。**`SyncLocalClock` で `Now` は正しく
+  なったが、`LocalTimeToUniversal(Now)` が `TZ=Asia/Tokyo`（`:` 無し）などで **9 時間ずれた**（地方時の
+  検査の「UTC の動き 32400 秒」）。3.2.4 の `LocalTimeToUniversal` は日付ごとに時間帯ファイルを読み直し
+  （`rtl/unix/sysutils.pp` の `GetLocalTimeOffset(DateTime, …)`）、合わせた値を見ないため。**記録（ADIF の
+  時刻・直近 1 時間の交信数）の UTC を `UtcNow`（OS の時計から直接。Unix は `fpgettimeofday`、Windows は
+  `GetSystemTime`）に替えた。**3.2.2 には `NowUTC` が無い（手元で確かめた）。地方時の試験は、記録の UTC を
+  `date -u` と突き合わせ、地方時が「UTC＋時差」であることも見るようにした。`UtcNow` を地方時に壊すと
+  14 件落ちる
 
 ### CQ.4 確かめたこと
 
@@ -13116,7 +13124,7 @@ CM.13・CM.14 の「確かめていないこと」のうち、**Windows・macOS 
 - Linux で 3.2.4-rc2 のコンパイラと RTL を組み、`deepcw.platform.pas` が通ることを確かめた（同じ
   `unix.pp` を使う）。Linux で packages まで組むことは、この環境の glibc との相性（`__libc_csu_init`）で
   できなかったので、**動きは macOS の CI で確かめる**
-- 3.2.2（Linux）でも通る
+- 3.2.2（Linux）でも通る。地方時の試験（9 通りの与え方）と `dsp_check` が通る
 - CI の結果は CQ.6 に書く
 
 ### CQ.5 確かめていないこと（NOT VERIFIED）

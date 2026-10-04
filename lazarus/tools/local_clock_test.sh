@@ -63,10 +63,23 @@ check() {
   before=$(printf '%s' "$line" | sed -n 's/.*before=\([-0-9]*\).*/\1/p')
   after=$(printf '%s' "$line" | sed -n 's/.*after=\([-0-9]*\).*/\1/p')
   moved=$(printf '%s' "$line" | sed -n 's/.*utcmoved=\([0-9]*\).*/\1/p')
-  if [ -z "$after" ] || [ -z "$moved" ]; then
+  epoch=$(printf '%s' "$line" | sed -n 's/.*utcepoch=\([0-9]*\).*/\1/p')
+  skew=$(printf '%s' "$line" | sed -n 's/.*localskew=\([-0-9]*\).*/\1/p')
+  if [ -z "$after" ] || [ -z "$moved" ] || [ -z "$epoch" ] || [ -z "$skew" ]; then
     echo "  NG   $label: 報告がありません（$line）"
     FAIL=1
     return
+  fi
+  # 記録に使う UTC は OS（`date -u`）と同じ秒か。地方時は「UTC＋時差」か
+  # （付録 CQ。FPC 3.2.4 では、ここが時差のぶんずれた）。
+  # The log's UTC agrees with the system (`date -u`); local time is UTC plus
+  # the offset (appendix CQ: on FPC 3.2.4 these were off by the offset).
+  now=$(date -u +%s)
+  gap=$(( now - epoch )); [ "$gap" -lt 0 ] && gap=$(( -gap ))
+  [ "$skew" -lt 0 ] && skew=$(( -skew ))
+  if [ "$gap" -gt 2 ] || [ "$skew" -gt 1 ]; then
+    echo "  NG   $label: UTC が OS と $gap 秒、地方時が UTC＋時差と $skew 秒ずれた"
+    FAIL=1
   fi
   if [ "$after" = "$want" ] && [ "$moved" -le 1 ]; then
     echo "  ok   $label: 前 $before 分 → 後 $after 分（date は $want 分、UTC の動き $moved 秒）"

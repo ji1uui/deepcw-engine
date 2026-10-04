@@ -217,12 +217,12 @@ type
   - 稼働中に夏時間が切り替わる → 起動時の時差のまま
 
   ここでは C ライブラリの `localtime_r` に今の時差を尋ね、違っていれば RTL の
-  `Tzseconds` を書き換えます。`Now`・`GetLocalTimeOffset`・
-  `LocalTimeToUniversal` はどれもこの 1 つの値から計算するので、**揃って
-  正しくなり、互いに食い違いません**（記録の UTC は、合わせる前も後も正しい）。
+  `Tzseconds` を書き換えます（3.2.4 では `SetTZInfo`）。`Now` と
+  `GetLocalTimeOffset` はこの値から計算されます。**記録の UTC はこの値に
+  頼りません**（`UtcNow`、付録 CQ。3.2.4 の `LocalTimeToUniversal` は時間帯
+  ファイルを読み直すため、ここで合わせても食い違った）。
 
-  **画面のスレッドから呼んでください。**記録（`LocalTimeToUniversal(Now)`）と
-  同じスレッドなら、その 2 つの呼び出しの間で値が変わることはありません。
+  **画面のスレッドから呼んでください。**
   Windows の RTL は呼ぶたびに OS へ尋ねるので、何もせず `Known = False` を
   返します。**macOS と Windows では確かめていません。**
 
@@ -240,16 +240,34 @@ type
   all measured in appendix BW.4.
 
   This asks the C library's `localtime_r` for the current offset and, where it
-  differs, rewrites the RTL's `Tzseconds`. `Now`, `GetLocalTimeOffset` and
-  `LocalTimeToUniversal` all compute from that one value, so **they become
-  right together and never disagree with each other** (the log's UTC is right
-  before and after).
+  differs, rewrites the RTL's `Tzseconds` (`SetTZInfo` in 3.2.4); `Now` and
+  `GetLocalTimeOffset` compute from it. **The log's UTC does not depend on
+  it** (`UtcNow`, appendix CQ: 3.2.4's `LocalTimeToUniversal` re-reads the
+  zone file and disagreed even after aligning).
 
-  **Call it from the UI thread**: on the same thread as the logging
-  (`LocalTimeToUniversal(Now)`), the value cannot change between those two
-  calls. The Windows RTL asks the OS on every call, so there it does nothing
+  **Call it from the UI thread.** The Windows RTL asks the OS on every call, so there it does nothing
   and returns `Known = False`. **Not verified on macOS or Windows.** }
 function SyncLocalClock: TLocalClockSync;
+
+{ いまの協定世界時を **OS の時計から直接**読みます（付録 CQ）。記録（ADIF の
+  時刻・直近 1 時間の交信数）はこれを使います。
+
+  `LocalTimeToUniversal(Now)` は使いません。FPC 3.2.4 では `Now` が RTL の時差
+  （`SyncLocalClock` で合わせたもの）から、`LocalTimeToUniversal` は日付ごとに
+  時間帯ファイルを読み直した時差から計算され、**時間帯ファイルを読み違える
+  環境では 2 つが食い違い、UTC が時差のぶんずれます**（CI の macOS で 9 時間を
+  測った）。OS の時計は時間帯に関わらないので、どちらの版でもずれません。
+  3.2.2 には `NowUTC` がありません。
+
+  The current UTC, **read straight from the system clock** (appendix CQ). The
+  log (ADIF times, the contacts in the last hour) uses it. Not
+  `LocalTimeToUniversal(Now)`: in FPC 3.2.4 `Now` follows the RTL's offset (as
+  aligned by `SyncLocalClock`) while `LocalTimeToUniversal` recomputes the
+  offset per date from the zone file, so **where the zone file is misread the
+  two disagree and UTC is off by the offset** (nine hours, measured on the CI's
+  macOS). The system clock knows nothing of time zones, so it is right on
+  either version. 3.2.2 has no `NowUTC`. }
+function UtcNow: TDateTime;
 
 { 時差を「UTC+09:00」の形にします。/ An offset as "UTC+09:00". }
 function UtcOffsetText(Minutes: Integer): string;
@@ -285,7 +303,7 @@ uses
   variable but a read-only property of `Unix`, written through `SetTZInfo`
   (checked in 3.2.4-rc2's `rtl/unix/unix.pp`; appendix CQ). }
 uses
-  UnixType, UnixUtil{$IF FPC_FULLVERSION >= 30204}, Unix{$ENDIF};
+  UnixType, Unix, UnixUtil;
 {$ENDIF}
 
 {$IF DEFINED(LINUX)}
@@ -562,6 +580,24 @@ begin
   {$ENDIF}
 end;
 
+function UtcNow: TDateTime;
+{$IFDEF WINDOWS}
+var
+  St: Windows.SYSTEMTIME;
+begin
+  Windows.GetSystemTime(St);
+  Result := EncodeDate(St.wYear, St.wMonth, St.wDay) +
+    EncodeTime(St.wHour, St.wMinute, St.wSecond, St.wMilliseconds);
+end;
+{$ELSE}
+var
+  Tv: TimeVal;
+begin
+  fpgettimeofday(@Tv, nil);
+  Result := UnixDateDelta + (Tv.tv_sec + Tv.tv_usec / 1000000) / SecsPerDay;
+end;
+{$ENDIF}
+
 function SyncLocalClock: TLocalClockSync;
 {$IFDEF UNIX}
 var
@@ -589,9 +625,16 @@ begin
   if (Tm.tm_gmtoff <= -86400) or (Tm.tm_gmtoff >= 86400) then
     Exit;
   Result.Known := True;
-  Result.RtlMinutes := Tzseconds div 60;
+  { 3.2.2 は `UnixUtil` の変数、3.2.4 は `Unix` の property。名前で書き分け
+    ます。/ A `UnixUtil` variable in 3.2.2, a `Unix` property in 3.2.4:
+    named explicitly. }
+  {$IF FPC_FULLVERSION >= 30204}
+  Result.RtlMinutes := Unix.Tzseconds div 60;
+  {$ELSE}
+  Result.RtlMinutes := UnixUtil.Tzseconds div 60;
+  {$ENDIF}
   Result.OsMinutes := Tm.tm_gmtoff div 60;
-  if Tzseconds <> Tm.tm_gmtoff then
+  if Result.RtlMinutes * 60 <> Tm.tm_gmtoff then
   begin
     {$IF FPC_FULLVERSION >= 30204}
     { 3.2.4 の時差には「いつからいつまで正しいか」が付き、外れると RTL が
@@ -607,7 +650,7 @@ begin
     Info.validuntil := Int64(T) - Tm.tm_gmtoff + 3600;
     SetTZInfo(Info, TZInfoEx);
     {$ELSE}
-    Tzseconds := Tm.tm_gmtoff;
+    UnixUtil.Tzseconds := Tm.tm_gmtoff;
     {$ENDIF}
     Result.Changed := True;
   end;
